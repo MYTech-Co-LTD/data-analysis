@@ -9,6 +9,11 @@ const key = (sbc: string, item_num: string) => `${sbc}-${item_num}`;
 
 export default function ItemsPage() {
   const [sbc, setSbc] = useState('3120');
+  const [brands, setBrands] = useState<{ system_book_code: string; brand_name: string }[]>([
+    { system_book_code: '3120', brand_name: '熊喵鲜生' },
+    { system_book_code: '64188', brand_name: '品品甜' },
+  ]);
+  useEffect(() => { fetch('/api/admin/brands').then(r => r.json()).then(j => j.data && setBrands(j.data)); }, []);
   return (
     <div className="p-4">
       <h1 className="text-xl font-bold mb-2">商品档案维护</h1>
@@ -16,8 +21,7 @@ export default function ItemsPage() {
       <div className="flex gap-2 border-b mb-4">
         <span className="px-4 py-2 text-sm bg-primary text-white rounded-t">商品列表</span>
         <select value={sbc} onChange={e => setSbc(e.target.value)} className="ml-auto border px-2 text-sm rounded-md self-end mb-1">
-          <option value="3120">3120 鲜果恰恰</option>
-          <option value="64188">64188</option>
+          {brands.map(b => <option key={b.system_book_code} value={b.system_book_code}>{b.system_book_code} {b.brand_name}</option>)}
         </select>
       </div>
       <ItemList sbc={sbc} />

@@ -30,7 +30,7 @@
 ### 通用约定
 
 - **明细列全是 VARCHAR**（乐檬原样落库）：数学运算前必须 `CAST(... AS DOUBLE/NUMERIC)`
-- **品牌编码**：`3120` = 鲜果恰恰（零售+批发+配送）、`64188` = （零售为主）
+- **品牌编码**（`dim_brand` 单一事实源）：`3120` = 熊喵鲜生（零售+批发+配送）、`64188` = 品品甜（零售为主）
 - **JOIN 键品牌隔离**：`branch_num` / `item_num` 是品牌内编号，跨表 JOIN 必须带 `system_book_code`（PK 多为 `(system_book_code, xxx)`）；`item_code` 是跨品牌合并键
 - 🔒 = 成本敏感字段：`can_see_cost=false` 时查到 NULL（PostgREST view builder 脱敏）
 - 🔑 = JOIN 键
@@ -202,6 +202,17 @@
 | brands | TEXT[] | 品牌列表 |
 | is_active_any | BOOLEAN | 任一品牌在售 |
 
+### 2.6 `dim_brand` — 品牌（4 列，PG，单一事实源）
+
+> 品牌编码→品牌名映射。所有前端下拉/报表表头/文档从这里读，不硬编码。注册 datasets(kind=dim, carry_enabled) → carry-dims 自动 COPY。
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| **system_book_code** | TEXT | 🔑 品牌编码（PK）：3120 / 64188 |
+| **brand_name** | TEXT | 品牌名：熊喵鲜生 / 品品甜 |
+| short_name | TEXT | 简称（熊喵 / 品品） |
+| enabled | BOOLEAN | 启用 |
+
 ---
 
 ## 3. 聚合表（summary，PG）
@@ -340,8 +351,9 @@ report_*_v ← PostgREST 脱敏视图（can_see_cost）
 
 ### 7.2 品牌编码
 
-- `3120` 鲜果恰恰：零售 + 批发 + 配送（全业务）
-- `64188`：零售为主（无批发/配送明细）
+- `3120` 熊喵鲜生：零售 + 批发 + 配送（全业务）
+- `64188` 品品甜：零售为主（无批发/配送明细）
+- 品牌名维护在 `dim_brand` 表（前端下拉/报表表头/文档复用，勿硬编码）
 
 ### 7.3 数据完整性（CLAUDE.md 规则）
 
