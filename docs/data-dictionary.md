@@ -31,6 +31,8 @@
 
 - **明细列全是 VARCHAR**（乐檬原样落库）：数学运算前必须 `CAST(... AS DOUBLE/NUMERIC)`
 - **品牌编码**（`dim_brand` 单一事实源）：`3120` = 熊喵鲜生（零售+批发+配送）、`64188` = 品品甜（零售为主）
+- **门店唯一键 = `(system_book_code, branch_num)`**：两品牌是**独立账套**，`branch_num` 各自编号、可能撞号但**不是同一家物理门店**，`branch_name` 两品牌不同（印证独立）。**门店数统计/去重必须用 `(system_book_code, branch_num)`，绝不能单用 `branch_num`**（撞号会被误合并）。四大战区 = 242 店（3120 熊喵 158 + 64188 品品 84）
+- **四大战区口径**（总部考核范围）：`is_assessed_war_zone(first_level_region)` ∈ `('东部战区','南部战区','西部战区','中部战区')`。两品牌账套一级战区同名 → 按名合并即总部四大。非四大（其他门店/其余门店1/广西大区/贵州宣威大区，单品牌独有一级）**不计考核**。分布：东 67 / 中 52 / 南 59 / 西 64
 - **JOIN 键品牌隔离**：`branch_num` / `item_num` 是品牌内编号，跨表 JOIN 必须带 `system_book_code`（PK 多为 `(system_book_code, xxx)`）；`item_code` 是跨品牌合并键
 - 🔒 = 成本敏感字段：`can_see_cost=false` 时查到 NULL（PostgREST view builder 脱敏）
 - 🔑 = JOIN 键
@@ -325,11 +327,50 @@
 | 表 | 说明 |
 |---|---|
 | `metric_registry` | 9 指标定义（base/derived、formula、depends_on、additive、cost_sensitive、unit） |
-| `metric_sources` | 指标→聚合表+列映射（source_table/source_column/source_filter）⚠️ source_filter 当前硬编码 '64188'（校准发现：致 delivery 查空、销售/批发漏 3120） |
+| `metric_sources` | 指标→聚合表+列映射（source_table/source_column/source_filter）source_filter=NULL（2026-07 校准：指标品牌无关，品牌由 target_scoped 按 target 限） |
 | `dimensions` | 维度定义（branch/item/customer，static/derived，join_table/join_key） |
 | `dimension_levels` | 维度层级（branch 三级 region/sub_region/store，item/customer 单层） |
 | `semantic_dictionary_v` | 字典视图（指标+维度 UNION，admin 字典 Tab 数据源） |
 | `validate_semantic_registry()` | 配置校验函数（base 定位/derived 依赖/维度 join_key） |
+
+---
+
+## 6.5 指标口径与数据源链路
+
+> 9 个指标的业务口径 + 从明细到视图的数据流转。口径在 `metric_registry`/`metric_sources` 声明，视图由 `generate-views.js` 生成。
+
+### 数据源链路（以 sale_amount 为例）
+
+```
+retail_detail.sale_money（明细，每笔零售，退货负数）
+   ↓ DuckDB /compute 聚合：SUM(sale_money) 按 biz_date×system_book_code×branch_num，限四大战区
+report_daily_sales.total_sale（日×品牌×店，PG）
+   ↓ 语义层生成器：SUM(total_sale) + assessed_filter(四大战区) + target_scoped(按 target 限品牌)
+sale_amount（视图指标，report_store_sales_drill_v）
+```
+
+### 9 指标口径
+
+| 指标 | 业务口径 | 数据源链路 | 范围 | 敏感 |
+|---|---|---|---|---|
+| **sale_amount** | 零售净额（SUM sale_money，退货负数自动净额） | retail_detail.sale_money → report_daily_sales.total_sale | 两品牌四大战区 | - |
+| **sale_profit** | 零售毛利净额（SUM profit） | retail_detail.profit → report_daily_sales.total_profit | 两品牌四大战区 | 🔒 |
+| **delivery_amount** | 配送调出金额（SUM out_money） | delivery_detail.out_money → report_daily_delivery.out_money | 仅 3120（配送只 3120 采集） | - |
+| **delivery_profit** | 配送毛利 | delivery_detail.profit_money → report_daily_delivery.profit_money | 仅 3120 | 🔒 |
+| **wholesale_amount** | 批发金额（SUM wholesale_money） | wholesale_detail.wholesale_money → report_daily_wholesale.wholesale_money | 两品牌 | - |
+| **wholesale_profit** | 批发毛利 | wholesale_detail.wholesale_profit → report_daily_wholesale.wholesale_profit | 两品牌 | 🔒 |
+| **outbound_amount** | 总出库金额（derived: delivery_amount + wholesale_amount） | 生成器按 formula 合并 | 3120 配送 + 两品牌批发 | - |
+| **outbound_profit** | 总出库毛利（derived: delivery_profit + wholesale_profit） | 同上 | 同上 | 🔒 |
+| **margin** | 毛利率（derived: profit/amount，`additive=false` 须重算 `SUM(profit)/NULLIF(SUM(amount),0)`，不可直接 SUM 比率） | 同 sale | 两品牌四大战区 | 🔒 |
+
+### 口径规则
+
+- **四大战区过滤**：销售/出库指标只统计四大战区门店（`is_assessed_war_zone`），非考核门店剔除
+- **两品牌合计**：sale / wholesale 两品牌都算（3120+64188）；**delivery 仅 3120**（配送只 3120 采集，64188 无配送明细）
+- **退货净额**：明细退货以负数记录，SUM 自动得净额
+- **`source_filter = NULL`**（2026-07 校准）：指标本身品牌无关，品牌由 `target_scoped` 的 JOIN targets 按 target 限（target `ALL`=两品牌 / `3120` / `64188`）。**勿在指标级硬编码品牌**（之前 080 硬编码 64188 致 delivery 查空、漏算 3120，已修）
+- **margin 不可直接 SUM**：`additive=false`，视图必须重算分量比 `SUM(profit)/SUM(amount)`
+- **成本敏感**🔒：`cost_sensitive=true` 的指标（毛利类），`can_see_cost=false` 角色（如店长）查到 NULL
 
 ---
 
@@ -364,5 +405,5 @@ report_*_v ← PostgREST 脱敏视图（can_see_cost）
 
 ### 7.4 校准发现（2026-07）
 
-- 🔴 `metric_sources.source_filter` 硬编码 '64188'：delivery（只 3120）查空、sale/wholesale 漏 3120（待修：改 NULL，品牌由 target_scoped JOIN 按 target 限）
+- ✅ `metric_sources.source_filter` 硬编码 '64188' **已修**（2026-07-25 → NULL + 081 重生成）：target 22 现含两品牌四大战区（sale_amount 18,802,965，修前仅 64188 的 7,036,203）
 - 🔴 `report_region_breakdown_v` 对 ALL target 重复计算 3.6 倍（branch_dim 未按品牌去重，待修）
