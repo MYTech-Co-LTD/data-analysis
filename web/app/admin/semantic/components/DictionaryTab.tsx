@@ -11,6 +11,8 @@ type Row = {
   additive: boolean;
   cost_sensitive: boolean | null;
   unit: string | null;
+  source_table: string | null;
+  source_column: string | null;
 };
 
 export default function DictionaryTab() {
@@ -25,6 +27,7 @@ export default function DictionaryTab() {
   }, []);
 
   const rows = data.filter((r) => filter === 'all' || r.kind === filter);
+  const dataSource = (r: Row) => (r.source_table ? `${r.source_table}.${r.source_column || ''}` : '-');
 
   return (
     <div>
@@ -47,8 +50,7 @@ export default function DictionaryTab() {
             <th className="px-2 py-1">code</th>
             <th className="px-2 py-1">名称</th>
             <th className="px-2 py-1">分类</th>
-            <th className="px-2 py-1">可加</th>
-            <th className="px-2 py-1">成本敏感</th>
+            <th className="px-2 py-1">数据源（表.列）</th>
             <th className="px-2 py-1">单位</th>
           </tr>
         </thead>
@@ -63,15 +65,16 @@ export default function DictionaryTab() {
                 <td className="px-2 py-1 font-mono">{r.code}</td>
                 <td className="px-2 py-1">{r.name}</td>
                 <td className="px-2 py-1">{r.measure_type}</td>
-                <td className="px-2 py-1">{r.additive ? '是' : '否'}</td>
-                <td className="px-2 py-1">{r.cost_sensitive ? '是' : '-'}</td>
+                <td className="px-2 py-1 font-mono text-xs">{dataSource(r)}</td>
                 <td className="px-2 py-1">{r.unit || '-'}</td>
               </tr>
               {expanded === r.code && (
                 <tr className="border-t bg-gray-50">
-                  <td colSpan={7} className="px-2 py-2 text-xs text-gray-600">
-                    <div><b>说明：</b>{r.description || '-'}</div>
+                  <td colSpan={6} className="px-2 py-2 text-xs text-gray-600 space-y-1">
+                    <div><b>口径：</b>{r.description || '-'}</div>
                     <div><b>公式：</b>{r.formula || '-'}</div>
+                    <div><b>数据源：</b>{r.source_table ? `${r.source_table}.${r.source_column || ''}` : '-'}</div>
+                    <div><b>属性：</b>{r.additive ? '可加' : '不可加(比率须重算)'}{r.cost_sensitive ? ' · 成本敏感' : ''}</div>
                   </td>
                 </tr>
               )}
