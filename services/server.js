@@ -546,6 +546,11 @@ app.post("/compute", async (req, res) => {
     const conflictKeys = config.conflict_keys || [];
     let rowsWritten = 0;
 
+    // DELETE-before-INSERT：先清该日期范围旧数据，避免 sql_template 变更后旧 key 残留
+    const dateCol = Object.entries(mapping).find(([_, v]) => v.transform === 'YYYYMMDD_to_YYYY-MM-DD')?.[1]?.pg_column || 'biz_date';
+    await pgPool.query(`DELETE FROM ${config.target_table} WHERE "${dateCol}" BETWEEN $1 AND $2`, [date_from, date_to]);
+    console.log(`[compute] ${report_type}: cleared ${dateCol} ${date_from}~${date_to}`);
+
     for (const row of rows) {
       const pgRow = transformRow(row, mapping);
       await upsertRow(config.target_table, pgRow, conflictKeys);
