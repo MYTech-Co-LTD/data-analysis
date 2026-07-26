@@ -52,6 +52,7 @@ function buildBody(dateFrom: string, dateTo: string, offset: number, limit: numb
 
 // 批发明细字段（snake_case）：单据/客户/门店/商品/批发量额毛利
 function flattenRecords(records: any[]): any[] {
+  if (records.length > 0) console.log('[collect-wholesale] 乐檬API返回字段数:', Object.keys(records[0]).length, '字段:', Object.keys(records[0]).sort().join(','));
   return records.map(r => ({
     id: r.id,
     pos_order_num: r.posOrderNum,
