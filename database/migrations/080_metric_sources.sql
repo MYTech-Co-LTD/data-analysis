@@ -13,16 +13,21 @@ CREATE TABLE IF NOT EXISTS metric_sources (
 
 COMMENT ON TABLE metric_sources IS '指标数据源映射：生成器读此表定位聚合 PG 表+列';
 
-INSERT INTO metric_sources (metric_code, source_table, source_column, source_filter, note) VALUES
-  ('sale_amount','report_daily_sales','total_sale',NULL,NULL),
-  ('sale_profit','report_daily_sales','total_profit',NULL,'成本敏感'),
-  ('delivery_amount','report_daily_delivery','out_money',NULL,NULL),
-  ('delivery_profit','report_daily_delivery','profit_money',NULL,'成本敏感'),
-  ('wholesale_amount','report_daily_wholesale','wholesale_money',NULL,NULL),
-  ('wholesale_profit','report_daily_wholesale','wholesale_profit',NULL,'成本敏感'),
-  ('outbound_amount','report_daily_delivery',NULL,NULL,'derived: 生成器按 formula 合并 delivery+wholesale（多源，后续）'),
-  ('outbound_profit','report_daily_delivery',NULL,NULL,'derived: 同上（多源，后续）'),
-  ('margin','report_daily_sales',NULL,NULL,'derived: 生成器重算 profit/amount（同源）')
+-- 条件 INSERT：registry 有该 metric_code 才插（088 删了 wholesale_amount/profit 后重跑不报 FK 错）
+INSERT INTO metric_sources (metric_code, source_table, source_column, source_filter, note)
+SELECT v.metric_code, v.source_table, v.source_column, v.source_filter, v.note
+FROM (VALUES
+  ('sale_amount','report_daily_sales','total_sale',NULL::text,NULL::text),
+  ('sale_profit','report_daily_sales','total_profit',NULL::text,'成本敏感'),
+  ('delivery_amount','report_daily_delivery','out_money',NULL::text,NULL::text),
+  ('delivery_profit','report_daily_delivery','profit_money',NULL::text,'成本敏感'),
+  ('wholesale_amount','report_daily_wholesale','wholesale_money',NULL::text,NULL::text),
+  ('wholesale_profit','report_daily_wholesale','wholesale_profit',NULL::text,'成本敏感'),
+  ('outbound_amount','report_daily_delivery',NULL::text,NULL::text,'derived: 生成器按 formula 合并 delivery+wholesale（多源，后续）'),
+  ('outbound_profit','report_daily_delivery',NULL::text,NULL::text,'derived: 同上（多源，后续）'),
+  ('margin','report_daily_sales',NULL::text,NULL::text,'derived: 生成器重算 profit/amount（同源）')
+) AS v(metric_code, source_table, source_column, source_filter, note)
+WHERE EXISTS (SELECT 1 FROM metric_registry WHERE metric_code = v.metric_code)
 ON CONFLICT (metric_code) DO UPDATE SET
   source_table=EXCLUDED.source_table, source_column=EXCLUDED.source_column,
   source_filter=EXCLUDED.source_filter, note=EXCLUDED.note;

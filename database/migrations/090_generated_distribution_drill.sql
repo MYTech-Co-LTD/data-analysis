@@ -10,7 +10,7 @@ CREATE VIEW report_distribution_drill_v AS
     JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
     JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active' AND s.system_book_code = '64188' AND is_assessed_war_zone(dim.first_level_region)
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.first_level_region
   UNION ALL
     SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, 0 AS delivery_amount, SUM(s.wholesale_money) AS wholesale_pp_amount
@@ -30,7 +30,7 @@ UNION ALL
     JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
     JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active' AND s.system_book_code = '64188' AND is_assessed_war_zone(dim.first_level_region)
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.second_level_region, dim.second_level_region
   UNION ALL
     SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, 0 AS delivery_amount, SUM(s.wholesale_money) AS wholesale_pp_amount
@@ -50,7 +50,7 @@ UNION ALL
     JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
     JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active' AND s.system_book_code = '64188' AND is_assessed_war_zone(dim.first_level_region)
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.second_level_region, dim.branch_num, dim.branch_name
   UNION ALL
     SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, 0 AS delivery_amount, SUM(s.wholesale_money) AS wholesale_pp_amount
