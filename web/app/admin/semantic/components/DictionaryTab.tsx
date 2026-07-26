@@ -11,6 +11,8 @@ type Row = {
   additive: boolean;
   cost_sensitive: boolean | null;
   unit: string | null;
+  fact_table: string | null;
+  value_column: string | null;
   source_table: string | null;
   source_column: string | null;
 };
@@ -27,7 +29,11 @@ export default function DictionaryTab() {
   }, []);
 
   const rows = data.filter((r) => filter === 'all' || r.kind === filter);
-  const dataSource = (r: Row) => (r.source_table ? `${r.source_table}.${r.source_column || ''}` : '-');
+  const dataSource = (r: Row) => {
+    if (r.kind !== 'metric') return '-';
+    if (r.measure_type === 'derived' || !r.fact_table) return `derived: ${r.formula || '-'}`;
+    return `${r.fact_table}.${r.value_column || ''} → ${r.source_table}.${r.source_column || ''}`;
+  };
 
   return (
     <div>
@@ -50,7 +56,7 @@ export default function DictionaryTab() {
             <th className="px-2 py-1">code</th>
             <th className="px-2 py-1">名称</th>
             <th className="px-2 py-1">分类</th>
-            <th className="px-2 py-1">数据源（表.列）</th>
+            <th className="px-2 py-1">数据源（明细 → 聚合）</th>
             <th className="px-2 py-1">单位</th>
           </tr>
         </thead>
@@ -73,7 +79,12 @@ export default function DictionaryTab() {
                   <td colSpan={6} className="px-2 py-2 text-xs text-gray-600 space-y-1">
                     <div><b>口径：</b>{r.description || '-'}</div>
                     <div><b>公式：</b>{r.formula || '-'}</div>
-                    <div><b>数据源：</b>{r.source_table ? `${r.source_table}.${r.source_column || ''}` : '-'}</div>
+                    {r.kind === 'metric' && (
+                      <>
+                        <div><b>明细源头：</b>{r.fact_table ? `${r.fact_table}.${r.value_column || ''}` : '-（derived 无独立源头）'}</div>
+                        <div><b>聚合取数：</b>{r.source_table ? `${r.source_table}.${r.source_column || ''}` : '-'}</div>
+                      </>
+                    )}
                     <div><b>属性：</b>{r.additive ? '可加' : '不可加(比率须重算)'}{r.cost_sensitive ? ' · 成本敏感' : ''}</div>
                   </td>
                 </tr>
