@@ -1,6 +1,6 @@
 // web/lib/collect-delivery.ts
 // 配送调出明细采集（乐檬 nhsoft.amazon.transfer.item.detail），照 collect.ts 模式。
-// 只 3120（配送中心 distributionBranchNum=99），64188 共用此数据。
+// 只 3120；含中心→门店 + 门店间调拨（distributionBranchNums/responseBranchNums 空=全部调拨）
 // 落 Parquet: lemeng/transfer_detail/{company_id}/{date}/all.parquet
 import crypto from 'crypto';
 
@@ -42,11 +42,12 @@ function buildHeaders(authToken: string, branchNumsStr: string, urlPath: string,
   };
 }
 
-// body 构造（实测抓到的真实结构）：驼峰，offset 分页，responseBranchNums 空=全部调入
+// body 构造（实测抓到的真实结构）：驼峰，offset 分页
+// distributionBranchNums/responseBranchNums 空=全部调拨（含中心→门店 + 门店间调拨）
 function buildBody(distributionBranch: number, dtFrom: string, dtTo: string, offset: number, limit: number): string {
   return JSON.stringify({
     branchNums: [distributionBranch], dateType: "调出日期", dtFrom, dtTo,
-    distributionBranchNums: [distributionBranch], responseBranchNums: [],
+    distributionBranchNums: [], responseBranchNums: [],
     unitType: "常用单位", itemNums: [], itemLabelNums: [], itemDepartments: [], storehouseNums: [],
     filterPolicyItems: false, filterCreditNote: false, categoryCodes: [], isEnableTax: false, queryTime: false,
     managementStyles: [], taxRates: [], supplierNums: [],
