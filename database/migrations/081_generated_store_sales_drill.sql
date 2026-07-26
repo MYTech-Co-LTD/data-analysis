@@ -5,10 +5,10 @@ DROP VIEW IF EXISTS report_store_sales_drill_v CASCADE;
 CREATE VIEW report_store_sales_drill_v AS
   SELECT level, parent_code, target_id, code, name, SUM(sale_amount) AS sale_amount, SUM(sale_profit) AS sale_profit, (SUM(sale_profit) / NULLIF(SUM(sale_amount), 0)) AS margin
   FROM (
-    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, SUM(s.total_sale) AS sale_amount, SUM(s.total_profit) AS sale_profit
-    FROM report_daily_sales s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, SUM(COALESCE(s.total_sale, 0)) AS sale_amount, SUM(COALESCE(s.total_profit, 0)) AS sale_profit
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_sales s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
     WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.first_level_region
@@ -17,10 +17,10 @@ CREATE VIEW report_store_sales_drill_v AS
 UNION ALL
   SELECT level, parent_code, target_id, code, name, SUM(sale_amount) AS sale_amount, SUM(sale_profit) AS sale_profit, (SUM(sale_profit) / NULLIF(SUM(sale_amount), 0)) AS margin
   FROM (
-    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, SUM(s.total_sale) AS sale_amount, SUM(s.total_profit) AS sale_profit
-    FROM report_daily_sales s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, SUM(COALESCE(s.total_sale, 0)) AS sale_amount, SUM(COALESCE(s.total_profit, 0)) AS sale_profit
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_sales s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
     WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.second_level_region, dim.second_level_region
@@ -29,10 +29,10 @@ UNION ALL
 UNION ALL
   SELECT level, parent_code, target_id, code, name, SUM(sale_amount) AS sale_amount, SUM(sale_profit) AS sale_profit, (SUM(sale_profit) / NULLIF(SUM(sale_amount), 0)) AS margin
   FROM (
-    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, SUM(s.total_sale) AS sale_amount, SUM(s.total_profit) AS sale_profit
-    FROM report_daily_sales s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, SUM(COALESCE(s.total_sale, 0)) AS sale_amount, SUM(COALESCE(s.total_profit, 0)) AS sale_profit
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_sales s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
     WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.second_level_region, dim.branch_num, dim.branch_name

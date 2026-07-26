@@ -5,20 +5,21 @@ DROP VIEW IF EXISTS report_outbound_drill_v CASCADE;
 CREATE VIEW report_outbound_drill_v AS
   SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(wholesale_pp_amount) AS wholesale_pp_amount, SUM(wholesale_ext_amount) AS wholesale_ext_amount, (SUM(delivery_amount) + SUM(wholesale_pp_amount) + SUM(wholesale_ext_amount)) AS outbound_amount
   FROM (
-    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, SUM(s.out_money) AS delivery_amount, 0 AS wholesale_pp_amount, 0 AS wholesale_ext_amount
-    FROM report_daily_delivery s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, 0 AS wholesale_pp_amount, 0 AS wholesale_ext_amount
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
     WHERE t.status = 'active'
     GROUP BY t.id, dim.first_level_region, dim.first_level_region
   UNION ALL
-    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, 0 AS delivery_amount, SUM(s.wholesale_money) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
-    FROM report_daily_wholesale s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active' AND s.system_book_code = '64188'
+      AND s.system_book_code = '64188'
+    WHERE t.status = 'active'
     GROUP BY t.id, dim.first_level_region, dim.first_level_region
   UNION ALL
     SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, '外部客户' AS code, '外部客户' AS name, 0 AS delivery_amount, 0 AS wholesale_pp_amount, SUM(s.wholesale_money) AS wholesale_ext_amount
@@ -32,20 +33,21 @@ CREATE VIEW report_outbound_drill_v AS
 UNION ALL
   SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(wholesale_pp_amount) AS wholesale_pp_amount, SUM(wholesale_ext_amount) AS wholesale_ext_amount, (SUM(delivery_amount) + SUM(wholesale_pp_amount) + SUM(wholesale_ext_amount)) AS outbound_amount
   FROM (
-    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, SUM(s.out_money) AS delivery_amount, 0 AS wholesale_pp_amount, 0 AS wholesale_ext_amount
-    FROM report_daily_delivery s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, 0 AS wholesale_pp_amount, 0 AS wholesale_ext_amount
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
     WHERE t.status = 'active'
     GROUP BY t.id, dim.first_level_region, dim.second_level_region, dim.second_level_region
   UNION ALL
-    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, 0 AS delivery_amount, SUM(s.wholesale_money) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
-    FROM report_daily_wholesale s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active' AND s.system_book_code = '64188'
+      AND s.system_book_code = '64188'
+    WHERE t.status = 'active'
     GROUP BY t.id, dim.first_level_region, dim.second_level_region, dim.second_level_region
   UNION ALL
     SELECT 'sub_region' AS level, NULL::text AS parent_code, t.id AS target_id, '外部客户' AS code, '外部客户' AS name, 0 AS delivery_amount, 0 AS wholesale_pp_amount, SUM(s.wholesale_money) AS wholesale_ext_amount
@@ -59,20 +61,21 @@ UNION ALL
 UNION ALL
   SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(wholesale_pp_amount) AS wholesale_pp_amount, SUM(wholesale_ext_amount) AS wholesale_ext_amount, (SUM(delivery_amount) + SUM(wholesale_pp_amount) + SUM(wholesale_ext_amount)) AS outbound_amount
   FROM (
-    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, SUM(s.out_money) AS delivery_amount, 0 AS wholesale_pp_amount, 0 AS wholesale_ext_amount
-    FROM report_daily_delivery s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, 0 AS wholesale_pp_amount, 0 AS wholesale_ext_amount
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
     WHERE t.status = 'active'
     GROUP BY t.id, dim.second_level_region, dim.branch_num, dim.branch_name
   UNION ALL
-    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, 0 AS delivery_amount, SUM(s.wholesale_money) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
-    FROM report_daily_wholesale s
-    JOIN dim_branch dim ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
-    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)
+    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
+    FROM dim_branch dim
+    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
+    LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active' AND s.system_book_code = '64188'
+      AND s.system_book_code = '64188'
+    WHERE t.status = 'active'
     GROUP BY t.id, dim.second_level_region, dim.branch_num, dim.branch_name
   UNION ALL
     SELECT 'store' AS level, NULL::text AS parent_code, t.id AS target_id, '外部客户' AS code, '外部客户' AS name, 0 AS delivery_amount, 0 AS wholesale_pp_amount, SUM(s.wholesale_money) AS wholesale_ext_amount

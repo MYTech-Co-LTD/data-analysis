@@ -99,14 +99,27 @@ function genLevelBranch(view, level, parentLevel, groups, model, dim) {
     const parentExpr = isVirtual ? `NULL::text` : parentLevel ? `dim.${parentLevel.key_column}` : `NULL::text`;
     const baseCols = allBase.map((b) => {
       const inGrp = grp.metrics.find((g) => g.metric_code === b.metric_code);
-      return inGrp ? `SUM(s.${inGrp.source_column}) AS ${b.metric_code}` : `0 AS ${b.metric_code}`;
+      if (!inGrp) return `0 AS ${b.metric_code}`;
+      // 非虚拟源 LEFT JOIN source（无交易门店 COALESCE 0）；虚拟源 INNER（有数据）
+      return isVirtual ? `SUM(s.${inGrp.source_column}) AS ${b.metric_code}` : `SUM(COALESCE(s.${inGrp.source_column}, 0)) AS ${b.metric_code}`;
     });
-    let from = `    FROM ${grp.table} s`;
-    if (!isVirtual) from += `\n    JOIN ${dim.join_table} dim ON s.branch_num = dim.${dim.join_key} AND s.system_book_code = dim.system_book_code`;
-    if (view.target_scoped) from += `\n    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)\n      AND s.biz_date BETWEEN t.start_date AND t.end_date`;
+    // 非虚拟源：dim 驱动全门店（LEFT JOIN source，覆盖 242 全门店，无交易 0）；虚拟源：FROM source（外部客户虚拟节点）
+    let from;
+    if (isVirtual) {
+      from = `    FROM ${grp.table} s`;
+      if (view.target_scoped) from += `\n    JOIN targets t ON (t.system_book_code = 'ALL' OR s.system_book_code = t.system_book_code)\n      AND s.biz_date BETWEEN t.start_date AND t.end_date`;
+    } else {
+      from = `    FROM ${dim.join_table} dim`;
+      if (view.target_scoped) {
+        from += `\n    JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)`;
+        from += `\n    LEFT JOIN ${grp.table} s ON s.branch_num = dim.${dim.join_key} AND s.system_book_code = dim.system_book_code\n      AND s.biz_date BETWEEN t.start_date AND t.end_date` + (grp.filter ? `\n      AND ${grp.filter}` : "");
+      } else {
+        from += `\n    LEFT JOIN ${grp.table} s ON s.branch_num = dim.${dim.join_key} AND s.system_book_code = dim.system_book_code` + (grp.filter ? `\n      AND ${grp.filter}` : "");
+      }
+    }
     const where = [];
     if (view.target_scoped) where.push("t.status = 'active'");
-    if (grp.filter) where.push(grp.filter);
+    if (isVirtual && grp.filter) where.push(grp.filter);
     if (view.assessed_filter && !isVirtual) where.push("is_assessed_war_zone(dim.first_level_region)");
     const groupCols = [];
     if (view.target_scoped) groupCols.push("t.id");
