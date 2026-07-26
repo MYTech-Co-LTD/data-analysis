@@ -147,14 +147,18 @@ function genAuditSql(viewName, view, levels, model) {
   const metrics = view.metrics
     .map((c) => model.metrics.find((m) => m.metric_code === c))
     .filter((m) => m && (m.measure_type === "base" || (m.measure_type === "derived" && m.additive)));
+  // pivots: 内层 z SELECT 的 MAX(CASE...) 出 *_total 列
+  // outCols: 外层 audit SELECT：passthrough *_total + 用 z.*_total 计算 *_diff 表达式
+  // （diffs 必须在外层 SELECT 表达式层计算，不能只是列名引用 — 否则列不存在）
   const pivots = [];
-  const diffs = [];
   const outCols = [];
   if (tgt) outCols.push("target_id");
   for (const mc of metrics) {
     for (const c of codes) pivots.push(`MAX(CASE WHEN level='${c}' THEN ${mc.metric_code}_sum END) AS ${mc.metric_code}_${c}_total`);
-    outCols.push(...codes.map((c) => `${mc.metric_code}_${c}_total`));
-    for (let i = 1; i < codes.length; i++) { diffs.push(`ABS(${mc.metric_code}_${codes[0]}_total - ${mc.metric_code}_${codes[i]}_total) AS ${mc.metric_code}_${codes[0]}_vs_${codes[i]}_diff`); outCols.push(`${mc.metric_code}_${codes[0]}_vs_${codes[i]}_diff`); }
+    for (const c of codes) outCols.push(`${mc.metric_code}_${c}_total`);
+    for (let i = 1; i < codes.length; i++) {
+      outCols.push(`ABS(${mc.metric_code}_${codes[0]}_total - ${mc.metric_code}_${codes[i]}_total) AS ${mc.metric_code}_${codes[0]}_vs_${codes[i]}_diff`);
+    }
   }
   const innerSums = metrics.map((mc) => `SUM(${mc.metric_code}) AS ${mc.metric_code}_sum`).join(", ");
   return `DROP VIEW IF EXISTS ${auditName};
