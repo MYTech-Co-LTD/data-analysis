@@ -1,7 +1,8 @@
 "use client";
 
+import { useRef } from "react";
 import { CategorySummaryRow } from "@/lib/report-center/category-summary";
-import { ChartActions, exportExcel } from "./chart-actions";
+import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 
 interface CategorySummaryProps {
   rows: CategorySummaryRow[];
@@ -24,11 +25,12 @@ function fmtRate(r: number | null): string {
 }
 
 export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
+  const tableRef = useRef<HTMLDivElement>(null);
   const handleExcel = () => {
     const head = [
-      "类别", " 月销售目标", " 月销售金额", " 月销售完成率",
-      " 月毛利目标", " 月毛利金额", " 月毛利完成率", " 月毛利率",
-      " 当天出库金额", " 当天出库毛利", " 当天毛利率", " 差额日均毛利目标",
+      "类别", "月销售目标", "月销售金额", "月销售完成率",
+      "月毛利目标", "月毛利金额", "月毛利完成率", "月毛利率",
+      "当天出库金额", "当天出库毛利", "当天毛利率", "差额日均毛利目标",
     ];
     const body = rows.map((r) => [
       r.category,
@@ -40,15 +42,27 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
     exportExcel([head, ...body], `${targetMonth}月仓储出库数据报表`);
   };
 
+  const handleImage = () => {
+    if (tableRef.current) exportImage(tableRef.current, `${targetMonth}月仓储出库报表`);
+  };
+
+  const handleShare = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      const { toast } = await import("sonner");
+      toast.success("链接已复制");
+    } catch {}
+  };
+
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-700">
           {targetMonth}月仓储出库数据报表
         </h3>
-        <ChartActions onExcel={handleExcel} />
+        <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} />
       </div>
-      <div className="overflow-x-auto">
+      <div ref={tableRef} className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
