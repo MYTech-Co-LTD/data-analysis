@@ -63,7 +63,7 @@ export default async function TargetDashboard({
       freshness={freshness}
     />
   ) : (
-    <div className="mx-auto max-w-7xl p-6">
+    <div className="p-6">
       <DesktopDashboard
         target={t}
         kpi={kpi}

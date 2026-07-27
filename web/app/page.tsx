@@ -38,7 +38,7 @@ export default async function HomePage() {
     return (
       <div className="min-h-screen bg-slate-50">
         <Header />
-        <main className="mx-auto max-w-5xl p-4">{content}</main>
+        <main className="p-4">{content}</main>
       </div>
     );
   }
@@ -48,7 +48,7 @@ export default async function HomePage() {
       <Header />
       <div className="flex">
         <Sidebar />
-        <main className="mx-auto max-w-5xl flex-1 p-6">{content}</main>
+        <main className="flex-1 p-6">{content}</main>
       </div>
     </div>
   );
