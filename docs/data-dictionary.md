@@ -239,16 +239,20 @@
 
 > `report_daily_sales_v`：脱敏视图（can_see_cost=false→profit NULL）。
 
-### 3.2 `report_daily_delivery` — 日配送（8 列）
+### 3.2 `report_daily_delivery` — 日配送（9 列）
 
-> 粒度 `(biz_date, system_book_code, branch_num, category_group)`。源 delivery_detail。**仅 3120 数据**。
+> 粒度 `(biz_date, system_book_code, branch_num, category_group)`。源 delivery_detail。**仅 3120 数据**（配送中心99→门店调拨）。
 
 | 列 | 类型 | 说明 |
 |---|---|---|
 | **biz_date / system_book_code / branch_num / category_group** | | PK（category_group=水果/标品耗材/其他） |
-| **out_money** | NUMERIC | 配送金额（delivery_amount 源列） |
+| **out_money** | NUMERIC | 配送金额（delivery_amount 源列，signed sum） |
+| **wholesale_cost** | NUMERIC | 配送成本（2026-07 校准新增，观察 money-cost=profit） |
 | 🔒 profit_money | NUMERIC | 配送毛利（delivery_profit 源列） |
 | created_at / updated_at | TIMESTAMP | |
+
+> **采集参数**：`distributionBranchNums=[99]`（调出门店=管理中心），`responseBranchNums=[]`（调入=全选）。门店维度 = response_branch_name（收货门店）。
+> **生产验证**（2026-07-27）：7/1-7/25 四大战区 = 7,768,487.39，与系统导出逐店一致。
 
 ### 3.3 `report_daily_wholesale` — 日批发（8 列）
 
@@ -356,8 +360,8 @@ sale_amount（视图指标，report_store_sales_drill_v）
 |---|---|---|---|---|
 | **sale_amount** | 零售净额（SUM sale_money，退货负数自动净额） | retail_detail.sale_money → report_daily_sales.total_sale | 两品牌四大战区门店 | - |
 | **sale_profit** | 零售毛利净额（SUM profit） | retail_detail.profit → report_daily_sales.total_profit | 两品牌四大战区门店 | 🔒 |
-| **delivery_amount** | 总部→熊喵四大战区门店配送调出金额（SUM out_money） | delivery_detail.out_money → report_daily_delivery.out_money | 仅 3120 四大战区（配送只 3120 采集） | - |
-| **delivery_profit** | 总部→熊喵四大战区门店配送毛利 | delivery_detail.profit_money → report_daily_delivery.profit_money | 仅 3120 四大战区 | 🔒 |
+| **delivery_amount** | 总部→熊喵四大战区门店配送调出金额（SUM out_money，signed） | delivery_detail.out_money（distributionBranchNums=[99] 调出=管理中心，responseBranchNums=[] 调入=全选）→ report_daily_delivery.out_money | 仅 3120 四大战区（配送只 3120 采集） | - |
+| **delivery_profit** | 总部→熊喵四大战区门店配送毛利（profit_money 字段） | delivery_detail.profit_money → report_daily_delivery.profit_money | 仅 3120 四大战区 | 🔒 |
 | **wholesale_pp_amount** | 总部→品品甜四大战区门店批发金额（SUM wholesale_money） | wholesale_detail.wholesale_money → report_daily_wholesale.wholesale_money（sbc=64188） | 仅 64188 四大战区门店 | - |
 | **wholesale_pp_profit** | 总部→品品甜四大战区门店批发毛利 | wholesale_detail.wholesale_profit → report_daily_wholesale.wholesale_profit（sbc=64188） | 仅 64188 四大战区门店 | 🔒 |
 | **wholesale_ext_amount** | 总部→外部客户批发金额（非门店，branch_num=99） | wholesale_detail.wholesale_money → report_daily_wholesale.wholesale_money（sbc=3120） | 外部客户（非四大战区，不限门店） | - |
@@ -372,7 +376,7 @@ sale_amount（视图指标，report_store_sales_drill_v）
 
 - **品牌下门店 = 四大战区门店**：**只有划入四大战区的门店才算品牌下门店**，非四大战区门店完全排除（不属于品牌口径）。品牌门店识别用 `JOIN dim_branch ON system_book_code + branch_name`（不用 LIKE 门店名前缀，因部分门店名不带品牌前缀如「弥勒福地半岛店」属品品甜）
 - **四大战区过滤**：所有品牌维度指标（sale/delivery/wholesale_pp）只统计四大战区门店；wholesale_ext（外部客户）不限战区（外部客户无门店归属）
-- **配送**（delivery）：总部→熊喵门店（3120 配送中心→3120 四大战区门店调拨），仅 3120
+- **配送**（delivery）：总部→熊喵门店（3120 配送中心99→四大战区门店调拨），仅 3120。采集参数：`distributionBranchNums=[99]`（调出门店=管理中心），`responseBranchNums=[]`（调入门店=全选）。门店维度用 `response_branch_name`（收货门店=调往门店），signed sum。**生产验证 7/1-7/25 = 7,768,487.39**，与系统导出逐店一致（147/148 店，1 店差异=非四大战区 1,400 元）
 - **批发品品甜门店**（wholesale_pp）：总部→品品甜门店（64188 账套中 client_name 匹配 dim_branch 64188 四大战区门店），仅 64188
 - **批发外部客户**（wholesale_ext）：总部→非门店客户（client_name 不在 dim_branch 64188 的，branch_num=99）
 - **退货净额**：明细退货以负数记录，SUM 自动得净额
@@ -416,4 +420,11 @@ report_*_v ← PostgREST 脱敏视图（can_see_cost）
 ### 7.4 校准发现（2026-07）
 
 - ✅ `metric_sources.source_filter` 硬编码 '64188' **已修**（2026-07-25 → NULL + 081 重生成）：target 22 现含两品牌四大战区（sale_amount 18,802,965，修前仅 64188 的 7,036,203）
+- ✅ 配送采集参数恢复 `distributionBranchNums=[99]`（调出门店=管理中心，调入=全选），避免双向重复
+- ✅ 配送数据生产验证（2026-07-27）：7/1-7/25 四大战区 7,768,487.39，与系统逐店一致（147/148，1 库非四大战区差异 1,400）
+- ✅ 批发 wholesale_profit 字段验证：15 行样本 money-cost=profit 差异 0（乐檬 API 字段可信）
+- ✅ 聚合表 wholesale_cost 列已加（report_daily_wholesale + /compute sql_template）
+- ✅ /compute 改 DELETE-before-INSERT（避免 sql_template 变更后旧行残留）
+- ✅ 采集调度去掉凌晨 0 点（`8-23`），首次运行 08:0x 触发前一日全量对账
+- ✅ retail 7/1-7/26 补采（64188 + 3120），聚合表 = 明细 parquet（零差异）
 - 🔴 `report_region_breakdown_v` 对 ALL target 重复计算 3.6 倍（branch_dim 未按品牌去重，待修）
