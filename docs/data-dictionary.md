@@ -422,6 +422,7 @@ report_*_v ← PostgREST 脱敏视图（can_see_cost）
 - ✅ `metric_sources.source_filter` 硬编码 '64188' **已修**（2026-07-25 → NULL + 081 重生成）：target 22 现含两品牌四大战区（sale_amount 18,802,965，修前仅 64188 的 7,036,203）
 - ✅ 配送采集参数恢复 `distributionBranchNums=[99]`（调出门店=管理中心，调入=全选），避免双向重复
 - ✅ 配送数据生产验证（2026-07-27）：7/1-7/25 四大战区 7,768,487.39，与系统逐店一致（147/148，1 库非四大战区差异 1,400）
+- ✅ 外部批发客户数据生产验证（2026-07-27）：7/1-7/25 57 个外部客户，批发金额 1,305,487.18 / 毛利 50,179.45，与系统分毫不差
 - ✅ 批发 wholesale_profit 字段验证：15 行样本 money-cost=profit 差异 0（乐檬 API 字段可信）
 - ✅ 聚合表 wholesale_cost 列已加（report_daily_wholesale + /compute sql_template）
 - ✅ /compute 改 DELETE-before-INSERT（避免 sql_template 变更后旧行残留）
