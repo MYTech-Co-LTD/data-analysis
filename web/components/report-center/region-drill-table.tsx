@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
-import { ratioAchievement, formatRatio } from "@/lib/report-center/ratio";
+import { ratioAchievement, targetRatio, formatRatio } from "@/lib/report-center/ratio";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 
 interface RegionDrillTableProps {
@@ -180,7 +180,7 @@ export function RegionDrillTable({ rows, targetMonth, progress }: RegionDrillTab
               {formatRatio(ratioAchievement(node.data.delivery_actual, node.data.sale_actual, node.data.delivery_target, node.data.sale_target))}
             </div>
             <div className="text-[10px] text-slate-400">
-              {formatRatio((() => { const t = node.data.sale_target; return t ? node.data.delivery_target / t : null; })())}
+              {formatRatio(targetRatio(node.data.delivery_target, node.data.sale_target))}
             </div>
           </td>
         </tr>
@@ -233,14 +233,14 @@ export function RegionDrillTable({ rows, targetMonth, progress }: RegionDrillTab
   };
 
   return (
-    <div ref={tableRef} className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-700">
           {targetMonth}月门店零售/配送数据报表
         </h3>
         <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} />
       </div>
-      <div className="overflow-x-auto">
+      <div ref={tableRef} className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 text-slate-500">
             <tr>
