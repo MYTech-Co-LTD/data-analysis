@@ -12,6 +12,7 @@ export function ratioAchievement(
   deliveryTarget: number, saleTarget: number,
 ): number | null {
   if (!saleTarget || !saleActual) return null;
+  if (!deliveryTarget) return null;
   return (deliveryActual / saleActual) / (deliveryTarget / saleTarget);
 }
 

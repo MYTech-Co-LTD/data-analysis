@@ -24,6 +24,9 @@ describe('ratioAchievement', () => {
   it('实际销售为 0 → null', () => {
     expect(ratioAchievement(100, 0, 100, 200)).toBeNull();
   });
+  it('配送目标为 0 返回 null', () => {
+    expect(ratioAchievement(100, 200, 0, 500)).toBeNull();
+  });
 });
 
 describe('formatRatio', () => {
@@ -35,5 +38,8 @@ describe('formatRatio', () => {
   });
   it('1.128 → 113%（toFixed0 四舍五入）', () => {
     expect(formatRatio(1.128)).toBe('113%');
+  });
+  it('0 → 0%', () => {
+    expect(formatRatio(0)).toBe('0%');
   });
 });
