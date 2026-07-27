@@ -43,11 +43,11 @@ function buildHeaders(authToken: string, branchNumsStr: string, urlPath: string,
 }
 
 // body 构造（实测抓到的真实结构）：驼峰，offset 分页
-// distributionBranchNums/responseBranchNums 空=全部调拨（含中心→门店 + 门店间调拨）
+// 调出门店=管理中心(99)，调入门店=全选（中心→所有门店的配送调拨）
 function buildBody(distributionBranch: number, dtFrom: string, dtTo: string, offset: number, limit: number): string {
   return JSON.stringify({
     branchNums: [distributionBranch], dateType: "调出日期", dtFrom, dtTo,
-    distributionBranchNums: [], responseBranchNums: [],
+    distributionBranchNums: [distributionBranch], responseBranchNums: [],
     unitType: "常用单位", itemNums: [], itemLabelNums: [], itemDepartments: [], storehouseNums: [],
     filterPolicyItems: false, filterCreditNote: false, categoryCodes: [], isEnableTax: false, queryTime: false,
     managementStyles: [], taxRates: [], supplierNums: [],
