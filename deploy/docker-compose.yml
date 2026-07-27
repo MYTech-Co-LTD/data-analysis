@@ -145,6 +145,7 @@ services:
       - AGENT_API_KEY=${AGENT_API_KEY}
     volumes:
       - duckdb-cache:/var/lib/duckdb/cache
+      - ../services/server.js:/app/server.js:ro
     networks:
       - insforge-network
     healthcheck:
