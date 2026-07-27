@@ -960,14 +960,14 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 
 | 板块 | total 目标值 | 分解(breakdown) | 指标 |
 |------|--------------|-----------------|------|
-| 总部板块（不拆门店） | `outbound_amt`/`outbound_profit` | **品类**(category=水果/标品耗材) | 出库金额、出库毛利 |
+| 总部板块（不拆门店） | `outbound_amt`/`outbound_profit` | **品类**(category=水果/标品/耗材) | 出库金额、出库毛利 |
 | 门店板块（拆门店） | `sale`/`delivery` | **门店**(branch_num) | 销售、配送 |
 
 一个 total target 的 `target_metric_values` 存 4 个总值（出库金额/毛利=品类分项和，销售/配送=手填总）；品类 children 存 `outbound_*` 按 category，门店 children 存 `sale`/`delivery` 按 branch_num。`target_type` 列为历史字段，不再用于分派（breakdown route 按 rows 内容：有 category→品类 RPC，有 branch_num→门店 RPC）。
 
 **targets 表关键字段**：
 - `target_type TEXT NOT NULL DEFAULT 'store'` — 'hq'/'store'
-- `category TEXT` — hq 品类分解值（'水果'/'标品耗材'），store 与 hq 总目标为 NULL
+- `category TEXT` — hq 品类分解值（'水果'/'标品'/'耗材'），store 与 hq 总目标为 NULL
 - UNIQUE 改为 `(system_book_code, target_type, branch_num, category, start_date, end_date)`（同周期允许 hq 多品类行 + 区分 hq/store 总目标）
 
 **指标口径**（`metric_definitions`，达成数据源留 Phase 2 接入）：
@@ -978,7 +978,7 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 | `outbound_amt` | 出库金额 | `delivery_detail.out_money` + `wholesale_detail.wholesale_money` |
 | `outbound_profit` | 出库毛利 | `delivery_detail.profit_money` + `wholesale_detail.wholesale_profit`（批发毛利=销售金额−销售成本） |
 
-**品类分组**（总部目标分解用，映射 `dim_item.category_l1`）：水果=生鲜；标品·耗材=标品+包装耗材+运费/仓储用耗材+广西柳州；废弃档案排除。
+**品类分组**（总部目标分解用，3 类，映射 `dim_item.category_l1`，见 067_category_three_class.sql）：水果=生鲜；标品=标品+废弃档案+广西柳州；耗材=包装耗材+运费/仓储用耗材。
 
 **RPC**（SECURITY DEFINER，直连 PostgREST `/rpc`）：
 - `upsert_target_total(p_id,p_name,p_sbc,p_start,p_end,p_metrics,p_target_type,p_by)` — 建/改总目标（两类）
@@ -988,6 +988,14 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 - `get_breakdown(p_parent_id)`（门店轴）/ `get_hq_category_breakdown(p_parent_id)`（品类轴）
 
 **达成（actual）**：`report_achievement_v` 暴露 `target_type`/`category` 列；目前仅 `sale` 有 actual（`report_daily_sales` LATERAL），其余指标 `data_ready=false`→`actual=NULL,data_status='not_ready'`。hq 达成（delivery+wholesale 按品类聚合）留 Phase 2 报表中心。
+
+**权威术语表**（UI 展示统一，metric_code/字段名不变）：
+- sale = 销售（门店维度：门店销售/月销售）
+- delivery = 配送（门店维度：门店配送/月配送）；**不再叫"出库"**
+- wholesale = 批发
+- outbound_amt = 出库金额（= 配送 + 批发，总部总仓全部出货）
+- outbound_profit = 出库毛利
+- 配销比 = 配送/销售；配销比达成率 = 实际配销比/目标配销比（前端派生不落库）
 
 ---
 

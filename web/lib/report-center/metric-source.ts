@@ -16,11 +16,11 @@ export interface MetricMeta {
 }
 
 export const METRICS: Record<MetricCode, MetricMeta> = {
-  sale:            { code:"sale",            label:"门店零售",     unit:"元", trendTable:"report_daily_sales",    trendValueCol:"total_sale" },
-  delivery:        { code:"delivery",         label:"门店配送",     unit:"元", trendTable:"report_daily_delivery", trendValueCol:"out_money" },
-  outbound_amt:    { code:"outbound_amt",     label:"总仓出库金额", unit:"元", trendTable:"report_daily_delivery", trendValueCol:"out_money",
+  sale:            { code:"sale",            label:"销售",         unit:"元", trendTable:"report_daily_sales",    trendValueCol:"total_sale" },
+  delivery:        { code:"delivery",         label:"配送",         unit:"元", trendTable:"report_daily_delivery", trendValueCol:"out_money" },
+  outbound_amt:    { code:"outbound_amt",     label:"出库金额",     unit:"元", trendTable:"report_daily_delivery", trendValueCol:"out_money",
                      secondaryTable:"report_daily_wholesale", secondaryValueCol:"wholesale_money", categoryIn:["水果","标品耗材"] },
-  outbound_profit: { code:"outbound_profit",  label:"总仓出库毛利", unit:"元", trendTable:"report_daily_delivery", trendValueCol:"profit_money",
+  outbound_profit: { code:"outbound_profit",  label:"出库毛利",     unit:"元", trendTable:"report_daily_delivery", trendValueCol:"profit_money",
                      secondaryTable:"report_daily_wholesale", secondaryValueCol:"wholesale_profit", categoryIn:["水果","标品耗材"] },
 };
 
