@@ -1,16 +1,19 @@
 // web/app/admin/targets/[id]/page.tsx
-// 分解页：一个目标两板块——总部品类分解(水果/标品/耗材 × 总仓出库) + 门店分解(战区→区域→门店 × 门店零售/门店配送)
+// 分解页：一个目标两板块——总部品类分解(水果/标品/耗材 × 总仓出库) + 门店分解(战区→区域→门店 × 门店销售/门店配送)
 // 交互：sticky工具条(全局校验chips+搜索+统一保存) / 战区默认全折叠逐级下钻 / 表头吸顶 / 搜索定位高亮 / 未填标记
 'use client';
 import { useState, useEffect, useRef, Fragment } from 'react';
 import { ArrowLeft, Download, Upload, ChevronDown, ChevronRight, Search, Save, Loader2, MapPin } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
+import { targetRatio, formatRatio } from '@/lib/report-center/ratio';
+import { diffImport, type DiffEntry, type TargetMetricRow } from '@/lib/report-center/import-diff';
+import { ImportDiffModal } from '@/components/report-center/import-diff-modal';
 
 const HQ_METRICS = ['outbound_amt', 'outbound_profit'];
 const HQ_CATEGORIES = ['水果', '标品', '耗材'];
 const STORE_METRICS = ['sale', 'delivery'];
-const METRIC_NAME: Record<string, string> = { sale: '门店零售', delivery: '门店配送', outbound_amt: '总仓出库金额', outbound_profit: '总仓出库毛利' };
+const METRIC_NAME: Record<string, string> = { sale: '门店销售', delivery: '门店配送', outbound_amt: '总仓出库金额', outbound_profit: '总仓出库毛利' };
 
 export default function BreakdownPage() {
   const { id } = useParams<{ id: string }>();
@@ -24,6 +27,8 @@ export default function BreakdownPage() {
   const [collapsedR2, setCollapsedR2] = useState<Set<string>>(new Set());
   const [kw, setKw] = useState('');
   const [saving, setSaving] = useState(false);
+  const [pendingDiff, setPendingDiff] = useState<DiffEntry[] | null>(null);
+  const [pendingRows, setPendingRows] = useState<TargetMetricRow[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initRef = useRef(false);
 
@@ -129,12 +134,26 @@ export default function BreakdownPage() {
       const r = await fetch('/api/admin/targets/template', { method: 'POST', body: fd });
       const j = await r.json();
       if (j.rows) {
-        const byBn = Object.fromEntries(j.rows.map((x: any) => [x.branch_num, x.metrics]));
-        setBranchRows(rs => rs.map(rw => byBn[rw.branch_num] ? { ...rw, metrics: { ...rw.metrics, ...byBn[rw.branch_num] } } : rw));
-        toast.success(`已导入 ${j.count} 条，请核对后点「保存全部分解」`);
+        const incoming: TargetMetricRow[] = j.rows.map((x: any) => ({ branch_num: x.branch_num, branch_name: x.branch_name, metrics: x.metrics }));
+        const cur: TargetMetricRow[] = branchRows.map(b => ({ branch_num: b.branch_num, branch_name: b.branch_name, metrics: b.metrics }));
+        const diffs = diffImport(cur, incoming);
+        if (diffs.length === 0) { toast.info('导入文件无变更'); e.target.value = ''; return; }
+        setPendingRows(incoming);
+        setPendingDiff(diffs);
       } else { toast.error('解析失败：' + (j.error || JSON.stringify(j))); }
     } catch (err) { toast.error('解析失败：' + String(err)); }
     e.target.value = '';
+  };
+  const confirmImport = () => {
+    if (!pendingRows) return;
+    const byBn = Object.fromEntries(pendingRows.map(x => [x.branch_num, x.metrics]));
+    setBranchRows(rs => rs.map(rw => byBn[rw.branch_num] ? { ...rw, metrics: { ...rw.metrics, ...byBn[rw.branch_num] } } : rw));
+    // 新增门店（当前没有的）追加
+    const existing = new Set(branchRows.map(r => r.branch_num));
+    const added = pendingRows.filter(r => !existing.has(r.branch_num)).map(r => ({ branch_num: r.branch_num, branch_name: r.branch_name || '', war_zone: '', region_l2: '', metrics: r.metrics }));
+    if (added.length) setBranchRows(rs => [...rs, ...added] as any);
+    setPendingDiff(null); setPendingRows(null);
+    toast.success('已应用导入变更，请点「保存全部分解」落库');
   };
 
   const unfilledCount = branchRows.filter(b => STORE_METRICS.every(m => !b.metrics?.[m])).length;
@@ -150,6 +169,7 @@ export default function BreakdownPage() {
           <SumChip label="配送" sum={storeSum('delivery')} total={Number(balance.delivery?.total) || 0} />
           <SumChip label="总仓出库金额" sum={hqSum('outbound_amt')} total={Number(balance.outbound_amt?.total) || 0} />
           <SumChip label="总仓出库毛利" sum={hqSum('outbound_profit')} total={Number(balance.outbound_profit?.total) || 0} />
+          <SumChip label="配销比" sum={storeSum('delivery')} total={storeSum('sale')} ratio />
           <span className="text-xs text-slate-500">未填门店 {unfilledCount} 家</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -168,40 +188,44 @@ export default function BreakdownPage() {
         </div>
       </div>
 
-      <h2 className="font-bold mb-2">总部板块·品类分解 <span className="text-xs text-gray-500 font-normal">（总仓出库金额/毛利，不拆门店）</span></h2>
-      <table className="text-sm border-collapse tabular-nums mb-6 w-full max-w-2xl">
-        <thead><tr className="bg-gray-100">
-          <th className="border p-2 text-left">品类</th>
-          {HQ_METRICS.map(m => <th key={m} className="border p-2 text-left">{METRIC_NAME[m]}(元)</th>)}
-        </tr></thead>
-        <tbody>
-          {HQ_CATEGORIES.map(cat => (
-            <tr key={cat}>
-              <td className="border p-2">{cat}</td>
-              {HQ_METRICS.map(m => <td key={m} className="border p-2"><input type="number" value={hqGrid[cat]?.[m] ?? ''} onChange={e => setHq(cat, m, e.target.value)} className="border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums" /></td>)}
+      <div className="rounded-lg border border-slate-200 bg-white p-4 mb-6 max-w-2xl">
+        <h2 className="font-bold mb-2">总部板块·品类分解 <span className="text-xs text-slate-500 font-normal">（总仓出库金额/毛利，不拆门店）</span></h2>
+        <table className="text-sm border-collapse tabular-nums w-full">
+          <thead><tr className="bg-slate-50">
+            <th className="border border-slate-200 p-2 text-left">品类</th>
+            {HQ_METRICS.map(m => <th key={m} className="border border-slate-200 p-2 text-left">{METRIC_NAME[m]}(元)</th>)}
+          </tr></thead>
+          <tbody>
+            {HQ_CATEGORIES.map(cat => (
+              <tr key={cat}>
+                <td className="border border-slate-200 p-2">{cat}</td>
+                {HQ_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={hqGrid[cat]?.[m] ?? ''} onChange={e => setHq(cat, m, e.target.value)} className="border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums" /></td>)}
+              </tr>
+            ))}
+            <tr className="bg-slate-50/60 font-medium">
+              <td className="border border-slate-200 p-2">合计</td>
+              {HQ_METRICS.map(m => {
+                const sum = hqSum(m); const total = Number(balance[m]?.total || 0); const diff = sum - total;
+                return <td key={m} className={`border border-slate-200 p-2 text-right tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>{sum.toLocaleString()}{diff !== 0 && <span className="text-xs ml-1">({diff > 0 ? '+' : ''}{diff.toLocaleString()})</span>}</td>;
+              })}
             </tr>
-          ))}
-          <tr className="bg-gray-50 font-medium">
-            <td className="border p-2">合计</td>
-            {HQ_METRICS.map(m => {
-              const sum = hqSum(m); const total = Number(balance[m]?.total || 0); const diff = sum - total;
-              return <td key={m} className={`border p-2 text-right tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>{sum.toLocaleString()}{diff !== 0 && <span className="text-xs ml-1">({diff > 0 ? '+' : ''}{diff.toLocaleString()})</span>}</td>;
-            })}
-          </tr>
-        </tbody>
-      </table>
+          </tbody>
+        </table>
+      </div>
 
-      <h2 className="font-bold mb-2">门店板块·三级分解 <span className="text-xs text-gray-500 font-normal">（战区→区域→门店，门店零售/门店配送；点战区/区域展开）</span></h2>
-      <div className="overflow-auto max-h-[70vh] border border-slate-200 rounded-md">
-        <table className="text-sm border-collapse tabular-nums w-full min-w-[680px]">
-          <thead className="sticky top-0 z-10 shadow-sm">
-            <tr className="bg-gray-100">
-              <th className="border p-2 text-left w-40">战区</th>
-              <th className="border p-2 text-left w-32">区域</th>
-              <th className="border p-2 text-left">门店</th>
-              {STORE_METRICS.map(m => <th key={m} className="border p-2 text-right w-60">{METRIC_NAME[m]}（目标/子和）</th>)}
-            </tr>
-          </thead>
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="font-bold mb-2">门店板块·三级分解 <span className="text-xs text-slate-500 font-normal">（战区→区域→门店，门店销售/门店配送；点战区/区域展开）</span></h2>
+        <div className="overflow-auto max-h-[70vh] border border-slate-200 rounded-md">
+          <table className="text-sm border-collapse tabular-nums w-full min-w-[760px]">
+            <thead className="sticky top-0 z-10 shadow-sm">
+              <tr className="bg-slate-50">
+                <th className="border border-slate-200 p-2 text-left w-40">战区</th>
+                <th className="border border-slate-200 p-2 text-left w-32">区域</th>
+                <th className="border border-slate-200 p-2 text-left">门店</th>
+                {STORE_METRICS.map(m => <th key={m} className="border border-slate-200 p-2 text-right w-60">{METRIC_NAME[m]}（目标/子和）</th>)}
+                <th className="border border-slate-200 p-2 text-right w-28">配销比</th>
+              </tr>
+            </thead>
           <tbody>
             {warZoneRows.map(wz => {
               const wzRegions = regionRows.filter(r => r.war_zone === wz.war_zone);
@@ -214,7 +238,7 @@ export default function BreakdownPage() {
                 <Fragment key={wz.war_zone}>
                   {/* 战区行(可点击折叠) */}
                   <tr className="bg-primary/10 font-medium">
-                    <td className="border p-2 cursor-pointer select-none" onClick={() => toggleWz(wz.war_zone)}>
+                    <td className="border border-slate-200 p-2 cursor-pointer select-none" onClick={() => toggleWz(wz.war_zone)}>
                       <span className="inline-flex items-center gap-1">
                         {wzOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                         <MapPin size={13} className="text-primary" />
@@ -222,12 +246,15 @@ export default function BreakdownPage() {
                         <span className="ml-1 text-xs text-slate-500 font-normal">{wzFilled}/{wzStores.length} 店</span>
                       </span>
                     </td>
-                    <td className="border p-2"></td>
-                    <td className="border p-2"></td>
+                    <td className="border border-slate-200 p-2"></td>
+                    <td className="border border-slate-200 p-2"></td>
                     {STORE_METRICS.map(m => {
                       const sum = wzRegionSumAll(m); const target = Number(wz.metrics?.[m]) || 0; const diff = sum - target;
-                      return <td key={m} className="border p-2"><div className="flex items-center gap-2"><input type="number" value={wz.metrics?.[m] ?? ''} onChange={e => setWzCell(wz.war_zone, m, e.target.value)} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
+                      return <td key={m} className="border border-slate-200 p-2"><div className="flex items-center gap-2"><input type="number" value={wz.metrics?.[m] ?? ''} onChange={e => setWzCell(wz.war_zone, m, e.target.value)} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
                     })}
+                    <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
+                      {formatRatio(targetRatio(wzRegionSum(wz.war_zone, 'delivery'), wzRegionSum(wz.war_zone, 'sale')))}
+                    </td>
                   </tr>
                   {wzOpen && wzRegions.map(r2 => {
                     const r2Stores = branchRows.filter(b => b.war_zone === wz.war_zone && b.region_l2 === r2.region_l2);
@@ -239,28 +266,34 @@ export default function BreakdownPage() {
                       <Fragment key={r2Key}>
                         {/* 区域行(可点击折叠) */}
                         <tr className="bg-slate-50 font-medium">
-                          <td className="border p-2"></td>
-                          <td className="border p-2 cursor-pointer select-none" onClick={() => toggleR2(r2Key)}>
+                          <td className="border border-slate-200 p-2"></td>
+                          <td className="border border-slate-200 p-2 cursor-pointer select-none" onClick={() => toggleR2(r2Key)}>
                             <span className="inline-flex items-center gap-1">
                               {r2Open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                               {r2.region_l2 || '-'}
                             </span>
                           </td>
-                          <td className="border p-2"></td>
+                          <td className="border border-slate-200 p-2"></td>
                           {STORE_METRICS.map(m => {
                             const sum = r2StoreSumL(m); const target = Number(r2.metrics?.[m]) || 0; const diff = sum - target;
-                            return <td key={m} className="border p-2"><div className="flex items-center gap-2"><input type="number" value={r2.metrics?.[m] ?? ''} onChange={e => setR2Cell(wz.war_zone, r2.region_l2, m, e.target.value)} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
+                            return <td key={m} className="border border-slate-200 p-2"><div className="flex items-center gap-2"><input type="number" value={r2.metrics?.[m] ?? ''} onChange={e => setR2Cell(wz.war_zone, r2.region_l2, m, e.target.value)} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
                           })}
+                          <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
+                            {formatRatio(targetRatio(r2StoreSum(wz.war_zone, r2.region_l2, 'delivery'), r2StoreSum(wz.war_zone, r2.region_l2, 'sale')))}
+                          </td>
                         </tr>
                         {r2Open && r2Stores.map(store => {
                           const unfilled = STORE_METRICS.every(m => !store.metrics?.[m]);
                           const hit = matchKw(store);
                           return (
                             <tr key={store.branch_num} className={`hover:bg-slate-50 ${unfilled ? 'bg-slate-50/60' : ''} ${hit ? 'bg-amber-50' : ''}`}>
-                              <td className="border p-2"></td>
-                              <td className="border p-2"></td>
-                              <td className={`border p-2 ${hit ? 'ring-1 ring-inset ring-amber-300' : ''}`}><span className="text-xs text-slate-400 mr-2 tabular-nums">{store.branch_num}</span>{store.branch_name}{unfilled && <span className="ml-2 text-xs text-slate-400">未填</span>}</td>
-                              {STORE_METRICS.map(m => <td key={m} className="border p-2"><input type="number" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(store.branch_num, m, e.target.value)} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
+                              <td className="border border-slate-200 p-2"></td>
+                              <td className="border border-slate-200 p-2"></td>
+                              <td className={`border border-slate-200 p-2 ${hit ? 'ring-1 ring-inset ring-amber-300' : ''}`}><span className="text-xs text-slate-400 mr-2 tabular-nums">{store.branch_num}</span>{store.branch_name}{unfilled && <span className="ml-2 text-xs text-slate-400">未填</span>}</td>
+                              {STORE_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(store.branch_num, m, e.target.value)} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
+                              <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
+                                {formatRatio(targetRatio(Number(store.metrics?.delivery) || 0, Number(store.metrics?.sale) || 0))}
+                              </td>
                             </tr>
                           );
                         })}
@@ -272,13 +305,24 @@ export default function BreakdownPage() {
             })}
           </tbody>
         </table>
+        </div>
       </div>
+      {pendingDiff && (
+        <ImportDiffModal diffs={pendingDiff} onClose={() => { setPendingDiff(null); setPendingRows(null); }} onConfirm={confirmImport} />
+      )}
     </div>
   );
 }
 
-// 全局校验 chip：子和 vs 总目标，差额色标（无总目标时不校验）
-function SumChip({ label, sum, total }: { label: string; sum: number; total: number }) {
+// 全局校验 chip：子和 vs 总目标，差额色标（无总目标时不校验）；ratio 模式直接显示 sum/total 百分比
+function SumChip({ label, sum, total, ratio }: { label: string; sum: number; total: number; ratio?: boolean }) {
+  if (ratio) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-slate-200 bg-slate-50 text-slate-600 tabular-nums">
+        {label} <b>{formatRatio(total ? sum / total : null)}</b>
+      </span>
+    );
+  }
   const diff = sum - total;
   const ok = total === 0 ? true : diff === 0;
   return (

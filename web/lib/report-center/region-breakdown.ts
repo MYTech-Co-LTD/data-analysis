@@ -1,5 +1,5 @@
 // web/lib/report-center/region-breakdown.ts
-// 门店零售/出库数据报表下钻数据获取
+// 门店零售/配送数据报表下钻数据获取
 import { getClient } from "@/lib/api";
 
 export interface RegionBreakdownRow {

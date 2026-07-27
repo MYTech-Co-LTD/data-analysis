@@ -78,10 +78,10 @@ export function MobileDashboard({
 
       {/* KPI 卡 */}
       <div className="px-4">
-        <KpiCards rows={kpi} focus="sale" onFocus={() => {}} />
+        <KpiCards rows={kpi} />
       </div>
 
-      {/* 门店零售/出库数据报表 */}
+      {/* 门店零售/配送数据报表 */}
       <div className="px-4">
         <RegionDrillTable
           rows={regionBreakdown}
