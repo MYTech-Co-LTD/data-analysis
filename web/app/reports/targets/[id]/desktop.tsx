@@ -76,8 +76,8 @@ export function DesktopDashboard({
         </div>
       </div>
 
-      {/* KPI 卡（保留 focus 切换但不影响下方组件） */}
-      <KpiCards rows={kpi} focus="sale" onFocus={() => {}} />
+      {/* KPI 卡 */}
+      <KpiCards rows={kpi} />
 
       {/* 门店零售/出库数据报表 */}
       <RegionDrillTable

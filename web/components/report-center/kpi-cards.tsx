@@ -23,8 +23,8 @@ function fmtPercent(r: number): string {
   return `${(r * 100).toFixed(1)}%`;
 }
 
-// 达成率三色编码（DESIGN 语义色），按 progress_rate 着色：
-//   >=1   → success #16A34A（跑赢进度）
+// 达成率三色编码（DESIGN 语义色），按绝对 achievement_rate 着色：
+//   >=1   → success #16A34A（达成）
 //   >=0.8 → warning #D97706（接近）
 //   <0.8  → error #DC2626（落后）
 function rateColor(r: number) {
@@ -68,16 +68,12 @@ function KpiTooltip({ target, actual, rate }: { target: string; actual: string; 
 }
 
 // 4 指标 KPI 卡行：每卡显示 label / 达成率大数字 / 实际·目标·进度 / 数据状态徽章。
-// 点击 onFocus 切聚焦；聚焦卡 border-blue-500 ring-1（DESIGN primary）。
+// 着色按绝对达成率（与 target-list.tsx 一致：≥1 绿/≥0.8 琥珀/<0.8 红），progress 仅作副信息。
 // hover 显示 tooltip：总目标、总完成、完成率。
 export function KpiCards({
   rows,
-  focus,
-  onFocus,
 }: {
   rows: KpiRow[];
-  focus: MetricCode;
-  onFocus: (m: MetricCode) => void;
 }) {
   if (rows.length === 0) {
     return (
@@ -93,17 +89,10 @@ export function KpiCards({
         if (!r) return null;
         const meta = METRICS[code];
         const progress = r.progress_rate ?? 0;
-        const isFocus = focus === code;
         return (
-          <button
+          <div
             key={code}
-            type="button"
-            onClick={() => onFocus(code)}
-            className={`rounded-md border p-4 text-left transition relative group ${
-              isFocus
-                ? "border-blue-500 ring-1 ring-blue-500"
-                : "border-slate-200 bg-white hover:border-slate-300"
-            }`}
+            className="rounded-md border p-4 text-left transition relative group border-slate-200 bg-white hover:border-slate-300"
           >
             <div className="flex items-center justify-between">
               <span className="text-sm text-slate-500">{meta.label}</span>
@@ -117,7 +106,7 @@ export function KpiCards({
             </div>
             <div
               className={`mt-1 text-2xl font-semibold tabular-nums ${rateColor(
-                (r.achievement_rate ?? 0) / (progress || 0.0001),
+                r.achievement_rate ?? 0,
               )}`}
             >
               {((r.achievement_rate ?? 0) * 100).toFixed(1)}%
@@ -132,7 +121,7 @@ export function KpiCards({
               actual={fmtCurrency(r.actual_value ?? 0)}
               rate={fmtPercent(r.achievement_rate ?? 0)}
             />
-          </button>
+          </div>
         );
       })}
     </div>

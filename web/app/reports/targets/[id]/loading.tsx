@@ -26,7 +26,6 @@ export default async function Loading() {
             />
           ))}
         </div>
-        {/* GaugeChart 达成 */}
         <div className="h-44 animate-pulse rounded-lg border border-slate-200 bg-white" />
         {/* 趋势 */}
         <div className="h-44 animate-pulse rounded-lg border border-slate-200 bg-white" />
