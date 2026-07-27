@@ -2,7 +2,6 @@ import { cookies, headers } from "next/headers";
 import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { LogoutButton } from "@/components/layout/logout-button";
 import { isWecomClient } from "@/lib/device";
 import { isAdmin } from "@/lib/auth";
@@ -37,9 +36,6 @@ export async function Header() {
               管理后台
             </Link>
           )}
-          <Button variant="ghost" size="sm">
-            设置
-          </Button>
           {displayName ? (
             <div className="flex items-center gap-2">
               <span className="text-sm text-muted-foreground">{displayName}</span>
