@@ -3,9 +3,9 @@
 
 DROP VIEW IF EXISTS report_distribution_drill_v CASCADE;
 CREATE VIEW report_distribution_drill_v AS
-  SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(wholesale_pp_amount) AS wholesale_pp_amount, (SUM(delivery_amount) + SUM(wholesale_pp_amount)) AS distribution_amount
+  SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(delivery_profit) AS delivery_profit, SUM(wholesale_pp_amount) AS wholesale_pp_amount, SUM(wholesale_pp_profit) AS wholesale_pp_profit, (SUM(delivery_amount) + SUM(wholesale_pp_amount)) AS distribution_amount, (SUM(delivery_profit) + SUM(wholesale_pp_profit)) AS distribution_profit
   FROM (
-    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, 0 AS wholesale_pp_amount
+    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, SUM(COALESCE(s.profit_money, 0)) AS delivery_profit, 0 AS wholesale_pp_amount, 0 AS wholesale_pp_profit
     FROM dim_branch dim
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
@@ -13,7 +13,7 @@ CREATE VIEW report_distribution_drill_v AS
     WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.first_level_region
   UNION ALL
-    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount
+    SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, 0 AS delivery_amount, 0 AS delivery_profit, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, SUM(COALESCE(s.wholesale_profit, 0)) AS wholesale_pp_profit
     FROM dim_branch dim
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
@@ -24,9 +24,9 @@ CREATE VIEW report_distribution_drill_v AS
   ) combined
   GROUP BY level, parent_code, target_id, code, name
 UNION ALL
-  SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(wholesale_pp_amount) AS wholesale_pp_amount, (SUM(delivery_amount) + SUM(wholesale_pp_amount)) AS distribution_amount
+  SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(delivery_profit) AS delivery_profit, SUM(wholesale_pp_amount) AS wholesale_pp_amount, SUM(wholesale_pp_profit) AS wholesale_pp_profit, (SUM(delivery_amount) + SUM(wholesale_pp_amount)) AS distribution_amount, (SUM(delivery_profit) + SUM(wholesale_pp_profit)) AS distribution_profit
   FROM (
-    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, 0 AS wholesale_pp_amount
+    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, SUM(COALESCE(s.profit_money, 0)) AS delivery_profit, 0 AS wholesale_pp_amount, 0 AS wholesale_pp_profit
     FROM dim_branch dim
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
@@ -34,7 +34,7 @@ UNION ALL
     WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.second_level_region, dim.second_level_region
   UNION ALL
-    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount
+    SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, 0 AS delivery_amount, 0 AS delivery_profit, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, SUM(COALESCE(s.wholesale_profit, 0)) AS wholesale_pp_profit
     FROM dim_branch dim
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
@@ -45,9 +45,9 @@ UNION ALL
   ) combined
   GROUP BY level, parent_code, target_id, code, name
 UNION ALL
-  SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(wholesale_pp_amount) AS wholesale_pp_amount, (SUM(delivery_amount) + SUM(wholesale_pp_amount)) AS distribution_amount
+  SELECT level, parent_code, target_id, code, name, SUM(delivery_amount) AS delivery_amount, SUM(delivery_profit) AS delivery_profit, SUM(wholesale_pp_amount) AS wholesale_pp_amount, SUM(wholesale_pp_profit) AS wholesale_pp_profit, (SUM(delivery_amount) + SUM(wholesale_pp_amount)) AS distribution_amount, (SUM(delivery_profit) + SUM(wholesale_pp_profit)) AS distribution_profit
   FROM (
-    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, 0 AS wholesale_pp_amount
+    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, SUM(COALESCE(s.out_money, 0)) AS delivery_amount, SUM(COALESCE(s.profit_money, 0)) AS delivery_profit, 0 AS wholesale_pp_amount, 0 AS wholesale_pp_profit
     FROM dim_branch dim
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
@@ -55,7 +55,7 @@ UNION ALL
     WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.second_level_region, dim.branch_num, dim.branch_name
   UNION ALL
-    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount
+    SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, 0 AS delivery_amount, 0 AS delivery_profit, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, SUM(COALESCE(s.wholesale_profit, 0)) AS wholesale_pp_profit
     FROM dim_branch dim
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
@@ -78,30 +78,54 @@ CREATE VIEW report_distribution_drill_v_audit AS
     delivery_amount_store_total,
     ABS(delivery_amount_region_total - delivery_amount_sub_region_total) AS delivery_amount_region_vs_sub_region_diff,
     ABS(delivery_amount_region_total - delivery_amount_store_total) AS delivery_amount_region_vs_store_diff,
+    delivery_profit_region_total,
+    delivery_profit_sub_region_total,
+    delivery_profit_store_total,
+    ABS(delivery_profit_region_total - delivery_profit_sub_region_total) AS delivery_profit_region_vs_sub_region_diff,
+    ABS(delivery_profit_region_total - delivery_profit_store_total) AS delivery_profit_region_vs_store_diff,
     wholesale_pp_amount_region_total,
     wholesale_pp_amount_sub_region_total,
     wholesale_pp_amount_store_total,
     ABS(wholesale_pp_amount_region_total - wholesale_pp_amount_sub_region_total) AS wholesale_pp_amount_region_vs_sub_region_diff,
     ABS(wholesale_pp_amount_region_total - wholesale_pp_amount_store_total) AS wholesale_pp_amount_region_vs_store_diff,
+    wholesale_pp_profit_region_total,
+    wholesale_pp_profit_sub_region_total,
+    wholesale_pp_profit_store_total,
+    ABS(wholesale_pp_profit_region_total - wholesale_pp_profit_sub_region_total) AS wholesale_pp_profit_region_vs_sub_region_diff,
+    ABS(wholesale_pp_profit_region_total - wholesale_pp_profit_store_total) AS wholesale_pp_profit_region_vs_store_diff,
     distribution_amount_region_total,
     distribution_amount_sub_region_total,
     distribution_amount_store_total,
     ABS(distribution_amount_region_total - distribution_amount_sub_region_total) AS distribution_amount_region_vs_sub_region_diff,
-    ABS(distribution_amount_region_total - distribution_amount_store_total) AS distribution_amount_region_vs_store_diff
+    ABS(distribution_amount_region_total - distribution_amount_store_total) AS distribution_amount_region_vs_store_diff,
+    distribution_profit_region_total,
+    distribution_profit_sub_region_total,
+    distribution_profit_store_total,
+    ABS(distribution_profit_region_total - distribution_profit_sub_region_total) AS distribution_profit_region_vs_sub_region_diff,
+    ABS(distribution_profit_region_total - distribution_profit_store_total) AS distribution_profit_region_vs_store_diff
   FROM (
     SELECT
       target_id,
         MAX(CASE WHEN level='region' THEN delivery_amount_sum END) AS delivery_amount_region_total,
         MAX(CASE WHEN level='sub_region' THEN delivery_amount_sum END) AS delivery_amount_sub_region_total,
         MAX(CASE WHEN level='store' THEN delivery_amount_sum END) AS delivery_amount_store_total,
+        MAX(CASE WHEN level='region' THEN delivery_profit_sum END) AS delivery_profit_region_total,
+        MAX(CASE WHEN level='sub_region' THEN delivery_profit_sum END) AS delivery_profit_sub_region_total,
+        MAX(CASE WHEN level='store' THEN delivery_profit_sum END) AS delivery_profit_store_total,
         MAX(CASE WHEN level='region' THEN wholesale_pp_amount_sum END) AS wholesale_pp_amount_region_total,
         MAX(CASE WHEN level='sub_region' THEN wholesale_pp_amount_sum END) AS wholesale_pp_amount_sub_region_total,
         MAX(CASE WHEN level='store' THEN wholesale_pp_amount_sum END) AS wholesale_pp_amount_store_total,
+        MAX(CASE WHEN level='region' THEN wholesale_pp_profit_sum END) AS wholesale_pp_profit_region_total,
+        MAX(CASE WHEN level='sub_region' THEN wholesale_pp_profit_sum END) AS wholesale_pp_profit_sub_region_total,
+        MAX(CASE WHEN level='store' THEN wholesale_pp_profit_sum END) AS wholesale_pp_profit_store_total,
         MAX(CASE WHEN level='region' THEN distribution_amount_sum END) AS distribution_amount_region_total,
         MAX(CASE WHEN level='sub_region' THEN distribution_amount_sum END) AS distribution_amount_sub_region_total,
-        MAX(CASE WHEN level='store' THEN distribution_amount_sum END) AS distribution_amount_store_total
+        MAX(CASE WHEN level='store' THEN distribution_amount_sum END) AS distribution_amount_store_total,
+        MAX(CASE WHEN level='region' THEN distribution_profit_sum END) AS distribution_profit_region_total,
+        MAX(CASE WHEN level='sub_region' THEN distribution_profit_sum END) AS distribution_profit_sub_region_total,
+        MAX(CASE WHEN level='store' THEN distribution_profit_sum END) AS distribution_profit_store_total
     FROM (
-      SELECT target_id, level, SUM(delivery_amount) AS delivery_amount_sum, SUM(wholesale_pp_amount) AS wholesale_pp_amount_sum, SUM(distribution_amount) AS distribution_amount_sum
+      SELECT target_id, level, SUM(delivery_amount) AS delivery_amount_sum, SUM(delivery_profit) AS delivery_profit_sum, SUM(wholesale_pp_amount) AS wholesale_pp_amount_sum, SUM(wholesale_pp_profit) AS wholesale_pp_profit_sum, SUM(distribution_amount) AS distribution_amount_sum, SUM(distribution_profit) AS distribution_profit_sum
       FROM report_distribution_drill_v
       GROUP BY target_id, level
     ) y

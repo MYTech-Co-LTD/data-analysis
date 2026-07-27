@@ -11,7 +11,7 @@
     },
     {
       "name": "distribution_drill",
-      "metrics": ["delivery_amount", "wholesale_pp_amount", "distribution_amount"],
+      "metrics": ["delivery_amount", "delivery_profit", "wholesale_pp_amount", "wholesale_pp_profit", "distribution_amount", "distribution_profit"],
       "dimension": "branch",
       "levels": ["region", "sub_region", "store"],
       "assessed_filter": true,
@@ -20,7 +20,7 @@
     },
     {
       "name": "outbound_drill",
-      "metrics": ["delivery_amount", "wholesale_pp_amount", "wholesale_ext_amount", "outbound_amount"],
+      "metrics": ["delivery_amount", "delivery_profit", "wholesale_pp_amount", "wholesale_pp_profit", "wholesale_ext_amount", "wholesale_ext_profit", "outbound_amount", "outbound_profit"],
       "dimension": "branch",
       "levels": ["region", "sub_region", "store"],
       "assessed_filter": true,
