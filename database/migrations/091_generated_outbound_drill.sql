@@ -10,7 +10,7 @@ CREATE VIEW report_outbound_drill_v AS
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active'
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.first_level_region
   UNION ALL
     SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, dim.first_level_region AS code, dim.first_level_region AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
@@ -19,7 +19,7 @@ CREATE VIEW report_outbound_drill_v AS
     LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
       AND s.system_book_code = '64188'
-    WHERE t.status = 'active'
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.first_level_region
   UNION ALL
     SELECT 'region' AS level, NULL::text AS parent_code, t.id AS target_id, '外部客户' AS code, '外部客户' AS name, 0 AS delivery_amount, 0 AS wholesale_pp_amount, SUM(s.wholesale_money) AS wholesale_ext_amount
@@ -38,7 +38,7 @@ UNION ALL
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active'
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.second_level_region, dim.second_level_region
   UNION ALL
     SELECT 'sub_region' AS level, dim.first_level_region AS parent_code, t.id AS target_id, dim.second_level_region AS code, dim.second_level_region AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
@@ -47,7 +47,7 @@ UNION ALL
     LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
       AND s.system_book_code = '64188'
-    WHERE t.status = 'active'
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.first_level_region, dim.second_level_region, dim.second_level_region
   UNION ALL
     SELECT 'sub_region' AS level, NULL::text AS parent_code, t.id AS target_id, '外部客户' AS code, '外部客户' AS name, 0 AS delivery_amount, 0 AS wholesale_pp_amount, SUM(s.wholesale_money) AS wholesale_ext_amount
@@ -66,7 +66,7 @@ UNION ALL
     JOIN targets t ON (t.system_book_code = 'ALL' OR dim.system_book_code = t.system_book_code)
     LEFT JOIN report_daily_delivery s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
-    WHERE t.status = 'active'
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.second_level_region, dim.branch_num, dim.branch_name
   UNION ALL
     SELECT 'store' AS level, dim.second_level_region AS parent_code, t.id AS target_id, dim.branch_num AS code, dim.branch_name AS name, 0 AS delivery_amount, SUM(COALESCE(s.wholesale_money, 0)) AS wholesale_pp_amount, 0 AS wholesale_ext_amount
@@ -75,7 +75,7 @@ UNION ALL
     LEFT JOIN report_daily_wholesale s ON s.branch_num = dim.branch_num AND s.system_book_code = dim.system_book_code
       AND s.biz_date BETWEEN t.start_date AND t.end_date
       AND s.system_book_code = '64188'
-    WHERE t.status = 'active'
+    WHERE t.status = 'active' AND is_assessed_war_zone(dim.first_level_region)
     GROUP BY t.id, dim.second_level_region, dim.branch_num, dim.branch_name
   UNION ALL
     SELECT 'store' AS level, NULL::text AS parent_code, t.id AS target_id, '外部客户' AS code, '外部客户' AS name, 0 AS delivery_amount, 0 AS wholesale_pp_amount, SUM(s.wholesale_money) AS wholesale_ext_amount

@@ -23,7 +23,7 @@
       "metrics": ["delivery_amount", "wholesale_pp_amount", "wholesale_ext_amount", "outbound_amount"],
       "dimension": "branch",
       "levels": ["region", "sub_region", "store"],
-      "assessed_filter": false,
+      "assessed_filter": true,
       "target_scoped": true,
       "audit": true,
       "virtual_nodes": { "wholesale_ext_amount": "外部客户" }
