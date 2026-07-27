@@ -997,6 +997,12 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 - outbound_profit = 出库毛利
 - 配销比 = 配送/销售；配销比达成率 = 实际配销比/目标配销比（前端派生不落库）
 
+**指标口径（088 语义层对齐，迁移 095/096 修复 2026-07-27）**：
+- `report_category_summary_v`（095）：出库额 = delivery + wholesale_pp(门店批发) + wholesale_ext(外部批发) **全口径**，按目标品牌过滤。原 074 硬编码 `system_book_code='64188'`（delivery 表无 64188 数据→空）+ wholesale 排除门店，致合计漏 74%（实测 400万→修复后 ~1366万）
+- `report_achievement_v` delivery LATERAL（096）：delivery actual = **仅 report_daily_delivery**（去 wholesale，原 070 `delivery UNION ALL wholesale` 含批发偏高）；outbound LATERAL 不变（delivery+wholesale 全口径）
+- `report_region_breakdown_v`（091 已修）：delivery/sales 按目标品牌过滤
+- 088 metric_registry 重构后业务视图需同步 patch；generator 生成的 `report_distribution_drill_v`/`report_outbound_drill_v`（口径对）为 Phase 2 下钻报表备用
+
 ---
 
 ## 十一、待实现/待讨论
