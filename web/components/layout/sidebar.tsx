@@ -2,35 +2,32 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { LayoutDashboard } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
 const menuItems = [
-  { id: "reports", label: "报表中心", icon: "📊", href: "/" },
-  { id: "settings", label: "设置", icon: "⚙️", href: "/settings" },
-];
+  { id: "reports", label: "报表中心", icon: <LayoutDashboard size={18} strokeWidth={1.5} /> },
+] as const;
 
 export function Sidebar() {
   const pathname = usePathname();
-
   return (
-    <aside className="w-64 border-r bg-gray-50 min-h-[calc(100vh-64px)]">
+    <aside className="w-64 border-r border-slate-200 bg-slate-50 min-h-[calc(100vh-64px)]">
       <nav className="p-4 space-y-2">
         {menuItems.map((item) => {
-          const active =
-            item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+          const active = pathname === "/";
           return (
             <Link
               key={item.id}
-              href={item.href}
+              href="/"
               className={cn(
                 "flex w-full items-center justify-start rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                active
-                  ? "bg-gray-200 text-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                active ? "bg-slate-200 text-slate-900" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900",
               )}
             >
-              <span className="mr-2">{item.icon}</span>
+              <span className="mr-2 text-slate-500">{item.icon as ReactNode}</span>
               {item.label}
             </Link>
           );
