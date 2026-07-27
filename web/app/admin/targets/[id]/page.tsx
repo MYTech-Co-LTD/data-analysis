@@ -1,5 +1,5 @@
 // web/app/admin/targets/[id]/page.tsx
-// 分解页：一个目标两板块——总部品类分解(水果/标品/耗材 × 总仓出库) + 门店分解(战区→区域→门店 × 门店零售/门店配送)
+// 分解页：一个目标两板块——总部品类分解(水果/标品/耗材 × 总仓出库) + 门店分解(战区→区域→门店 × 门店销售/门店配送)
 // 交互：sticky工具条(全局校验chips+搜索+统一保存) / 战区默认全折叠逐级下钻 / 表头吸顶 / 搜索定位高亮 / 未填标记
 'use client';
 import { useState, useEffect, useRef, Fragment } from 'react';
@@ -13,7 +13,7 @@ import { ImportDiffModal } from '@/components/report-center/import-diff-modal';
 const HQ_METRICS = ['outbound_amt', 'outbound_profit'];
 const HQ_CATEGORIES = ['水果', '标品', '耗材'];
 const STORE_METRICS = ['sale', 'delivery'];
-const METRIC_NAME: Record<string, string> = { sale: '门店零售', delivery: '门店配送', outbound_amt: '总仓出库金额', outbound_profit: '总仓出库毛利' };
+const METRIC_NAME: Record<string, string> = { sale: '门店销售', delivery: '门店配送', outbound_amt: '总仓出库金额', outbound_profit: '总仓出库毛利' };
 
 export default function BreakdownPage() {
   const { id } = useParams<{ id: string }>();
@@ -214,7 +214,7 @@ export default function BreakdownPage() {
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white p-4">
-        <h2 className="font-bold mb-2">门店板块·三级分解 <span className="text-xs text-slate-500 font-normal">（战区→区域→门店，门店零售/门店配送；点战区/区域展开）</span></h2>
+        <h2 className="font-bold mb-2">门店板块·三级分解 <span className="text-xs text-slate-500 font-normal">（战区→区域→门店，门店销售/门店配送；点战区/区域展开）</span></h2>
         <div className="overflow-auto max-h-[70vh] border border-slate-200 rounded-md">
           <table className="text-sm border-collapse tabular-nums w-full min-w-[760px]">
             <thead className="sticky top-0 z-10 shadow-sm">

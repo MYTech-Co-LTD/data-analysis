@@ -79,7 +79,7 @@ export function DesktopDashboard({
       {/* KPI 卡 */}
       <KpiCards rows={kpi} />
 
-      {/* 门店零售/出库数据报表 */}
+      {/* 门店零售/配送数据报表 */}
       <RegionDrillTable
         rows={regionBreakdown}
         targetMonth={targetMonth}
