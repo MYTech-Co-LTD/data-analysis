@@ -37,9 +37,9 @@ delivery_targets AS (
   WHERE tmv.metric_code = 'delivery'
 ),
 
--- 门店维表（含 system_book_code，避免撞号 branch_num 翻倍）
+-- 门店维表（含 system_book_code，242 行；JOIN 时按品牌+门店号关联避免撞号翻倍）
 branch_dim AS (
-  SELECT DISTINCT ON (branch_num)
+  SELECT
     system_book_code,
     branch_num,
     branch_name,
@@ -47,7 +47,6 @@ branch_dim AS (
     second_level_region AS region_l2
   FROM dim_branch
   WHERE is_assessed_war_zone(first_level_region)
-  ORDER BY branch_num, system_book_code
 ),
 
 -- 销售实际值（按门店+品牌+目标聚合）
