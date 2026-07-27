@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Download } from "lucide-react";
 import type { DiffEntry } from "@/lib/report-center/import-diff";
 
@@ -15,11 +16,16 @@ export function ImportDiffModal({
   onClose: () => void;
 }) {
   const changedStores = new Set(diffs.map(d => d.branch_num)).size;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
   return (
-    <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50" onClick={onClose} role="dialog" aria-modal="true" aria-labelledby="import-diff-title">
       <div className="bg-white rounded-lg shadow-xl w-[640px] max-w-[92vw] max-h-[80vh] overflow-auto p-6" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-3">
-          <h2 className="font-bold text-lg">导入预览</h2>
+          <h2 id="import-diff-title" className="font-bold text-lg">导入预览</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-sm">取消</button>
         </div>
         <div className="text-sm text-slate-500 mb-3 tabular-nums">
@@ -34,7 +40,7 @@ export function ImportDiffModal({
             </tr></thead>
             <tbody>
               {diffs.map((d, i) => (
-                <tr key={i}>
+                <tr key={`${d.branch_num}-${d.metric}`}>
                   <td className="border border-slate-200 p-2">{d.branch_name || d.branch_num} <span className="text-xs text-slate-400">{d.branch_num}</span></td>
                   <td className="border border-slate-200 p-2">{METRIC_NAME[d.metric] || d.metric}</td>
                   <td className="border border-slate-200 p-2 text-right">{d.oldValue.toLocaleString()}</td>
