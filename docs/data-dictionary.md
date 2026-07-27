@@ -371,6 +371,8 @@ sale_amount（视图指标，report_store_sales_drill_v）
 | **outbound_amount** | 出库 = 总部→所有客户（delivery + wholesale_pp + wholesale_ext） | derived: delivery_amount + wholesale_pp_amount + wholesale_ext_amount | 两品牌四大战区门店 + 外部客户 | - |
 | **outbound_profit** | 出库毛利 | derived: delivery_profit + wholesale_pp_profit + wholesale_ext_profit | 同上 | 🔒 |
 | **margin** | 销售毛利率（derived: sale_profit/sale_amount，`additive=false` 须重算 `SUM(profit)/NULLIF(SUM(amount),0)`，不可直接 SUM 比率） | 同 sale | 两品牌四大战区门店 | 🔒 |
+| **distribution_margin** | 配送毛利率（derived: distribution_profit/distribution_amount，`additive=false` 重算分量比） | 同 distribution | 两品牌四大战区门店合计 | 🔒 |
+| **outbound_margin** | 出库毛利率（derived: outbound_profit/outbound_amount，`additive=false` 重算分量比） | 同 outbound | 两品牌四大战区门店 + 外部客户 | 🔒 |
 
 ### 口径规则
 
@@ -385,6 +387,8 @@ sale_amount（视图指标，report_store_sales_drill_v）
 - **成本敏感**🔒：`cost_sensitive=true` 的指标（毛利类），`can_see_cost=false` 角色（如店长）查到 NULL
 - **采集时间窗口**：`8-23`（去掉凌晨 0 点），首次运行（08:0x）触发前一日全量对账（API 稳定后补深夜漏采）
 - **/compute DELETE-before-INSERT**：每次 /compute 先清该日期范围旧数据再 INSERT，避免 sql_template 变更后旧行残留
+- **profit 字段直接用 API 原值**：retail(`profit`)/delivery(`profit_money`)/wholesale(`wholesale_profit`) 均为乐檬 API 返回字段，聚合层 `SUM(该字段)`。**不用 money-cost 反算**——分位舍入会引入误差（retail 572,866/572,893 行精确，27 行差 1-8 分；wholesale `profit=money-cost` 零舍入但仍用 API 字段）。delivery 真实公式 `profit_money = out_money - cost_unit_price`（cost_unit_price 是成本**总价**，命名误导；cost_price 是单价）
+- **7/27 全指标精确校准**：8 base + 5 derived 全部明细层(parquet) vs 聚合层(report_daily_*) 逐天精确到分一致（已 compute 日期）。本轮修复：① delivery 7/15、7/19 `[]`旧口径 stale（branch 117 恰好2倍=调出+调入双算）重跑 /compute；② outbound 视图补四大战区过滤（`assessed_filter: true`）使 `outbound = distribution + ext` 精确成立（13,665,907.91）；③ 补 distribution_margin/outbound_margin 定义。非四大战区 delivery = -1,400（退货负数），被四大战区口径正确排除
 
 ---
 
