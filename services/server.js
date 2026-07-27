@@ -61,9 +61,21 @@ async function initDuckDB() {
   console.log("DuckDB initialized with S3:", S3_ENDPOINT);
 }
 
-function runQueryOn(c, sql) {
+function runQueryOn(c, sql, timeoutMs = 120000) {
+  // 超时保护：duckdb c.all callback 在 S3 慢/挂时可能永不触发，致 Promise 永挂、
+  // 连接泄漏（外层 finally close 不执行）。超时强制 close 释放连接 + reject。
   return new Promise((resolve, reject) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      try { c.close(); } catch (e) {}
+      reject(new Error(`Query timeout ${timeoutMs}ms: ${String(sql).slice(0, 120)}`));
+    }, timeoutMs);
     c.all(sql, (err, result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
       if (err) reject(err);
       else resolve(result);
     });
@@ -82,6 +94,7 @@ async function configureS3(c) {
   await runQueryOn(c, "SET s3_secret_access_key='" + S3_SECRET_KEY + "'");
   await runQueryOn(c, "SET s3_use_ssl=false");
   await runQueryOn(c, "SET s3_region='xinan-1'");
+  await runQueryOn(c, "SET http_timeout=30000");  // S3/HTTP 30s 超时，防读慢/挂致连接永挂
 }
 
 function escapeSQL(val) {
