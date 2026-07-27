@@ -137,9 +137,9 @@ export default function BreakdownPage() {
         const incoming: TargetMetricRow[] = j.rows.map((x: any) => ({ branch_num: x.branch_num, branch_name: x.branch_name, metrics: x.metrics }));
         const cur: TargetMetricRow[] = branchRows.map(b => ({ branch_num: b.branch_num, branch_name: b.branch_name, metrics: b.metrics }));
         const diffs = diffImport(cur, incoming);
+        if (diffs.length === 0) { toast.info('导入文件无变更'); e.target.value = ''; return; }
         setPendingRows(incoming);
         setPendingDiff(diffs);
-        if (diffs.length === 0) toast.info('导入文件无变更');
       } else { toast.error('解析失败：' + (j.error || JSON.stringify(j))); }
     } catch (err) { toast.error('解析失败：' + String(err)); }
     e.target.value = '';
