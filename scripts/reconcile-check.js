@@ -112,6 +112,35 @@ const AGG_QUERIES = {
     lines.forEach(l => console.log(l));
   }
 
+  // 维表完整性兜底（凌晨 cron 错过时自动补）
+  // dim_customer vs wholesale distinct client —— 落后自动调 /derive-dim-customer 补跑
+  const wcl = await duck(`SELECT COUNT(DISTINCT client_name) c FROM read_parquet('${S3}/wholesale_detail/**/all.parquet')`);
+  const dcl = await pg.query("SELECT COUNT(*)::int c FROM dim_customer WHERE is_active");
+  const clientGap = (wcl[0]?.c || 0) - (dcl.rows[0]?.c || 0);
+  if (clientGap > 0) {
+    console.log(`[dim_customer] ✗ 落后 ${clientGap}（wholesale ${wcl[0].c} vs dim_active ${dcl.rows[0].c}），触发 /derive-dim-customer 补跑`);
+    try {
+      const dr = await fetch(`${DUCKDB_URL}/derive-dim-customer`, { method: 'POST', headers: { 'x-agent-key': AGENT_API_KEY } });
+      const dj = await dr.json();
+      console.log(`[dim_customer] 补跑完成: derived ${dj.derived} active ${dj.active}`);
+      if ((dj.active || 0) < (wcl[0]?.c || 0)) { bad++; console.log(`  补跑后仍落后 ${wcl[0].c - dj.active}`); }
+      else console.log(`  ✓ 已补齐`);
+    } catch (e) { bad++; console.log(`  补跑失败: ${e.message}`); }
+  } else {
+    console.log(`[dim_customer] ✓ 客户数一致（wholesale ${wcl[0]?.c} = dim_active ${dcl.rows[0]?.c}）`);
+  }
+
+  // dim_branch 缺漏检查 —— 有销售门店但 dim_branch 没有 = 维表缺（告警，补要 collect-branches）
+  const rb = await pg.query(`SELECT COUNT(DISTINCT rds.branch_num)::int c FROM report_daily_sales rds
+    LEFT JOIN dim_branch db ON rds.branch_num=db.branch_num AND rds.system_book_code=db.system_book_code
+    WHERE rds.biz_date >= date_trunc('day', now() - interval '${DAYS} days') AND db.branch_num IS NULL`);
+  if (rb.rows[0]?.c > 0) {
+    bad++;
+    console.log(`[dim_branch] ✗ ${rb.rows[0].c} 个有销售门店缺 dim_branch（需重跑门店档案采集）`);
+  } else {
+    console.log(`[dim_branch] ✓ 有销售门店全覆盖`);
+  }
+
   await pg.end();
   console.log(bad === 0 ? '[reconcile] PASS 全部一致' : `[reconcile] FAIL 共 ${bad} 处差异`);
   process.exit(bad === 0 ? 0 : 1);
