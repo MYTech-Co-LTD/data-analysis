@@ -7,7 +7,7 @@ import { ArrowLeft, Download, Upload, ChevronDown, ChevronRight, Search, Save, L
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { targetRatio, formatRatio } from '@/lib/report-center/ratio';
-import { diffImport, type DiffEntry, type TargetMetricRow } from '@/lib/report-center/import-diff';
+import { diffImport, rowKey, type DiffEntry, type TargetMetricRow } from '@/lib/report-center/import-diff';
 import { ImportDiffModal } from '@/components/report-center/import-diff-modal';
 
 const HQ_METRICS = ['outbound_amt', 'outbound_profit'];
@@ -67,12 +67,10 @@ export default function BreakdownPage() {
   // 门店三级
   const setWzCell = (wz: string, m: string, v: string) => setWarZoneRows(rs => rs.map(r => r.war_zone === wz ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
   const setR2Cell = (wz: string, r2: string, m: string, v: string) => setRegionRows(rs => rs.map(r => r.war_zone === wz && r.region_l2 === r2 ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
-  // 门店行主键：branch_number 全局唯一(sbc-branch_num)；回退 system_book_code-branch_num；再回退 branch_num
-  // （branch_num 在 3120/64188 两品牌间共享，不能单独作主键，否则共享号两店会塌缩）
-  const storeKey = (r: { branch_number?: string; system_book_code?: string; branch_num: string }) =>
-    r.branch_number || `${r.system_book_code}-${r.branch_num}` || `-${r.branch_num}`;
-  const setStoreCell = (bnKey: string, m: string, v: string) =>
-    setBranchRows(rs => rs.map(r => storeKey(r) === bnKey ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
+  // 门店行主键：使用 @/lib/report-center/import-diff 的 rowKey —— 与 diffImport / confirmImport 共享同一份规则
+  // （branch_number 优先 → system_book_code-branch_num → -branch_num；显式 if/if/return 避免 `undefined-${bn}` 字面量陷阱）
+  const setStoreCell = (sKey: string, m: string, v: string) =>
+    setBranchRows(rs => rs.map(r => rowKey(r) === sKey ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
   const wzRegionSum = (wz: string, m: string) => regionRows.filter(r => r.war_zone === wz).reduce((s, r) => s + (Number(r.metrics?.[m]) || 0), 0);
   const r2StoreSum = (wz: string, r2: string, m: string) => branchRows.filter(b => b.war_zone === wz && b.region_l2 === r2).reduce((s, b) => s + (Number(b.metrics?.[m]) || 0), 0);
   const storeSum = (m: string) => branchRows.reduce((s, r) => s + (Number(r.metrics?.[m]) || 0), 0);
@@ -151,11 +149,11 @@ export default function BreakdownPage() {
   };
   const confirmImport = () => {
     if (!pendingRows) return;
-    const byKey = Object.fromEntries(pendingRows.map(x => [x.branch_number || `${x.system_book_code}-${x.branch_num}` || `-${x.branch_num}`, x.metrics]));
-    setBranchRows(rs => rs.map(rw => { const k = rw.branch_number || `${rw.system_book_code}-${rw.branch_num}` || `-${rw.branch_num}`; return byKey[k] ? { ...rw, metrics: { ...rw.metrics, ...byKey[k] } } : rw; }));
+    const byKey = Object.fromEntries(pendingRows.map(x => [rowKey(x), x.metrics]));
+    setBranchRows(rs => rs.map(rw => { const k = rowKey(rw); return byKey[k] ? { ...rw, metrics: { ...rw.metrics, ...byKey[k] } } : rw; }));
     // 新增门店（当前没有的）追加
-    const existing = new Set(branchRows.map(r => r.branch_number || `${r.system_book_code}-${r.branch_num}` || `-${r.branch_num}`));
-    const added = pendingRows.filter(r => !existing.has(r.branch_number || `${r.system_book_code}-${r.branch_num}` || `-${r.branch_num}`))
+    const existing = new Set(branchRows.map(r => rowKey(r)));
+    const added = pendingRows.filter(r => !existing.has(rowKey(r)))
       .map(r => ({ system_book_code: r.system_book_code, branch_number: r.branch_number, branch_num: r.branch_num, branch_name: r.branch_name || '', war_zone: '', region_l2: '', metrics: r.metrics }));
     if (added.length) setBranchRows(rs => [...rs, ...added] as any);
     setPendingDiff(null); setPendingRows(null);
@@ -291,7 +289,7 @@ export default function BreakdownPage() {
                         {r2Open && r2Stores.map(store => {
                           const unfilled = STORE_METRICS.every(m => !store.metrics?.[m]);
                           const hit = matchKw(store);
-                          const sKey = store.branch_number || `${store.system_book_code}-${store.branch_num}` || `-${store.branch_num}`;
+                          const sKey = rowKey(store);
                           return (
                             <tr key={sKey} className={`hover:bg-slate-50 ${unfilled ? 'bg-slate-50/60' : ''} ${hit ? 'bg-amber-50' : ''}`}>
                               <td className="border border-slate-200 p-2"></td>

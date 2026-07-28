@@ -22,7 +22,10 @@ export interface DiffEntry {
 
 // 门店行主键：优先 branch_number；回退 system_book_code-branch_num；再回退 -branch_num
 // （最后回退仅用于导入源未带 sbc 的退化场景，此时共享 branch_num 仍会歧义，已知限制）
-function rowKey(r: TargetMetricRow): string {
+// 注意：必须用 if/if/return 显式判定——`r.branch_number || \`${r.system_book_code}-${r.branch_num}\``
+// 在 branch_number 与 system_book_code 同时缺失时会得到字面量 "undefined-048"（truthy），
+// 使最后回退分支永不命中。导出供 page.tsx 与 diffImport 共享同一份规则。
+export function rowKey(r: TargetMetricRow): string {
   if (r.branch_number) return r.branch_number;
   if (r.system_book_code) return `${r.system_book_code}-${r.branch_num}`;
   return `-${r.branch_num}`;

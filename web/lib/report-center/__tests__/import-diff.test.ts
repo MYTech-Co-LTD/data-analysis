@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { diffImport } from '../import-diff';
+import { diffImport, rowKey, type TargetMetricRow } from '../import-diff';
 
 describe('diffImport', () => {
   const current = [
@@ -58,7 +58,7 @@ describe('diffImport', () => {
     expect(d[0]).toMatchObject({ oldValue: 1000, newValue: 1500 });
   });
 
-  it('branch_number 与 system_book_code-branch_num 复合键交叉不匹配', () => {
+  it('branch_number 与 system_book_code-branch_num 复合键交叉等价匹配为同一店', () => {
     // cur 用 branch_number 标识，inc 仅 system_book_code-branch_num（无 branch_number）—— 同一店应能匹配
     const cur = [
       { branch_number: '3120-048', system_book_code: '3120', branch_num: '048', metrics: { sale: 1000, delivery: 0 } },
@@ -66,6 +66,22 @@ describe('diffImport', () => {
     const incoming = [
       { system_book_code: '3120', branch_num: '048', branch_name: '熊喵48号', metrics: { sale: 1500, delivery: 0 } },
     ];
+    const d = diffImport(cur, incoming);
+    expect(d).toHaveLength(1);
+    expect(d[0]).toMatchObject({ oldValue: 1000, newValue: 1500 });
+  });
+
+  it('system_book_code 缺失时 rowKey 回退 -branch_num（不产生 "undefined-048" 字面量）', () => {
+    // 防回归：早期 page.tsx 内联 `r.branch_number || \`${r.system_book_code}-${r.branch_num}\` || \`-${r.branch_num}\``
+    // 在 branch_number 与 system_book_code 同时缺失时，中间模板字面量求值为 "undefined-048"（truthy），
+    // 使最后回退分支永不命中；与 rowKey 的显式 if/if/return 不一致 → diffImport / confirmImport 键不对齐。
+    const r: TargetMetricRow = { branch_num: '048', metrics: {} };
+    expect(rowKey(r)).toBe('-048');
+    expect(rowKey(r)).not.toBe('undefined-048');
+
+    // 同场景下 diffImport 也走 -branch_num 回退（cur/inc 都缺 sbc 时仍能对齐）
+    const cur: TargetMetricRow[] = [{ branch_num: '048', branch_name: 'X店', metrics: { sale: 1000, delivery: 0 } }];
+    const incoming: TargetMetricRow[] = [{ branch_num: '048', branch_name: 'X店', metrics: { sale: 1500, delivery: 0 } }];
     const d = diffImport(cur, incoming);
     expect(d).toHaveLength(1);
     expect(d[0]).toMatchObject({ oldValue: 1000, newValue: 1500 });
