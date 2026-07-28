@@ -26,17 +26,20 @@ violations=""
 # 把命中行按 file:line:snippet 格式化，过滤白名单，输出剩余
 # 输入：stdin = grep -nE 的原始输出（file:line:content）
 filter_allowlist() {
-  local f l rest key f_only
+  local f l rest key f_only f_esc
   while IFS= read -r line; do
     f="${line%%:*}"
     rest="${line#*:}"
     l="${rest%%:*}"
     key="$f:$l"
     f_only="$f"
+    # 转义路径中的正则元字符：先 / 后 . （后者 review 要求，否则 . 在 grep -E 中匹配任意字符）
+    f_esc="${f//\//\\/}"
+    f_esc="${f_esc//./\\.}"
     # 跳过白名单：精确 file:line 或 整文件
     if [ -f "$ALLOWLIST" ]; then
-      if grep -qE "^${f//\//\\/}:${l}(\s|\$|#)" "$ALLOWLIST" 2>/dev/null; then continue; fi
-      if grep -qE "^${f//\//\\/}(\s|\$|#)" "$ALLOWLIST" 2>/dev/null; then continue; fi
+      if grep -qE "^${f_esc}:${l}(\s|\$|#)" "$ALLOWLIST" 2>/dev/null; then continue; fi
+      if grep -qE "^${f_esc}(\s|\$|#)" "$ALLOWLIST" 2>/dev/null; then continue; fi
     fi
     echo "$line"
   done
@@ -90,6 +93,8 @@ done
 
 if [ "$hit" -ne 0 ]; then
   echo "[guard] ❌ 违反门店键铁律，请改用复合键(system_book_code,branch_num)或 branch_number"
+  echo "[guard] 违规清单："
+  echo -e "$violations"
   echo "[guard] 如属预先存在的遗留代码（spec §4 audit-only），请在 scripts/guard-branch-num.allowlist 加注并写理由"
   exit 1
 fi
