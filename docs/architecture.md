@@ -100,14 +100,14 @@
 | `dim_item_ext` | 商品扩展（人工二次维护，采集永不碰） | 按需 |
 | `item_scenario_names` | 商品场景命名映射 | 按需 |
 | `canonical_product` | 跨品牌合并视图（按 `item_code` 自动聚合） | 2.5万 |
-| `dim_branch` | 门店主数据（双品牌，PK `system_book_code`+`branch_num`=API system_id=明细 branch_num，is_active 软删除） | 385 |
+| `dim_branch` | 门店主数据（双品牌，PK `system_book_code`+`branch_num`=API system_id=明细 branch_num，is_active 软删除；**派生 `branch_number`=`sbc`-`branch_num` 全局唯一开发键**，2026-07-28） | 385 |
 | `dim_branch_ext` | 门店扩展（单店级人工维护，采集永不碰） | 按需 |
 | `dim_region` | 统一战区维表（品牌无关，PK `region_name`；war_zone 空→自动派生，填→覆盖） | ~20 |
 | `branch_full` | 门店+战区视图（dim_branch JOIN dim_region；war_zone 统一两品牌） | 385 |
 
 > **主数据（商品+门店）·2026-07-10**：
 > - **商品**：`dim_item` 取代已废弃的 `lemeng_items`。关联键 = `item_num`（明细↔档案，实测一致）；跨品牌合并键 = `item_code`（`canonical_product` 视图按它自动聚合，双品牌 ~59% 同码合并）。采集写 base 列 + raw JSONB，扩展进独立表 `dim_item_ext`（采集绝不覆盖）。
-> - **门店**：`dim_branch` 关联键 = `branch_num`（= 明细 branch_num，实测一致）；战区 = `dim_region` 统一维表（region_name→war_zone，**两品牌合并统一管理**：东部66/西部63/南部59/中部52 + 广西/贵州宣威大区）。`dim_region.war_zone` 空→`derive_war_zone(region_name)` 按前缀派生，填→覆盖（改一处、两品牌同区域门店全生效）。门店级扩展→`dim_branch_ext`。
+> - **门店**：`dim_branch` 门店键 = **`(system_book_code, branch_num)` 复合**（或派生 `branch_number`=`sbc`-`branch_num`，全局唯一）。⚠️ **`branch_num` 跨账套重复（128 个共享、对应不同物理店）、非全局唯一，禁止单独 join/去重/做 PK**。`branch_num`= 明细 branch_num（实测一致）。战区 = `dim_region` 统一维表（region_name→war_zone，**两品牌合并统一管理**：东部66/西部63/南部59/中部52 + 广西/贵州宣威大区）。`dim_region.war_zone` 空→`derive_war_zone(region_name)` 按前缀派生，填→覆盖（改一处、两品牌同区域门店全生效）。门店级扩展→`dim_branch_ext`。门店→品牌归属由 `system_book_code` 决定（3120=熊喵、64188=品品甜），目标管理继承自维表、不出品牌选择器。详见 `docs/superpowers/specs/2026-07-28-store-brand-dimension-reform-design.md`。
 > - 两张主数据均按 CLAUDE.md「采集任务数据完整性规则」：按品牌对账、拉取完整、upsert 失败检测、is_active 软删除、失败→collect_fail 告警。设计详见 `docs/superpowers/specs/2026-07-10-report-master-data-design.md`。
 
 **权限模型**：

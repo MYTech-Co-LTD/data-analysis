@@ -38,6 +38,16 @@
 > - 加表/加列后须 `docker compose restart postgrest` 刷 schema 缓存，否则 PostgREST 400 `Could not find the column ... in the schema cache`（GHA 部署不保证重启 postgrest）。
 > - `migrate.sh` 每次部署重跑**全部**迁移；视图必须用 `DROP VIEW IF EXISTS + CREATE VIEW`，不能用 `CREATE OR REPLACE`（后迁移给视图加列后重跑会报 `cannot drop columns from view`）。
 
+## 门店键铁律（重要）
+
+`branch_num` 跨 lemeng 账套（数据源）重复——3120(熊喵) 与 64188(品品甜) 各自从 1 编号，**128 个 branch_num 两账套都有但对应不同物理门店**，非全局唯一。
+
+- **门店键 = `(system_book_code, branch_num)` 复合，或派生 `branch_number`（=`sbc`-`branch_num`，全局唯一）**。
+- **禁止用 `branch_num` 单独 join / 去重 / 做 PK / 做 `.eq()`。** 必须配 `system_book_code` 或用 `branch_number`。
+- 品牌 = `system_book_code`（3120=熊喵鲜生、64188=品品甜），由 `dim_branch` 决定，目标录入不出品牌选择器。
+- 品牌拆分：实际值按 `report_daily_*.system_book_code` GROUP BY；目标值按复合键门店目标 SUM。
+- 品牌归属/配送语义详见 `docs/superpowers/specs/2026-07-28-store-brand-dimension-reform-design.md`。
+
 ## 服务器 SSH 连接
 
 目标服务器连接方式：

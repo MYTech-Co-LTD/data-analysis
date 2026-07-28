@@ -94,10 +94,10 @@ export function KpiCards({
             key={code}
             className="rounded-md border p-4 text-left transition relative group border-slate-200 bg-white hover:border-slate-300"
           >
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-slate-500">{meta.label}</span>
+            <div className="flex items-start justify-between gap-1">
+              <span className="text-xs leading-tight text-slate-500">{meta.label}</span>
               <span
-                className={`rounded px-1.5 py-0.5 text-[10px] ${statusBadgeClass(
+                className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${statusBadgeClass(
                   r.data_status,
                 )}`}
               >

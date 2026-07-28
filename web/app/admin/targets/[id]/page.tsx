@@ -7,7 +7,7 @@ import { ArrowLeft, Download, Upload, ChevronDown, ChevronRight, Search, Save, L
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
 import { targetRatio, formatRatio } from '@/lib/report-center/ratio';
-import { diffImport, type DiffEntry, type TargetMetricRow } from '@/lib/report-center/import-diff';
+import { diffImport, rowKey, type DiffEntry, type TargetMetricRow } from '@/lib/report-center/import-diff';
 import { ImportDiffModal } from '@/components/report-center/import-diff-modal';
 
 const HQ_METRICS = ['outbound_amt', 'outbound_profit'];
@@ -31,6 +31,9 @@ export default function BreakdownPage() {
   const [pendingRows, setPendingRows] = useState<TargetMetricRow[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initRef = useRef(false);
+  // Excel 导入暂未适配品牌维度：模板缺 system_book_code 列 → 共享 branch_num 键会塌缩。
+  // 待模板补 sbc 列后置回 false 并重连 handler。详见 follow-up / final-fix-report。
+  const importDisabled = true;
 
   const load = async () => {
     const r = await fetch(`/api/admin/targets/breakdown?parent_id=${id}`); const j = await r.json();
@@ -67,7 +70,10 @@ export default function BreakdownPage() {
   // 门店三级
   const setWzCell = (wz: string, m: string, v: string) => setWarZoneRows(rs => rs.map(r => r.war_zone === wz ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
   const setR2Cell = (wz: string, r2: string, m: string, v: string) => setRegionRows(rs => rs.map(r => r.war_zone === wz && r.region_l2 === r2 ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
-  const setStoreCell = (bn: string, m: string, v: string) => setBranchRows(rs => rs.map(r => r.branch_num === bn ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
+  // 门店行主键：使用 @/lib/report-center/import-diff 的 rowKey —— 与 diffImport / confirmImport 共享同一份规则
+  // （branch_number 优先 → system_book_code-branch_num → -branch_num；显式 if/if/return 避免 `undefined-${bn}` 字面量陷阱）
+  const setStoreCell = (sKey: string, m: string, v: string) =>
+    setBranchRows(rs => rs.map(r => rowKey(r) === sKey ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
   const wzRegionSum = (wz: string, m: string) => regionRows.filter(r => r.war_zone === wz).reduce((s, r) => s + (Number(r.metrics?.[m]) || 0), 0);
   const r2StoreSum = (wz: string, r2: string, m: string) => branchRows.filter(b => b.war_zone === wz && b.region_l2 === r2).reduce((s, b) => s + (Number(b.metrics?.[m]) || 0), 0);
   const storeSum = (m: string) => branchRows.reduce((s, r) => s + (Number(r.metrics?.[m]) || 0), 0);
@@ -76,7 +82,7 @@ export default function BreakdownPage() {
   const buildThreeLevelPayload = () => [
     ...warZoneRows.filter(wz => STORE_METRICS.some(m => Number(wz.metrics?.[m]) > 0)).map(r => ({ breakdown_level: 'war_zone', war_zone: r.war_zone, branch_num: 'ALL', metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
     ...regionRows.filter(r2 => STORE_METRICS.some(m => Number(r2.metrics?.[m]) > 0)).map(r => ({ breakdown_level: 'region_l2', war_zone: r.war_zone, region_l2: r.region_l2, branch_num: 'ALL', metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
-    ...branchRows.map(r => ({ breakdown_level: 'store', branch_num: r.branch_num, metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
+    ...branchRows.map(r => ({ breakdown_level: 'store', system_book_code: r.system_book_code, branch_num: r.branch_num, metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
   ];
   const collectDiffs = () => {
     const diffs: string[] = [];
@@ -134,8 +140,8 @@ export default function BreakdownPage() {
       const r = await fetch('/api/admin/targets/template', { method: 'POST', body: fd });
       const j = await r.json();
       if (j.rows) {
-        const incoming: TargetMetricRow[] = j.rows.map((x: any) => ({ branch_num: x.branch_num, branch_name: x.branch_name, metrics: x.metrics }));
-        const cur: TargetMetricRow[] = branchRows.map(b => ({ branch_num: b.branch_num, branch_name: b.branch_name, metrics: b.metrics }));
+        const incoming: TargetMetricRow[] = j.rows.map((x: any) => ({ branch_number: x.branch_number, system_book_code: x.system_book_code, branch_num: x.branch_num, branch_name: x.branch_name, metrics: x.metrics }));
+        const cur: TargetMetricRow[] = branchRows.map(b => ({ branch_number: b.branch_number, system_book_code: b.system_book_code, branch_num: b.branch_num, branch_name: b.branch_name, metrics: b.metrics }));
         const diffs = diffImport(cur, incoming);
         if (diffs.length === 0) { toast.info('导入文件无变更'); e.target.value = ''; return; }
         setPendingRows(incoming);
@@ -146,11 +152,12 @@ export default function BreakdownPage() {
   };
   const confirmImport = () => {
     if (!pendingRows) return;
-    const byBn = Object.fromEntries(pendingRows.map(x => [x.branch_num, x.metrics]));
-    setBranchRows(rs => rs.map(rw => byBn[rw.branch_num] ? { ...rw, metrics: { ...rw.metrics, ...byBn[rw.branch_num] } } : rw));
+    const byKey = Object.fromEntries(pendingRows.map(x => [rowKey(x), x.metrics]));
+    setBranchRows(rs => rs.map(rw => { const k = rowKey(rw); return byKey[k] ? { ...rw, metrics: { ...rw.metrics, ...byKey[k] } } : rw; }));
     // 新增门店（当前没有的）追加
-    const existing = new Set(branchRows.map(r => r.branch_num));
-    const added = pendingRows.filter(r => !existing.has(r.branch_num)).map(r => ({ branch_num: r.branch_num, branch_name: r.branch_name || '', war_zone: '', region_l2: '', metrics: r.metrics }));
+    const existing = new Set(branchRows.map(r => rowKey(r)));
+    const added = pendingRows.filter(r => !existing.has(rowKey(r)))
+      .map(r => ({ system_book_code: r.system_book_code, branch_number: r.branch_number, branch_num: r.branch_num, branch_name: r.branch_name || '', war_zone: '', region_l2: '', metrics: r.metrics }));
     if (added.length) setBranchRows(rs => [...rs, ...added] as any);
     setPendingDiff(null); setPendingRows(null);
     toast.success('已应用导入变更，请点「保存全部分解」落库');
@@ -181,7 +188,16 @@ export default function BreakdownPage() {
           <div className="flex-1" />
           <a href={`/api/admin/targets/template?parent_id=${id}`} download className="inline-flex items-center gap-1.5 border border-primary text-primary px-3 py-1 text-sm rounded-md hover:bg-primary/5"><Download size={14} /> 模板</a>
           <input type="file" accept=".xlsx,.xls" ref={fileInputRef} onChange={handleImport} className="hidden" />
-          <button onClick={() => fileInputRef.current?.click()} className="inline-flex items-center gap-1.5 border border-primary text-primary px-3 py-1 text-sm rounded-md hover:bg-primary/5"><Upload size={14} /> 导入</button>
+          {/* Excel 导入暂未适配品牌维度（共享 branch_num 须待模板补 system_book_code 列后恢复）—— follow-up 待办；按钮先 disable，handler 代码保留待重连 */}
+          <button
+            onClick={() => { if (!importDisabled) fileInputRef.current?.click(); }}
+            disabled={importDisabled}
+            title={importDisabled ? 'Excel 导入暂未适配品牌维度（待模板补品牌列后恢复），门店目标请手动填写' : '从 Excel 导入'}
+            className="inline-flex items-center gap-1.5 border border-primary text-primary px-3 py-1 text-sm rounded-md hover:bg-primary/5 disabled:opacity-60 disabled:pointer-events-none"
+          >
+            <Upload size={14} /> 导入
+          </button>
+          <span className="text-xs text-slate-500">Excel 导入暂未适配品牌维度（共享门店号待模板补品牌列后恢复），门店目标请手动填写。</span>
           <button onClick={saveAll} disabled={saving} className="bg-primary text-white px-4 py-1 text-sm rounded-md inline-flex items-center gap-1.5 hover:bg-primary/90 disabled:opacity-60 disabled:pointer-events-none">
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 保存全部分解
           </button>
@@ -285,12 +301,16 @@ export default function BreakdownPage() {
                         {r2Open && r2Stores.map(store => {
                           const unfilled = STORE_METRICS.every(m => !store.metrics?.[m]);
                           const hit = matchKw(store);
+                          const sKey = rowKey(store);
                           return (
-                            <tr key={store.branch_num} className={`hover:bg-slate-50 ${unfilled ? 'bg-slate-50/60' : ''} ${hit ? 'bg-amber-50' : ''}`}>
+                            <tr key={sKey} className={`hover:bg-slate-50 ${unfilled ? 'bg-slate-50/60' : ''} ${hit ? 'bg-amber-50' : ''}`}>
                               <td className="border border-slate-200 p-2"></td>
                               <td className="border border-slate-200 p-2"></td>
-                              <td className={`border border-slate-200 p-2 ${hit ? 'ring-1 ring-inset ring-amber-300' : ''}`}><span className="text-xs text-slate-400 mr-2 tabular-nums">{store.branch_num}</span>{store.branch_name}{unfilled && <span className="ml-2 text-xs text-slate-400">未填</span>}</td>
-                              {STORE_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(store.branch_num, m, e.target.value)} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
+                              <td className={`border border-slate-200 p-2 ${hit ? 'ring-1 ring-inset ring-amber-300' : ''}`}>
+                                <span className="text-xs text-slate-400 mr-1 tabular-nums">{store.brand_name ? `[${store.brand_name}]` : (store.system_book_code ? `[${store.system_book_code}]` : '')}</span>
+                                <span className="text-xs text-slate-400 mr-2 tabular-nums">{store.branch_num}</span>{store.branch_name}{unfilled && <span className="ml-2 text-xs text-slate-400">未填</span>}
+                              </td>
+                              {STORE_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(sKey, m, e.target.value)} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
                               <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
                                 {formatRatio(targetRatio(Number(store.metrics?.delivery) || 0, Number(store.metrics?.sale) || 0))}
                               </td>
