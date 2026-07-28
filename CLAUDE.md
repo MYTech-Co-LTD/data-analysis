@@ -47,6 +47,7 @@
 - 品牌 = `system_book_code`（3120=熊喵鲜生、64188=品品甜），由 `dim_branch` 决定，目标录入不出品牌选择器。
 - 品牌拆分：实际值按 `report_daily_*.system_book_code` GROUP BY；目标值按复合键门店目标 SUM。
 - 品牌归属/配送语义详见 `docs/superpowers/specs/2026-07-28-store-brand-dimension-reform-design.md`。
+- **考核战区 = `dim_war_zone` 维表**（`is_assessed` 标东/南/西/中四战区）。`is_assessed_war_zone()` 函数体查此表（数据驱动，签名不变）。增减考核战区改 `dim_war_zone` 数据，**不动代码/SQL**。语义层 `dimensions.war_zone` 注册来源。
 
 ## 服务器 SSH 连接
 

@@ -103,6 +103,7 @@
 | `dim_branch` | 门店主数据（双品牌，PK `system_book_code`+`branch_num`=API system_id=明细 branch_num，is_active 软删除；**派生 `branch_number`=`sbc`-`branch_num` 全局唯一开发键**，2026-07-28） | 385 |
 | `dim_branch_ext` | 门店扩展（单店级人工维护，采集永不碰） | 按需 |
 | `dim_region` | 统一战区维表（品牌无关，PK `region_name`；war_zone 空→自动派生，填→覆盖） | ~20 |
+| `dim_war_zone` | 战区维度（考核范围单一事实源，PK `war_zone`；`is_assessed`=东/南/西/中四战区，2026-07-29） | 8 |
 | `branch_full` | 门店+战区视图（dim_branch JOIN dim_region；war_zone 统一两品牌） | 385 |
 
 > **主数据（商品+门店）·2026-07-10**：
