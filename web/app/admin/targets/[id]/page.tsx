@@ -67,7 +67,12 @@ export default function BreakdownPage() {
   // 门店三级
   const setWzCell = (wz: string, m: string, v: string) => setWarZoneRows(rs => rs.map(r => r.war_zone === wz ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
   const setR2Cell = (wz: string, r2: string, m: string, v: string) => setRegionRows(rs => rs.map(r => r.war_zone === wz && r.region_l2 === r2 ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
-  const setStoreCell = (bn: string, m: string, v: string) => setBranchRows(rs => rs.map(r => r.branch_num === bn ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
+  // 门店行主键：branch_number 全局唯一(sbc-branch_num)；回退 system_book_code-branch_num；再回退 branch_num
+  // （branch_num 在 3120/64188 两品牌间共享，不能单独作主键，否则共享号两店会塌缩）
+  const storeKey = (r: { branch_number?: string; system_book_code?: string; branch_num: string }) =>
+    r.branch_number || `${r.system_book_code}-${r.branch_num}` || `-${r.branch_num}`;
+  const setStoreCell = (bnKey: string, m: string, v: string) =>
+    setBranchRows(rs => rs.map(r => storeKey(r) === bnKey ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
   const wzRegionSum = (wz: string, m: string) => regionRows.filter(r => r.war_zone === wz).reduce((s, r) => s + (Number(r.metrics?.[m]) || 0), 0);
   const r2StoreSum = (wz: string, r2: string, m: string) => branchRows.filter(b => b.war_zone === wz && b.region_l2 === r2).reduce((s, b) => s + (Number(b.metrics?.[m]) || 0), 0);
   const storeSum = (m: string) => branchRows.reduce((s, r) => s + (Number(r.metrics?.[m]) || 0), 0);
@@ -76,7 +81,7 @@ export default function BreakdownPage() {
   const buildThreeLevelPayload = () => [
     ...warZoneRows.filter(wz => STORE_METRICS.some(m => Number(wz.metrics?.[m]) > 0)).map(r => ({ breakdown_level: 'war_zone', war_zone: r.war_zone, branch_num: 'ALL', metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
     ...regionRows.filter(r2 => STORE_METRICS.some(m => Number(r2.metrics?.[m]) > 0)).map(r => ({ breakdown_level: 'region_l2', war_zone: r.war_zone, region_l2: r.region_l2, branch_num: 'ALL', metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
-    ...branchRows.map(r => ({ breakdown_level: 'store', branch_num: r.branch_num, metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
+    ...branchRows.map(r => ({ breakdown_level: 'store', system_book_code: r.system_book_code, branch_num: r.branch_num, metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
   ];
   const collectDiffs = () => {
     const diffs: string[] = [];
@@ -134,8 +139,8 @@ export default function BreakdownPage() {
       const r = await fetch('/api/admin/targets/template', { method: 'POST', body: fd });
       const j = await r.json();
       if (j.rows) {
-        const incoming: TargetMetricRow[] = j.rows.map((x: any) => ({ branch_num: x.branch_num, branch_name: x.branch_name, metrics: x.metrics }));
-        const cur: TargetMetricRow[] = branchRows.map(b => ({ branch_num: b.branch_num, branch_name: b.branch_name, metrics: b.metrics }));
+        const incoming: TargetMetricRow[] = j.rows.map((x: any) => ({ branch_number: x.branch_number, system_book_code: x.system_book_code, branch_num: x.branch_num, branch_name: x.branch_name, metrics: x.metrics }));
+        const cur: TargetMetricRow[] = branchRows.map(b => ({ branch_number: b.branch_number, system_book_code: b.system_book_code, branch_num: b.branch_num, branch_name: b.branch_name, metrics: b.metrics }));
         const diffs = diffImport(cur, incoming);
         if (diffs.length === 0) { toast.info('导入文件无变更'); e.target.value = ''; return; }
         setPendingRows(incoming);
@@ -146,11 +151,12 @@ export default function BreakdownPage() {
   };
   const confirmImport = () => {
     if (!pendingRows) return;
-    const byBn = Object.fromEntries(pendingRows.map(x => [x.branch_num, x.metrics]));
-    setBranchRows(rs => rs.map(rw => byBn[rw.branch_num] ? { ...rw, metrics: { ...rw.metrics, ...byBn[rw.branch_num] } } : rw));
+    const byKey = Object.fromEntries(pendingRows.map(x => [x.branch_number || `${x.system_book_code}-${x.branch_num}` || `-${x.branch_num}`, x.metrics]));
+    setBranchRows(rs => rs.map(rw => { const k = rw.branch_number || `${rw.system_book_code}-${rw.branch_num}` || `-${rw.branch_num}`; return byKey[k] ? { ...rw, metrics: { ...rw.metrics, ...byKey[k] } } : rw; }));
     // 新增门店（当前没有的）追加
-    const existing = new Set(branchRows.map(r => r.branch_num));
-    const added = pendingRows.filter(r => !existing.has(r.branch_num)).map(r => ({ branch_num: r.branch_num, branch_name: r.branch_name || '', war_zone: '', region_l2: '', metrics: r.metrics }));
+    const existing = new Set(branchRows.map(r => r.branch_number || `${r.system_book_code}-${r.branch_num}` || `-${r.branch_num}`));
+    const added = pendingRows.filter(r => !existing.has(r.branch_number || `${r.system_book_code}-${r.branch_num}` || `-${r.branch_num}`))
+      .map(r => ({ system_book_code: r.system_book_code, branch_number: r.branch_number, branch_num: r.branch_num, branch_name: r.branch_name || '', war_zone: '', region_l2: '', metrics: r.metrics }));
     if (added.length) setBranchRows(rs => [...rs, ...added] as any);
     setPendingDiff(null); setPendingRows(null);
     toast.success('已应用导入变更，请点「保存全部分解」落库');
@@ -285,12 +291,16 @@ export default function BreakdownPage() {
                         {r2Open && r2Stores.map(store => {
                           const unfilled = STORE_METRICS.every(m => !store.metrics?.[m]);
                           const hit = matchKw(store);
+                          const sKey = store.branch_number || `${store.system_book_code}-${store.branch_num}` || `-${store.branch_num}`;
                           return (
-                            <tr key={store.branch_num} className={`hover:bg-slate-50 ${unfilled ? 'bg-slate-50/60' : ''} ${hit ? 'bg-amber-50' : ''}`}>
+                            <tr key={sKey} className={`hover:bg-slate-50 ${unfilled ? 'bg-slate-50/60' : ''} ${hit ? 'bg-amber-50' : ''}`}>
                               <td className="border border-slate-200 p-2"></td>
                               <td className="border border-slate-200 p-2"></td>
-                              <td className={`border border-slate-200 p-2 ${hit ? 'ring-1 ring-inset ring-amber-300' : ''}`}><span className="text-xs text-slate-400 mr-2 tabular-nums">{store.branch_num}</span>{store.branch_name}{unfilled && <span className="ml-2 text-xs text-slate-400">未填</span>}</td>
-                              {STORE_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(store.branch_num, m, e.target.value)} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
+                              <td className={`border border-slate-200 p-2 ${hit ? 'ring-1 ring-inset ring-amber-300' : ''}`}>
+                                <span className="text-xs text-slate-400 mr-1 tabular-nums">{store.brand_name ? `[${store.brand_name}]` : (store.system_book_code ? `[${store.system_book_code}]` : '')}</span>
+                                <span className="text-xs text-slate-400 mr-2 tabular-nums">{store.branch_num}</span>{store.branch_name}{unfilled && <span className="ml-2 text-xs text-slate-400">未填</span>}
+                              </td>
+                              {STORE_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(sKey, m, e.target.value)} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
                               <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
                                 {formatRatio(targetRatio(Number(store.metrics?.delivery) || 0, Number(store.metrics?.sale) || 0))}
                               </td>
