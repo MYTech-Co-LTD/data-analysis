@@ -31,9 +31,6 @@ export default function BreakdownPage() {
   const [pendingRows, setPendingRows] = useState<TargetMetricRow[] | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initRef = useRef(false);
-  // Excel 导入暂未适配品牌维度：模板缺 system_book_code 列 → 共享 branch_num 键会塌缩。
-  // 待模板补 sbc 列后置回 false 并重连 handler。详见 follow-up / final-fix-report。
-  const importDisabled = true;
 
   const load = async () => {
     const r = await fetch(`/api/admin/targets/breakdown?parent_id=${id}`); const j = await r.json();
@@ -188,16 +185,13 @@ export default function BreakdownPage() {
           <div className="flex-1" />
           <a href={`/api/admin/targets/template?parent_id=${id}`} download className="inline-flex items-center gap-1.5 border border-primary text-primary px-3 py-1 text-sm rounded-md hover:bg-primary/5"><Download size={14} /> 模板</a>
           <input type="file" accept=".xlsx,.xls" ref={fileInputRef} onChange={handleImport} className="hidden" />
-          {/* Excel 导入暂未适配品牌维度（共享 branch_num 须待模板补 system_book_code 列后恢复）—— follow-up 待办；按钮先 disable，handler 代码保留待重连 */}
           <button
-            onClick={() => { if (!importDisabled) fileInputRef.current?.click(); }}
-            disabled={importDisabled}
-            title={importDisabled ? 'Excel 导入暂未适配品牌维度（待模板补品牌列后恢复），门店目标请手动填写' : '从 Excel 导入'}
-            className="inline-flex items-center gap-1.5 border border-primary text-primary px-3 py-1 text-sm rounded-md hover:bg-primary/5 disabled:opacity-60 disabled:pointer-events-none"
+            onClick={() => fileInputRef.current?.click()}
+            title="从 Excel 导入（模板含门店键 branch_number，支持共享门店号）"
+            className="inline-flex items-center gap-1.5 border border-primary text-primary px-3 py-1 text-sm rounded-md hover:bg-primary/5"
           >
             <Upload size={14} /> 导入
           </button>
-          <span className="text-xs text-slate-500">Excel 导入暂未适配品牌维度（共享门店号待模板补品牌列后恢复），门店目标请手动填写。</span>
           <button onClick={saveAll} disabled={saving} className="bg-primary text-white px-4 py-1 text-sm rounded-md inline-flex items-center gap-1.5 hover:bg-primary/90 disabled:opacity-60 disabled:pointer-events-none">
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} 保存全部分解
           </button>

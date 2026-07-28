@@ -23,12 +23,12 @@ export async function GET(req: NextRequest) {
   // get_breakdown 返 {warZoneRows, regionRows, storeRows}，模板用门店行
   const stores: any[] = rows?.storeRows || [];
 
-  // 第1行：参考-总目标（前5格留空，后接各指标总目标）
-  const refRow = ['参考-总目标', '', '', '', '', ...metrics.map(m => (balance as any)?.[m]?.total ?? '')];
-  // 第2行：表头
-  const headRow = ['战区', '二级区域', '分组', '门店号', '门店名', ...metrics.map(m => METRIC_NAME[m] || m)];
+  // 第1行：参考-总目标（前6格留空，后接各指标总目标）
+  const refRow = ['参考-总目标', '', '', '', '', '', ...metrics.map(m => (balance as any)?.[m]?.total ?? '')];
+  // 第2行：表头（门店键=branch_number，全局唯一，用于导入回匹配）
+  const headRow = ['战区', '二级区域', '分组', '门店号', '门店名', '门店键', ...metrics.map(m => METRIC_NAME[m] || m)];
   // 第3+行：门店明细
-  const dataRows = stores.map((x: any) => [x.war_zone || '', x.region_l2 || '', x.group || '', x.branch_num, x.branch_name, ...metrics.map(m => x.metrics?.[m] ?? '')]);
+  const dataRows = stores.map((x: any) => [x.war_zone || '', x.region_l2 || '', x.group || '', x.branch_num, x.branch_name, x.branch_number || '', ...metrics.map(m => x.metrics?.[m] ?? '')]);
 
   const ws = XLSX.utils.aoa_to_sheet([refRow, headRow, ...dataRows]);
   const wb = XLSX.utils.book_new();
@@ -63,25 +63,27 @@ export async function POST(req: NextRequest) {
   const head = aoa[headIdx].map(c => String(c).trim());
 
   const branchCol = head.indexOf('门店号');
+  const bnKeyCol = head.indexOf('门店键'); // branch_number（全局唯一门店键）
   const metricCols: { col: number; code: string }[] = [];
   head.forEach((h, i) => {
     const code = CODE[h];
     if (code) metricCols.push({ col: i, code });
   });
 
-  const out: { branch_num: string; metrics: Record<string, string> }[] = [];
+  const out: { branch_num: string; branch_number: string; metrics: Record<string, string> }[] = [];
   for (let i = headIdx + 1; i < aoa.length; i++) {
     const row = aoa[i] || [];
     const bn = row[branchCol];
     if (bn === undefined || bn === null || String(bn).trim() === '') continue;
     const branch_num = String(bn).trim();
     if (!/^\d+$/.test(branch_num)) continue; // 跳过非门店号行（如参考总目标行尾）
+    const branch_number = bnKeyCol >= 0 ? String(row[bnKeyCol] ?? '').trim() : '';
     const metrics: Record<string, string> = {};
     for (const { col, code } of metricCols) {
       const cell = row[col];
       if (cell !== undefined && cell !== null && String(cell).trim() !== '') metrics[code] = String(cell).trim();
     }
-    out.push({ branch_num, metrics });
+    out.push({ branch_num, branch_number, metrics });
   }
 
   return NextResponse.json({ rows: out, count: out.length });
