@@ -79,7 +79,7 @@ export default function BreakdownPage() {
   const buildThreeLevelPayload = () => [
     ...warZoneRows.filter(wz => STORE_METRICS.some(m => Number(wz.metrics?.[m]) > 0)).map(r => ({ breakdown_level: 'war_zone', war_zone: r.war_zone, branch_num: 'ALL', metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
     ...regionRows.filter(r2 => STORE_METRICS.some(m => Number(r2.metrics?.[m]) > 0)).map(r => ({ breakdown_level: 'region_l2', war_zone: r.war_zone, region_l2: r.region_l2, branch_num: 'ALL', metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
-    ...branchRows.map(r => ({ breakdown_level: 'store', system_book_code: r.system_book_code, branch_num: r.branch_num, metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
+    ...branchRows.map(r => ({ breakdown_level: 'store', branch_number: r.branch_number, system_book_code: r.system_book_code, branch_num: r.branch_num, metrics: Object.fromEntries(STORE_METRICS.map(m => [m, Number(r.metrics?.[m]) || 0])) })),
   ];
   const collectDiffs = () => {
     const diffs: string[] = [];
