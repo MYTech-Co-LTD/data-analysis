@@ -154,6 +154,9 @@ async function triggerCompute(client: any, dates: string[], taskId: string) {
     { type: "weekly_trend",   dateFrom: subtractDays(dates[0], 56), dateTo: dates[1] },
     { type: "daily_delivery",  dateFrom: dates[0],                   dateTo: dates[1] },
     { type: "daily_wholesale", dateFrom: dates[0],                   dateTo: dates[1] },
+    { type: "item_sales",          dateFrom: dates[0],                   dateTo: dates[1] },
+    { type: "item_outbound",       dateFrom: dates[0],                   dateTo: dates[1] },
+    { type: "wholesale_customer",  dateFrom: dates[0],                   dateTo: dates[1] },
   ];
   for (const r of reports) {
     const startedAt = new Date();

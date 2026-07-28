@@ -1004,6 +1004,37 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 - `report_region_breakdown_v`（091 已修）：delivery/sales 按目标品牌过滤
 - 088 metric_registry 重构后业务视图需同步 patch；generator 生成的 `report_distribution_drill_v`/`report_outbound_drill_v`（口径对）为 Phase 2 下钻报表备用
 
+### 10.9 商品/客户级聚合层（Phase 2 数据层，2026-07-29）
+
+spec：`docs/superpowers/specs/2026-07-29-report-phase2-data-layer-design.md`。在 §10.5 门店/品类级聚合之上补三层细粒度表，解锁品牌×指标表（品品甜配送）、商品 TOP20、出库下钻、批发客户等 Phase 2 报表板块。商品/客户级数据只在原始明细 parquet 有，**不能从现有 report_daily_* 派生**，必须新聚合。迁移 107（表）+ 108（report_definitions 3 项）。
+
+**三张聚合表**（PK 均含 `biz_date + system_book_code`）：
+
+| 表 | 粒度 | 关键列 | 源 parquet |
+|----|------|--------|-----------|
+| `report_daily_item_sales` | 品牌×商品×日 | `sale_amount` / `sale_profit` | `retail_detail` |
+| `report_daily_item_outbound` | 品牌×商品×日 | `delivery_amount/profit` + `wholesale_amount/profit`（视图层合成为 outbound） | `transfer_detail` ∪ `wholesale_detail`（CTE `FULL JOIN`） |
+| `report_daily_wholesale_customer` | 品牌×客户×日 | `wholesale_amount/profit` + `client_name` + `branch_num` | `wholesale_detail` |
+
+**数据流**（与 §10.5 同节奏，零手动零陈旧）：
+
+```
+采集(cron) → 明细 parquet → scheduler C1 triggerCompute() →
+/compute（DuckDB read_parquet 聚合）→ UPSERT PG → 报表视图查询
+```
+
+- **brand 取自 parquet 路径**（非明细字段）：`regexp_extract(filename,'<xxx_detail>/([0-9]+)/',1) AS system_book_code`（3120=熊喵、64188=品品甜）。
+- **C1 自动化**：`web/lib/scheduler.ts` 的 `triggerCompute()` reports 数组追加 `item_sales / item_outbound / wholesale_customer` 3 项，采集 `verified=success/partial` 后按 `params.dates` 自动调 /compute；失败记 `compute_logs` + 企微告警，不阻塞采集（parquet 已落）。
+- **写入幂等（陈旧清理）**：/compute 先 `DELETE WHERE biz_date BETWEEN from AND to` 清该日期范围旧行（`services/server.js` 已有此逻辑）再 UPSERT，天然覆盖无 stale 残留。
+
+**品牌级 RLS + 成本脱敏**：三表粒度 = (品牌, 商品/客户) 无 `branch_num`，现有 `branch_nums` RLS 不适用。
+- **行级（品牌可见）**：RLS policy 按 `system_book_code IN (用户 branch_nums 所属品牌)`——claim `branch_nums=['*']`/NULL → 全量；否则 `branch_nums` JOIN `dim_branch` 派生可见品牌集合（照 `report_daily_delivery` 模式，把 branch_num→品牌派生）。
+- **列级（成本脱敏）**：profit 列（`sale_profit`/`delivery_profit`/`wholesale_profit`）在**报表视图层**按 `can_see_cost` claim 用 CASE 脱敏（照 `report_achievement_v` 模式），基表存全值。
+
+**解锁报表板块**：品牌×指标表（品品甜配送来自 `report_daily_wholesale_customer.client_name`→64188 门店映射）+ 商品 TOP20（销售/出库）+ 出库商品下钻 + 批发客户报表。
+
+**完整性**：与现有 `report_daily_*` 同模式——`/compute` 用 `DELETE-before-INSERT` 清该日期范围旧行（覆盖写、无 stale 残留），全程记 `compute_logs`，`status=failed` 触发企微告警。**按品牌行数对账（聚合行数 ≥ parquet distinct(sbc, item_num/client_code, biz_date)）目前未实现**，作为后续增强；当前依赖 DELETE 覆盖 + 失败告警兜底，不做按维度行数比对（与 `report_daily_delivery/wholesale` 等既有聚合表一致）。
+
 ---
 
 ## 十一、待实现/待讨论
