@@ -52,6 +52,9 @@ jobs:
       - name: Check edge functions
         run: bash scripts/check-functions.sh
 
+      - name: Guard branch_num usage
+        run: bash scripts/guard-branch-num.sh
+
   deploy:
     needs: quality
     runs-on: ubuntu-latest

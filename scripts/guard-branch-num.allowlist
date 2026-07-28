@@ -1,0 +1,15 @@
+# scripts/guard-branch-num.allowlist
+# 守护门店键铁律的命中白名单（按 file:line 或 file 整文件豁免）
+# 格式：每行 path[:line] [# 注释理由]
+# 仅豁免 spec §4 声明 audit-only / 不在本改造范围 / 已被后续迁移覆盖的 pre-reform 遗留代码。
+# 新代码（097-101 迁移、targets/[id]/page.tsx、import-diff.ts）不得入此白名单——发现违反先修。
+
+# ===== pre-reform 遗留：早期 upsert_target_breakdown 实现，单列 branch_num 定位/去重 =====
+# 这些迁移用 CREATE OR REPLACE FUNCTION，每次部署 migrate.sh 重跑；
+# 099_upsert_target_breakdown_composite.sql 是最终版本，覆盖前述所有版本。
+# spec §1.1 把 063 标记为本次改造要修的根因 bug；053/062 是更早的同名函数演化版本。
+# 历史代码不擅改（spec §4），仅在白名单豁免，避免 CI 误报。
+database/migrations/053_target_breakdown.sql:89   # pre-reform: SELECT id INTO v_sub ... WHERE parent_target_id=p_parent_id AND branch_num=v_branch LIMIT 1（已被 099 覆盖）
+database/migrations/062_breakdown_all_brand.sql:40 # pre-reform: 同上，062 是 053→063 之间的过渡版本（已被 099 覆盖）
+database/migrations/063_breakdown_three_level.sql:43 # pre-reform: spec §1.1 根因 bug——SELECT system_book_code INTO ... WHERE branch_num=v_branch LIMIT 1（已被 099 删除）
+database/migrations/063_breakdown_three_level.sql:50 # pre-reform: spec §1.1 根因 bug——SELECT id INTO v_sub ... branch_num=v_branch LIMIT 1（已被 099 复合键覆盖）
