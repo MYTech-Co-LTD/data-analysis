@@ -1033,7 +1033,7 @@ spec：`docs/superpowers/specs/2026-07-29-report-phase2-data-layer-design.md`。
 
 **解锁报表板块**：品牌×指标表（品品甜配送来自 `report_daily_wholesale_customer.client_name`→64188 门店映射）+ 商品 TOP20（销售/出库）+ 出库商品下钻 + 批发客户报表。
 
-**完整性**：照 CLAUDE.md「采集任务数据完整性规则」五点——按品牌对账（聚合行数 ≥ parquet distinct(sbc, item_num/client_code, biz_date)）、日期范围全扫（无分页丢页）、UPSERT 失败检测、`DELETE-before-INSERT` 清旧、`compute_logs.status=failed` → 企微告警。
+**完整性**：与现有 `report_daily_*` 同模式——`/compute` 用 `DELETE-before-INSERT` 清该日期范围旧行（覆盖写、无 stale 残留），全程记 `compute_logs`，`status=failed` 触发企微告警。**按品牌行数对账（聚合行数 ≥ parquet distinct(sbc, item_num/client_code, biz_date)）目前未实现**，作为后续增强；当前依赖 DELETE 覆盖 + 失败告警兜底，不做按维度行数比对（与 `report_daily_delivery/wholesale` 等既有聚合表一致）。
 
 ---
 
