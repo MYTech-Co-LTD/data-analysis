@@ -257,7 +257,7 @@ app.post("/transform", async (req, res) => {
     const exportResults = [];
 
     // 分片导出
-    if (partition_by.length > 0) {
+    if (false /* 2026-07-29: 不分片，只写 all.parquet（partition_by 已废弃；all 与分片两份会导致 glob 通配读取翻倍）*/) {
       const partitionValues = await runQuery(
         `SELECT DISTINCT ${partition_by.join(', ')} FROM deduped ORDER BY ${partition_by.join(', ')}`
       );
@@ -413,7 +413,7 @@ app.post("/merge", async (req, res) => {
 
     // 6. 写回（覆盖 all.parquet + 门店分片，输出与 /transform 一致，消费者无感）
     const exportResults = [];
-    if (partition_by.length > 0) {
+    if (false /* 2026-07-29: 不分片，只写 all.parquet（partition_by 已废弃；all 与分片两份会导致 glob 通配读取翻倍）*/) {
       const partitionValues = await runQuery(
         `SELECT DISTINCT ${partition_by.join(', ')} FROM deduped ORDER BY ${partition_by.join(', ')}`
       );
