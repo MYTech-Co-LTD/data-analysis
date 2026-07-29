@@ -108,22 +108,19 @@ module.exports = async function (req) {
     const userName = user?.name || wecomUserId;  // 如果没有姓名则用 userid
 
     // 4. 调 get_user_perms 拿合并后权限（角色 role_code + 四维 + UI 配置）
-    //    RPC 由 Task 2 建在数据库，返回 JSONB：缺字段不致命，兜底走全权/最小 UI。
-    //    失败时 perms={} → claim 全部走兜底，登录不能因权限查询失败而挂。
-    const apiBase = Deno.env.get("INSFORGE_API_BASE") || "http://insforge:7130";
-    const anonKey = Deno.env.get("ANON_KEY");
+    //    直连 postgrest（绕过 SDK/网关）：运行时 SDK 无 database.rpc，网关无 /rest/v1 路由(404)。
+    //    get_user_perms 是 SECURITY DEFINER + GRANT 给 anon，postgrest 无 Authorization 默认 anon 可执行。
+    //    deno 与 postgrest 同 docker 网络。失败时 perms={} 兜底，登录不挂。
+    const pgrstUrl = Deno.env.get("POSTGREST_URL") || "http://postgrest:3000";
     let perms = {};
     try {
-      const permRes = await fetch(`${apiBase}/rest/v1/rpc/get_user_perms`, {
+      const permRes = await fetch(`${pgrstUrl}/rpc/get_user_perms`, {
         method: "POST",
-        headers: {
-          apikey: anonKey,
-          Authorization: `Bearer ${anonKey}`,
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ p_wecom_id: wecomUserId }),
       });
       if (permRes.ok) perms = await permRes.json() || {};
+      else console.error("get_user_perms http", permRes.status, await permRes.text().catch(() => ""));
     } catch (e) {
       console.error("get_user_perms failed", e);
     }
