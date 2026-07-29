@@ -51,6 +51,25 @@ const runningTasks = state.running;
 // 对账重试最大次数
 const MAX_VERIFY_RETRIES = 3;
 
+// 新一天对账最近 N 天（不只前一日）：晚生成/晚审核的单据若在 N 天内落账，
+// 会被后续某天的对账发现并触发 full 补采（修 lookback=1 只对前一天的盲区）。
+const RECONCILE_DAYS = 3;
+// 逐天比 API count vs 库已采 count（最近 N 天，不含今天）：任一天 lib<api 返回该天日期，全匹配返回 null
+async function reconcileTrailingDays(
+  N: number,
+  apiCount: (date: string) => Promise<number>,
+  libCount: (date: string) => Promise<number>,
+): Promise<string | null> {
+  for (let i = 1; i <= N; i++) {
+    const d = getDateOffsetChina(-i);
+    const api = await apiCount(d);
+    if (api <= 0) continue; // 该天 API 无数据（节假日/未来日），跳过
+    const lib = await libCount(d);
+    if (lib < api) return d;
+  }
+  return null;
+}
+
 /**
  * 初始化调度器：读取所有启用的任务，注册 cron（自动初始化）
  */
@@ -308,16 +327,17 @@ async function executeTask(task: {
       const isNewDay = watermark.date !== today;
       let mode: 'full' | 'incremental';
       if (isNewDay) {
-        const prevDay = getDateOffsetChina(-1);
-        const apiPrev = await countDeliveryApi(authToken, distributionBranch, branchNumsStr, `${prevDay} 00:00:00`, `${prevDay} 23:59:59`);
-        const libPrev = await duckdbParquetCount(`lemeng/transfer_detail/${companyId}/${prevDay.replace(/-/g, '')}/all.parquet`);
-        mode = (apiPrev > 0 && libPrev >= apiPrev) ? 'incremental' : 'full';
-        console.log(`[scheduler] ${task.name} 前一日对账 ${libPrev}/${apiPrev} → ${mode}`);
+        // 对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
+        const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
+          (d) => countDeliveryApi(authToken, distributionBranch, branchNumsStr, `${d} 00:00:00`, `${d} 23:59:59`),
+          (d) => duckdbParquetCount(`lemeng/transfer_detail/${companyId}/${d.replace(/-/g, '')}/all.parquet`));
+        mode = mismatch ? 'full' : 'incremental';
+        console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${mismatch ? `不匹配@${mismatch}` : '全匹配'} → ${mode}`);
       } else {
         mode = 'incremental';
       }
       // dtFrom/dtTo 带时分秒；full 回溯N天补延迟单据，incremental 当天增量
-      const lookback = params.lookback_days ?? 1;
+      const lookback = params.lookback_days ?? RECONCILE_DAYS;
       const dates = params.date_mode === 'today'
         ? (mode === 'full' ? { from: `${getDateOffsetChina(-lookback)} 00:00:00`, to: `${today} 23:59:59` } : { from: `${today} 00:00:00`, to: `${today} 23:59:59` })
         : { from: `${getYesterdayChina()} 00:00:00`, to: `${getYesterdayChina()} 23:59:59` };
@@ -390,15 +410,16 @@ async function executeTask(task: {
       const isNewDay = watermark.date !== today;
       let mode: 'full' | 'incremental';
       if (isNewDay) {
-        const prevDay = getDateOffsetChina(-1);
-        const apiPrev = await countWholesaleApi(authToken, branchNumsStr, `${prevDay} 00:00:00`, `${prevDay} 23:59:59`);
-        const libPrev = await duckdbParquetCount(`lemeng/wholesale_detail/${companyId}/${prevDay.replace(/-/g, '')}/all.parquet`);
-        mode = (apiPrev > 0 && libPrev >= apiPrev) ? 'incremental' : 'full';
-        console.log(`[scheduler] ${task.name} 前一日对账 ${libPrev}/${apiPrev} → ${mode}`);
+        // 对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
+        const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
+          (d) => countWholesaleApi(authToken, branchNumsStr, `${d} 00:00:00`, `${d} 23:59:59`),
+          (d) => duckdbParquetCount(`lemeng/wholesale_detail/${companyId}/${d.replace(/-/g, '')}/all.parquet`));
+        mode = mismatch ? 'full' : 'incremental';
+        console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${mismatch ? `不匹配@${mismatch}` : '全匹配'} → ${mode}`);
       } else {
         mode = 'incremental';
       }
-      const lookback = params.lookback_days ?? 1;
+      const lookback = params.lookback_days ?? RECONCILE_DAYS;
       const dates = params.date_mode === 'today'
         ? (mode === 'full' ? { from: `${getDateOffsetChina(-lookback)} 00:00:00`, to: `${today} 23:59:59` } : { from: `${today} 00:00:00`, to: `${today} 23:59:59` })
         : { from: `${getYesterdayChina()} 00:00:00`, to: `${getYesterdayChina()} 23:59:59` };
@@ -467,17 +488,17 @@ async function executeTask(task: {
     const isNewDay = watermark.date !== today;
     let mode: 'full' | 'incremental';
     if (isNewDay) {
-      // 新一天：对账前一日（数据稳定不涨，对账准）；通过 incremental，失败 full 补
-      const prevDay = getDateOffsetChina(-1);
-      const apiPrev = await countRetailApi(authToken, branchNums, branchNumsStr, [prevDay, prevDay]);
-      const libPrev = await duckdbParquetCount(`lemeng/retail_detail/${companyId}/${prevDay}/all.parquet`);
-      mode = (apiPrev > 0 && libPrev >= apiPrev) ? 'incremental' : 'full';
-      console.log(`[scheduler] ${task.name} 前一日对账 ${libPrev}/${apiPrev} → ${mode}`);
+      // 新一天：对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
+      const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
+        (d) => countRetailApi(authToken, branchNums, branchNumsStr, [d, d]),
+        (d) => duckdbParquetCount(`lemeng/retail_detail/${companyId}/${d}/all.parquet`));
+      mode = mismatch ? 'full' : 'incremental';
+      console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${mismatch ? `不匹配@${mismatch}` : '全匹配'} → ${mode}`);
     } else {
       mode = 'incremental'; // 当天纯增量（API 实时涨，当天对账永远库<API 不准；漏了次日对账前一日兜底补）
     }
     // dates：full 回溯N天(补延迟生成/审核的单据，按 bizday 分区去重)；incremental 当天增量(水位线续采尾部)
-    const lookback = params.lookback_days ?? 1;
+    const lookback = params.lookback_days ?? RECONCILE_DAYS;
     const dates = params.date_mode === 'today'
       ? (mode === 'full' ? [getDateOffsetChina(-lookback), today] : [today, today])
       : (params.dates || [getYesterdayChina(), getYesterdayChina()]);
