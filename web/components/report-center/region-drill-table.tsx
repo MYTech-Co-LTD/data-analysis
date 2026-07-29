@@ -124,7 +124,7 @@ export function RegionDrillTable({ rows, targetMonth, progress }: RegionDrillTab
       const indent = depth * 24;
 
       result.push(
-        <tr key={node.code} className="hover:bg-slate-50">
+        <tr key={`${node.data.parent_code || 'root'}-${node.code}`} className="hover:bg-slate-50">
           <td
             className="px-3 py-2 text-slate-700"
             style={{ paddingLeft: `${indent + 12}px` }}
