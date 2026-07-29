@@ -321,7 +321,7 @@ export async function collectOnce(
             config: {
               date: bizday,
               source: 'lemeng',
-              partition_by: ['branch_num'],
+              partition_by: [],
               dedupe_key: ['order_no', 'order_detail_num'],
               required_fields: ['order_no', 'item_code', 'branch_num'],
               output_format: 'parquet',
