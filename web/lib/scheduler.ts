@@ -79,6 +79,7 @@ export async function ensureSchedulerInitialized(): Promise<boolean> {
   console.log('[scheduler] 初始化定时采集调度器...');
 
   // 通讯录全量兜底（平台基础设施，独立于 collect_tasks；先注册，不依赖采集任务查询结果/是否为空）
+  registerDailyReconcileJob();
   registerContactSyncJob();
   registerCarryDimsJob();
   registerDimCustomerJob();
@@ -221,7 +222,7 @@ async function executeTask(task: {
   source_id: string;
   function_slug: string;
   params: any;
-}) {
+}, opts?: { reconcile?: boolean }) {
   // 防重入：已在运行则跳过本次触发
   if (runningTasks.has(task.id)) {
     console.warn(`[scheduler] 任务 ${task.name} (${task.id}) 已在运行，跳过本次触发`);
@@ -324,9 +325,8 @@ async function executeTask(task: {
       const watermarkLastCount: number = watermark.last_count || 0;
       // 对账驱动：新一天对账前一日；同一天每小时对账当天；其余纯增量
       const companyId = decodeCompanyId(authToken);
-      const isNewDay = watermark.date !== today;
       let mode: 'full' | 'incremental';
-      if (isNewDay) {
+      if (opts?.reconcile) {
         // 对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
         const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
           (d) => countDeliveryApi(authToken, distributionBranch, branchNumsStr, `${d} 00:00:00`, `${d} 23:59:59`),
@@ -407,9 +407,8 @@ async function executeTask(task: {
       const watermarkLastCount: number = watermark.last_count || 0;
       // 对账驱动：新一天对账前一日；同一天每小时对账当天；其余纯增量
       const companyId = decodeCompanyId(authToken);
-      const isNewDay = watermark.date !== today;
       let mode: 'full' | 'incremental';
-      if (isNewDay) {
+      if (opts?.reconcile) {
         // 对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
         const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
           (d) => countWholesaleApi(authToken, branchNumsStr, `${d} 00:00:00`, `${d} 23:59:59`),
@@ -485,9 +484,8 @@ async function executeTask(task: {
     const watermarkLastCount: number = watermark.last_count || 0;
     // 对账驱动：新一天对账前一日(通过 incremental / 失败 full)；同一天每小时对账当天；其余纯增量
     const companyId = decodeCompanyId(authToken);
-    const isNewDay = watermark.date !== today;
     let mode: 'full' | 'incremental';
-    if (isNewDay) {
+    if (opts?.reconcile) {
       // 新一天：对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
       const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
         (d) => countRetailApi(authToken, branchNums, branchNumsStr, [d, d]),
@@ -746,6 +744,42 @@ function registerDimCustomerJob() {
 
 // D: 目标固化定时兜底（每天 05:10，C1 daily compute 之后；end_date<today 的 active 目标自动固化）
 // 每周一对账（最近7天 API total vs 库 parquet count，异常/通过都推企微）
+/**
+ * 每日 02:00 明细采集对账（retail/delivery/wholesale，3天窗口 full 补晚落账单）。
+ * 与常规 8-23 增量采集解耦：2点此 job 传 reconcile=true → isNewDay 式对账最近3天+full 补采；
+ * 8点起常规 cron 调 executeTask(task)（无 reconcile）→ 只当天增量，不对账。
+ */
+function registerDailyReconcileJob() {
+  const JOB_KEY = "__daily_reconcile";
+  if (scheduledJobs.has(JOB_KEY)) return;
+  const CRON = "0 2 * * *";
+  if (!cron.validate(CRON)) return;
+  const job = cron.schedule(CRON, async () => {
+    if (runningTasks.has(JOB_KEY)) return;
+    runningTasks.add(JOB_KEY);
+    try {
+      console.log("[scheduler] ⏰ 每日02:00 明细对账触发（3天窗口）");
+      const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
+      const { data: tasks, error } = await client.database.from("collect_tasks")
+        .select("id, name, source_id, function_slug, schedule_cron, params")
+        .eq("enabled", true)
+        .eq("function_slug", "collect-lemeng");
+      if (error) throw new Error(`查询采集任务失败: ${error.message}`);
+      for (const task of (tasks ?? [])) {
+        try { await executeTask(task, { reconcile: true }); }
+        catch (e: any) { console.error(`[scheduler] 02:00对账 ${task.name} 异常:`, e?.message ?? e); }
+      }
+      console.log("[scheduler] 每日02:00 明细对账完成");
+    } catch (e: any) {
+      console.error("[scheduler] 每日对账异常:", e?.message ?? e);
+    } finally {
+      runningTasks.delete(JOB_KEY);
+    }
+  }, { timezone: "Asia/Shanghai" });
+  scheduledJobs.set(JOB_KEY, job);
+  console.log("[scheduler] 注册每日02:00明细对账 (0 2 * * *, Asia/Shanghai)");
+}
+
 function registerWeeklyReconcileJob() {
   const JOB_KEY = "__weekly_reconcile";
   if (scheduledJobs.has(JOB_KEY)) return;
