@@ -102,8 +102,8 @@ export function RegionDrillTable({ rows, targetMonth, progress }: RegionDrillTab
       }
     };
     flatten(tree);
-    const head = ["大区名称", "小区名称", "门店名称", "月销售目标", "月销售金额", "月销售完成率", "月配送目标", "月配送金额", "月配送完成率", "当天销售金额", "当天配送金额", "剩余日均销售目标", "剩余日均配送目标"];
-    const body = flatRowsData.map((r) => [r.region_name, r.sub_region_name ?? "", r.branch_name ?? "", r.sale_target, r.sale_actual, fmtRate(r.sale_rate), r.delivery_target, r.delivery_actual, fmtRate(r.delivery_rate), r.daily_sale, r.daily_delivery, r.remaining_daily_sale_target, r.remaining_daily_delivery_target]);
+    const head = ["大区名称", "小区名称", "门店名称", "月销售目标", "月销售金额", "月销售完成率", "月配送目标", "月配送金额", "月配送完成率", "当天销售金额", "当天配送金额", "剩余日均销售目标", "剩余日均配送目标", "配销比目标", "配销比"];
+    const body = flatRowsData.map((r) => [r.region_name, r.sub_region_name ?? "", r.branch_name ?? "", r.sale_target, r.sale_actual, fmtRate(r.sale_rate), r.delivery_target, r.delivery_actual, fmtRate(r.delivery_rate), r.daily_sale, r.daily_delivery, r.remaining_daily_sale_target, r.remaining_daily_delivery_target, formatRatio(targetRatio(r.delivery_target, r.sale_target)), formatRatio(ratioAchievement(r.delivery_actual, r.sale_actual, r.delivery_target, r.sale_target))]);
     exportExcel([head, ...body], `${targetMonth}月门店零售配送数据报表`);
   };
 
@@ -133,12 +133,13 @@ export function RegionDrillTable({ rows, targetMonth, progress }: RegionDrillTab
               <th className="px-3 py-2 text-right font-medium">当天配送金额</th>
               <th className="px-3 py-2 text-right font-medium">剩余日均销售目标</th>
               <th className="px-3 py-2 text-right font-medium">剩余日均配送目标</th>
+              <th className="px-3 py-2 text-right font-medium">配销比目标</th>
               <th className="px-3 py-2 text-right font-medium">配销比</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {tree.length === 0 && (
-              <tr><td colSpan={12} className="px-3 py-8 text-center text-slate-400">暂无数据</td></tr>
+              <tr><td colSpan={13} className="px-3 py-8 text-center text-slate-400">暂无数据</td></tr>
             )}
             {flatRows.map(({ node, depth }) => {
               const hasChildren = node.children.length > 0;
@@ -168,10 +169,8 @@ export function RegionDrillTable({ rows, targetMonth, progress }: RegionDrillTab
                   <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.daily_delivery)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.remaining_daily_sale_target)}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.remaining_daily_delivery_target)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-500">
-                    <div className="text-sm">{formatRatio(ratioAchievement(node.data.delivery_actual, node.data.sale_actual, node.data.delivery_target, node.data.sale_target))}</div>
-                    <div className="text-[10px] text-slate-400">{formatRatio(targetRatio(node.data.delivery_target, node.data.sale_target))}</div>
-                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-400">{formatRatio(targetRatio(node.data.delivery_target, node.data.sale_target))}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-500">{formatRatio(ratioAchievement(node.data.delivery_actual, node.data.sale_actual, node.data.delivery_target, node.data.sale_target))}</td>
                 </tr>
               );
             })}
