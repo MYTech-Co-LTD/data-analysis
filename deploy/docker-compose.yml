@@ -43,6 +43,9 @@ services:
       # schema 变更时通过 NOTIFY 自动 reload
       PGRST_DB_CHANNEL_ENABLED: "true"
       PGRST_DB_CHANNEL: pgrst
+      # pre-request：把 request.jwt.claims JSON 扁平化成 request.jwt.claims.<key> 单个 GUC，
+      # 修旧代码读带点 GUC 永远 NULL 的 bug（can_see_cost/branch_nums 等，迁移 114）
+      PGRST_DB_PRE_REQUEST: pgrst_pre_request
     depends_on:
       postgres:
         condition: service_healthy
