@@ -5,6 +5,7 @@ import { getClient } from "@/lib/api";
 import { getTargetKpi } from "@/lib/report-center/targets";
 import { getRegionBreakdown } from "@/lib/report-center/region-breakdown";
 import { getCategorySummary } from "@/lib/report-center/category-summary";
+import { getBrandMetric } from "@/lib/report-center/brand-metric";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { DesktopDashboard } from "./desktop";
@@ -32,10 +33,11 @@ export default async function TargetDashboard({
   if (!totalRows?.length) notFound();
   const t = totalRows[0];
 
-  const [kpi, regionBreakdown, categorySummary] = await Promise.all([
+  const [kpi, regionBreakdown, categorySummary, brandMetric] = await Promise.all([
     getTargetKpi(targetId),
     getRegionBreakdown(id),
     getCategorySummary(id),
+    getBrandMetric(targetId),
   ]);
 
   // 数据新鲜度：3 表最早 /compute 时间（updated_at min）
@@ -58,6 +60,7 @@ export default async function TargetDashboard({
       kpi={kpi}
       regionBreakdown={regionBreakdown}
       categorySummary={categorySummary}
+      brandMetric={brandMetric}
       progress={progress}
       targetMonth={targetMonth}
       freshness={freshness}
@@ -69,6 +72,7 @@ export default async function TargetDashboard({
         kpi={kpi}
         regionBreakdown={regionBreakdown}
         categorySummary={categorySummary}
+        brandMetric={brandMetric}
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}

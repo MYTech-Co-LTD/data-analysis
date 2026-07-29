@@ -6,8 +6,10 @@ import { ArrowLeft } from "lucide-react";
 import { KpiCards } from "@/components/report-center/kpi-cards";
 import { RegionDrillTable } from "@/components/report-center/region-drill-table";
 import { CategorySummary } from "@/components/report-center/category-summary";
+import { BrandMetricTable } from "@/components/report-center/brand-metric-table";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 import { CategorySummaryRow } from "@/lib/report-center/category-summary";
+import { BrandMetricRow } from "@/lib/report-center/brand-metric";
 
 function fmtFresh(s: string | null) {
   if (!s) return "—";
@@ -33,6 +35,7 @@ export function MobileDashboard({
   kpi,
   regionBreakdown,
   categorySummary,
+  brandMetric,
   progress,
   targetMonth,
   freshness,
@@ -41,6 +44,7 @@ export function MobileDashboard({
   kpi: any[];
   regionBreakdown: RegionBreakdownRow[];
   categorySummary: CategorySummaryRow[];
+  brandMetric: BrandMetricRow[];
   progress: number;
   targetMonth: number;
   freshness: string | null;
@@ -79,6 +83,11 @@ export function MobileDashboard({
       {/* KPI 卡 */}
       <div className="px-4">
         <KpiCards rows={kpi} />
+      </div>
+
+      {/* 品牌×指标 */}
+      <div className="px-4">
+        <BrandMetricTable rows={brandMetric} targetMonth={targetMonth} />
       </div>
 
       {/* 门店零售/配送数据报表 */}
