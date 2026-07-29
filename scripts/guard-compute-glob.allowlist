@@ -1,0 +1,17 @@
+# scripts/guard-compute-glob.allowlist
+# guard-compute-glob.sh 的文件级白名单：每行一个 migration 文件路径（整文件豁免）。
+# 仅豁免【已含 `**/*.parquet` 的历史文件】——它们要么被后续迁移覆盖、要么本身就是修复(REPLACE)。
+# 新迁移 source_pattern / read_parquet 用 **/*.parquet 不得入此白名单——发现先改 **/all.parquet。
+
+# 早期 report_definitions 定义（已被 059/116 等后续迁移覆盖为 **/all.parquet）
+database/migrations/010_report_definitions.sql
+database/migrations/058_outbound_achievement.sql
+# 首次修此坑的迁移（本身含 **/*.parquet 是作为 REPLACE 的查找串）
+database/migrations/059_fix_parquet_glob_dup.sql
+# Phase2 compute 定义：重新引入了此坑（116 已修，DB 现状是 **/all.parquet）
+database/migrations/108_report_item_customer_compute_defs.sql
+database/migrations/109_fix_wholesale_customer_template.sql
+database/migrations/110_wholesale_brand_recipient.sql
+database/migrations/111_wholesale_qualify_columns.sql
+# 第二次修此坑的迁移（REPLACE 查找串里含 **/*.parquet）
+database/migrations/116_fix_wholesale_item_outbound_glob.sql

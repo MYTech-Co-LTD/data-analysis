@@ -55,6 +55,9 @@ jobs:
       - name: Guard branch_num usage
         run: bash scripts/guard-branch-num.sh
 
+      - name: Guard compute glob (no **/*.parquet)
+        run: bash scripts/guard-compute-glob.sh
+
   deploy:
     needs: quality
     runs-on: ubuntu-latest
