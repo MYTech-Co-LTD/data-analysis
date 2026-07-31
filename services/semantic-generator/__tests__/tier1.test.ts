@@ -160,8 +160,8 @@ describe('Tier1 Generator', () => {
       target_metric_codes: [],
     };
     const sql = generateTier1View(config, mockMetrics, mockSources);
-    expect(sql).toContain('SUM(total_sale) AS sale_amount');
-    expect(sql).toContain('SUM(out_money) AS delivery_amount');
+    expect(sql).toContain('SUM(s.total_sale) AS sale_amount');
+    expect(sql).toContain('SUM(s.out_money) AS delivery_amount');
   });
 
   it('should expand additive derived metrics from formula (distribution)', () => {
@@ -174,8 +174,8 @@ describe('Tier1 Generator', () => {
     };
     const sql = generateTier1View(config, mockMetrics, mockSources);
     // distribution_amount = delivery_amount + wholesale_pp_amount
-    expect(sql).toContain('SUM(out_money)');
-    expect(sql).toContain('SUM(wholesale_amount)');
+    expect(sql).toContain('SUM(s.out_money)');
+    expect(sql).toContain('SUM(s.wholesale_amount)');
   });
 
   it('should recalculate rate metrics (additive=false)', () => {

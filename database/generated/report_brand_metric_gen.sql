@@ -1,31 +1,64 @@
 DROP VIEW IF EXISTS report_brand_metric_gen;
 CREATE VIEW report_brand_metric_gen AS
-WITH cte0 AS (
-  SELECT system_book_code,
-    SUM(total_sale) AS sale_amount
-  FROM report_daily_sales
-  GROUP BY system_book_code
+WITH tgt AS (
+  SELECT id AS target_id, start_date, end_date
+  FROM targets WHERE target_level='total' AND status='active'
+),
+cte0 AS (
+  SELECT tgt.target_id, s.system_book_code,
+    SUM(s.total_sale) AS sale_amount
+  FROM report_daily_sales s
+  JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
+  JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
+  WHERE is_assessed_war_zone(db.first_level_region)
+  GROUP BY tgt.target_id, s.system_book_code
 ),
 cte1 AS (
-  SELECT system_book_code,
-    SUM(out_money) AS delivery_amount,
-    SUM(profit_money) AS delivery_profit
-  FROM report_daily_delivery
-  GROUP BY system_book_code
+  SELECT tgt.target_id, s.system_book_code,
+    SUM(s.out_money) AS delivery_amount,
+    SUM(s.profit_money) AS delivery_profit
+  FROM report_daily_delivery s
+  JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
+  JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
+  WHERE is_assessed_war_zone(db.first_level_region)
+  GROUP BY tgt.target_id, s.system_book_code
 ),
 cte2 AS (
-  SELECT system_book_code,
-    SUM(wholesale_amount) AS wholesale_pp_amount,
-    SUM(wholesale_profit) AS wholesale_pp_profit
-  FROM report_daily_wholesale_customer
-  WHERE system_book_code = '64188'
-  GROUP BY system_book_code
+  SELECT tgt.target_id, s.system_book_code,
+    SUM(s.wholesale_amount) AS wholesale_pp_amount,
+    SUM(s.wholesale_profit) AS wholesale_pp_profit
+  FROM report_daily_wholesale_customer s
+  JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
+  JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
+  WHERE s.system_book_code = '64188' AND is_assessed_war_zone(db.first_level_region)
+  GROUP BY tgt.target_id, s.system_book_code
+),
+cte3 AS (
+  SELECT t.parent_target_id AS target_id, t.system_book_code,
+    SUM(tmv.target_value) AS sale_target
+  FROM targets t JOIN target_metric_values tmv ON tmv.target_id=t.id
+  WHERE t.breakdown_level='store' AND metric_code='sale' AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code=t.system_book_code AND db.branch_num=t.branch_num AND is_assessed_war_zone(db.first_level_region))
+  GROUP BY t.parent_target_id, t.system_book_code
 )
-SELECT COALESCE(cte0.system_book_code, cte1.system_book_code, cte2.system_book_code) AS brand_code,
+, brand_rows AS (
+SELECT tgt.target_id,
+  b.system_book_code AS system_book_code,
+  b.brand_name,
   cte0.sale_amount AS sale_amount,
-  COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0) AS distribution_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(cte1.delivery_profit, 0) + COALESCE(cte2.wholesale_pp_profit, 0) END AS distribution_profit,
-  COALESCE((COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0)), 0) / NULLIF(COALESCE((cte0.sale_amount), 0), 0) AS delivery_sale_ratio
-FROM cte0
-FULL OUTER JOIN cte1 ON cte1.system_book_code = cte0.system_book_code
-FULL OUTER JOIN cte2 ON cte2.system_book_code = cte0.system_book_code
+  cte3.sale_target AS sale_target,
+  COALESCE((cte0.sale_amount), 0) / NULLIF(COALESCE((cte3.sale_target), 0), 0) AS sale_rate,
+  COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0) AS delivery_amount,
+  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(cte1.delivery_profit, 0) + COALESCE(cte2.wholesale_pp_profit, 0) END AS delivery_profit,
+  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE((COALESCE(cte1.delivery_profit, 0) + COALESCE(cte2.wholesale_pp_profit, 0)), 0) / NULLIF(COALESCE((COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0)), 0), 0) END AS delivery_margin
+FROM dim_brand b
+CROSS JOIN tgt
+LEFT JOIN cte0 ON cte0.target_id = tgt.target_id AND cte0.system_book_code = b.system_book_code
+LEFT JOIN cte1 ON cte1.target_id = tgt.target_id AND cte1.system_book_code = b.system_book_code
+LEFT JOIN cte2 ON cte2.target_id = tgt.target_id AND cte2.system_book_code = b.system_book_code
+LEFT JOIN cte3 ON cte3.target_id = tgt.target_id AND cte3.system_book_code = b.system_book_code
+)
+SELECT * FROM brand_rows
+UNION ALL
+SELECT tgt.target_id, '合计' AS system_book_code, NULL AS brand_name, SUM(brand_rows.sale_amount) AS sale_amount, SUM(brand_rows.sale_target) AS sale_target, COALESCE(SUM(brand_rows.sale_amount), 0) / NULLIF(COALESCE(SUM(brand_rows.sale_target), 0), 0) AS sale_rate, SUM(brand_rows.delivery_amount) AS delivery_amount, SUM(brand_rows.delivery_profit) AS delivery_profit, CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(SUM(brand_rows.delivery_profit), 0) / NULLIF(COALESCE(SUM(brand_rows.delivery_amount), 0), 0) END AS delivery_margin
+FROM brand_rows JOIN tgt ON tgt.target_id = brand_rows.target_id
+GROUP BY tgt.target_id;
