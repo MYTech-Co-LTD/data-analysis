@@ -1,22 +1,27 @@
 import { Metric, MetricSource, ViewConfig } from '../types';
 
 /**
- * 层级视图生成器（T4：叶级基础）
+ * 层级视图生成器（T5：叶级 + 父级 rollup）
  *
  * 能力：按 hierarchy 配置找到 is_leaf level，产出叶级 grain 上的
  *      actual + target + daily 聚合，汇总为 leaf_rows CTE
  *      （叶级粒度上挂 actual/target/窗口列，COALESCE 补 0）。
+ *      T5：在每个父级 level（is_leaf=false）上，从 leaf_rows 做 actual rollup
+ *      （SUM additive + MAX 窗口），并按 target_breakdown 产父级 target CTE。
+ *      维护 levelCtes: Map<level, {act, tgt, grain}> 供 T6 各级 UNION ALL。
  *
- * 结构（照手写视图 120 的 store_tgt / sale_act / store_rows 部分）：
+ * 结构（照手写视图 120 的 store_tgt / sale_act / store_rows + region_rows / region_tgt）：
  *   WITH tgt AS (active total target 日期窗口 + 窗口列),
  *        leaf_act_N AS (base 表按叶级 grain + tgt 窗口 + assessed 聚合，含 daily FILTER),
  *        leaf_tgt AS (target_metric_values 按 leaf.target_breakdown + 叶级 grain 聚合),
- *        leaf_rows AS (tgt ⊥ dim_branch LEFT JOIN 各 actual/target + COALESCE + 窗口列)
+ *        leaf_rows AS (tgt ⊥ dim_branch LEFT JOIN 各 actual/target + COALESCE + 窗口列
+ *                      + 补齐父级 grain 依赖的维度列),
+ *        <parent>_act AS (从 leaf_rows 按 pgrain SUM actual/daily + MAX 窗口),
+ *        <parent>_tgt AS (target_metric_values 按 p.target_breakdown 聚合，不 join dim_branch)
  *   SELECT * FROM leaf_rows
  *
  * 衔接：
- *   T5 在 leaf_rows 上做父级（sub_region/region）rollup；
- *   T6 做 SELECT 列加工（rate/remaining/cost 脱敏）+ 各级 UNION ALL。
+ *   T6 做 SELECT 列加工（rate/remaining/cost 脱敏）+ 各级 UNION ALL（用 levelCtes）。
  *
  * 门店键铁律：store 级 grain 必含 (system_book_code, branch_num) 复合键，
  *            禁 branch_num 单独 join。
@@ -57,6 +62,7 @@ export function generateHierarchyView(
   if (!leaf) {
     throw new Error('generateHierarchyView: hierarchy 配置缺 is_leaf level');
   }
+  const parentLevels = (hierarchy ?? []).filter(h => !h.is_leaf); // T5: 父级（sub_region/region）
   const grain = leaf.grain;                        // ['system_book_code','branch_num']
   const grainS = grain.map(g => `s.${g}`).join(', '); // source 表别名前缀
   const grainT = grain.map(g => `t.${g}`).join(', '); // targets 表别名前缀
@@ -211,6 +217,26 @@ export function generateHierarchyView(
     const expr = col.expr.includes('.') ? col.expr : `db.${col.expr}`;
     sel.push(`${expr} AS ${col.out}`);
   }
+  // T5: 补齐父级 rollup 依赖的维度列 —— leaf.columns 未暴露的父级 grain 列，
+  //     从父级 level.columns 取 expr 映射（照 120 store_rows 行 85 暴露 war_zone/region_l2）
+  const leafOuts = new Set(leaf.columns.map(c => c.out));
+  const extraParentDims: { out: string; expr: string }[] = [];
+  for (const p of parentLevels) {
+    for (const g of p.grain) {
+      if (!leafOuts.has(g) && !extraParentDims.find(x => x.out === g)) {
+        const pcol = p.columns.find(c => c.out === g);
+        if (!pcol) {
+          throw new Error(
+            `generateHierarchyView: 父级 ${p.level} grain '${g}' 未在 leaf.columns 或 ${p.level}.columns 提供映射，无法 rollup`);
+        }
+        extraParentDims.push(pcol);
+      }
+    }
+  }
+  for (const col of extraParentDims) {
+    const expr = col.expr.includes('.') ? col.expr : `db.${col.expr}`;
+    sel.push(`${expr} AS ${col.out}`);
+  }
   for (const mc of metricCols) {
     const al = cteAlias.get(mc.cte)!;
     sel.push(`COALESCE(${al}.${mc.code}, 0) AS ${mc.code}`);
@@ -227,6 +253,65 @@ export function generateHierarchyView(
   ${leftJoins.join('\n  ')}
   WHERE ${whereParts.join(' AND ')}
 )`);
+
+  // 5. T5 父级 actual rollup + 父级 target CTE
+  //    照 120 region_rows/wz_rows（actual rollup）与 region_tgt/wz_tgt（父级 target）
+  //    维护 levelCtes 供 T6 各级 UNION ALL 与列加工
+  const levelCtes = new Map<string, { act: string; tgt: string | null; grain: string[] }>();
+  levelCtes.set(leaf.level, {
+    act: 'leaf_rows',
+    tgt: targetLeaves.length > 0 ? 'leaf_tgt' : null,
+    grain: leaf.grain,
+  });
+
+  for (const p of parentLevels) {
+    const pgrain = p.grain;
+
+    // 5a. 父级 actual rollup CTE：从 leaf_rows 按 pgrain SUM additive actual/daily + MAX 窗口列
+    //     target 列不 rollup（父级 target 由 5b 独立 CTE 给）
+    const actCteName = `${p.level}_act`;
+    const actCols = metricCols
+      .filter(mc => mc.cte !== 'leaf_tgt')
+      .map(mc => `SUM(${mc.code}) AS ${mc.code}`);
+    actCols.push('MAX(total_days) AS total_days', 'MAX(days_elapsed) AS days_elapsed');
+    cteList.push(`${actCteName} AS (
+  SELECT tgt.target_id, ${pgrain.join(', ')},
+    ${actCols.join(',\n    ')}
+  FROM leaf_rows
+  GROUP BY tgt.target_id, ${pgrain.join(', ')}
+)`);
+
+    // 5b. 父级 target CTE：target_metric_values 按 p.target_breakdown 聚合
+    //     targets 表自带 war_zone/region_l2 列，不 join dim_branch（照 120 region_tgt/wz_tgt）
+    let tgtCteName: string | null = null;
+    if (targetLeaves.length > 0) {
+      tgtCteName = `${p.level}_tgt`;
+      const tgtCols = targetLeaves.map(tl => {
+        const src = sources.find(s => s.metric_code === tl.metric_code)!;
+        const f = src.source_filter ?? 'true';
+        return `MAX(tmv.target_value) FILTER (WHERE ${f}) AS ${tl.metric_code}`;
+      });
+      const metricFilters = targetLeaves.map(tl => {
+        const src = sources.find(s => s.metric_code === tl.metric_code)!;
+        return src.source_filter ?? 'true';
+      }).join(' OR ');
+      const grainT2 = pgrain.map(g => `t.${g}`).join(', ');
+      const whereExtra: string[] = [`t.breakdown_level = '${p.target_breakdown}'`];
+      // 考核过滤：targets 表 war_zone 列恒在（breakdown_level 为 war_zone/region_l2 的行均带 war_zone）
+      if (useAssessed) whereExtra.push(`is_assessed_war_zone(t.war_zone)`);
+      cteList.push(`${tgtCteName} AS (
+  SELECT t.parent_target_id AS target_id, ${grainT2},
+    ${tgtCols.join(',\n    ')}
+  FROM targets t
+  JOIN target_metric_values tmv ON tmv.target_id = t.id AND (${metricFilters})
+  WHERE ${whereExtra.join(' AND ')}
+  GROUP BY t.parent_target_id, ${grainT2}
+)`);
+    }
+    levelCtes.set(p.level, { act: actCteName, tgt: tgtCteName, grain: pgrain });
+  }
+  // levelCtes 暂留供 T6 衔接（各级 act/tgt/grain），本任务 final SELECT 仍返回 leaf_rows
+  void levelCtes;
 
   // T4 final SELECT：先返回叶级行；T5/T6 改为父级 rollup + UNION ALL + 列加工
   const sql = `DROP VIEW IF EXISTS ${view_name};

@@ -178,3 +178,151 @@ describe('Hierarchy Generator (T4 leaf level)', () => {
       [baseMetric('sale_amount', 'total_sale')], [saleSrc])).toThrow(/is_leaf/);
   });
 });
+
+// 含叶级 + 父级的多级 hierarchy（照手写视图 120 的 store + wz 两级）
+const multiLevelHierarchy: HierarchyLevel[] = [
+  {
+    level: 'store',
+    grain: ['system_book_code', 'branch_num'],
+    target_breakdown: 'store',
+    is_leaf: true,
+    columns: [
+      { out: 'branch_name', expr: 'branch_name' },
+      { out: 'war_zone', expr: 'first_level_region' },
+      { out: 'region_l2', expr: 'second_level_region' },
+    ],
+  },
+  {
+    level: 'region',
+    grain: ['war_zone'],
+    target_breakdown: 'war_zone',
+    is_leaf: false,
+    rollup_from: 'store',
+    columns: [],
+  },
+];
+
+describe('Hierarchy Generator (T5 parent rollup + parent target)', () => {
+  it('父级 actual rollup CTE 从 leaf_rows SUM additive + GROUP BY 父级 grain', () => {
+    const saleTarget: Metric = { ...baseMetric('sale_target', 'target_value'), fact_table: null };
+    const config: ViewConfig = {
+      view_name: 'v_parent_test',
+      metrics: ['sale_amount', 'sale_target'],
+      dim_code: 'branch',
+      levels: ['store', 'region'],
+      target_metric_codes: ['sale_target'],
+      scope: { target_window: true, assessed_war_zone: true },
+      hierarchy: multiLevelHierarchy,
+    };
+    const sql = generateHierarchyView(config,
+      [baseMetric('sale_amount', 'total_sale'), saleTarget],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    // 父级 actual rollup CTE 存在，从 leaf_rows 聚合（列名=metric_code，与 T4 一致）
+    expect(sql).toContain('region_act AS (');
+    expect(sql).toMatch(/FROM leaf_rows/);
+    expect(sql).toContain('SUM(sale_amount) AS sale_amount');
+    // GROUP BY 含父级 grain（war_zone）
+    expect(sql).toMatch(/GROUP BY[\s\S]*war_zone/);
+    // 父级 target CTE 存在，按 war_zone breakdown
+    expect(sql).toContain('region_tgt AS (');
+    expect(sql).toContain("breakdown_level = 'war_zone'");
+    expect(sql).toContain('AS sale_target');
+    // 考核过滤用 t.war_zone（不 join dim_branch）
+    expect(sql).toContain('is_assessed_war_zone(t.war_zone)');
+    // leaf_rows 仍暴露 war_zone 列（rollup 前提）
+    expect(sql).toContain('AS war_zone');
+    // DROP + CREATE 视图
+    expect(sql).toContain('DROP VIEW IF EXISTS v_parent_test');
+    expect(sql).toContain('CREATE VIEW v_parent_test AS');
+  });
+
+  it('父级 target CTE 多指标 FILTER 合一且不 join dim_branch', () => {
+    const saleTarget: Metric = { ...baseMetric('sale_target', 'target_value'), fact_table: null };
+    const deliveryTarget: Metric = { ...baseMetric('delivery_target', 'target_value'), fact_table: null };
+    const config: ViewConfig = {
+      view_name: 'v_parent_test',
+      metrics: ['sale_amount', 'sale_target', 'delivery_target'],
+      dim_code: 'branch',
+      levels: ['store', 'region'],
+      target_metric_codes: ['sale_target', 'delivery_target'],
+      scope: { target_window: true, assessed_war_zone: true },
+      hierarchy: multiLevelHierarchy,
+    };
+    const sql = generateHierarchyView(config,
+      [baseMetric('sale_amount', 'total_sale'), saleTarget, deliveryTarget],
+      [saleSrc,
+        { metric_code: 'sale_target', source_table: 'target_metric_values', source_column: 'target_value', source_filter: "metric_code='sale'", note: null },
+        { metric_code: 'delivery_target', source_table: 'target_metric_values', source_column: 'target_value', source_filter: "metric_code='delivery'", note: null },
+      ]);
+    // region_tgt 块内同时含两个 target 列
+    const regionTgt = sql.match(/region_tgt AS \(([\s\S]*?)\n\)/);
+    expect(regionTgt).toBeTruthy();
+    expect(regionTgt![1]).toContain('AS sale_target');
+    expect(regionTgt![1]).toContain('AS delivery_target');
+    // 不 join dim_branch（targets 表自带 war_zone 列，照 120 wz_tgt）
+    expect(regionTgt![1]).not.toContain('dim_branch');
+    expect(regionTgt![1]).not.toMatch(/\bdb\./);
+    // 全局只有一个 region_tgt 定义
+    expect(sql.match(/region_tgt AS \(/g)).toHaveLength(1);
+  });
+
+  it('daily 指标与窗口列参与父级 actual rollup（SUM daily + MAX 窗口）', () => {
+    const dailyMetric: Metric = {
+      ...baseMetric('daily_sale', 'total_sale'),
+      measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+      formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'],
+      additive: true,
+    };
+    const config: ViewConfig = {
+      view_name: 'v_parent_test',
+      metrics: ['sale_amount', 'daily_sale'],
+      dim_code: 'branch',
+      levels: ['store', 'region'],
+      target_metric_codes: [],
+      scope: { target_window: true, assessed_war_zone: true },
+      hierarchy: multiLevelHierarchy,
+    };
+    const sql = generateHierarchyView(config,
+      [baseMetric('sale_amount', 'total_sale'), dailyMetric], [saleSrc]);
+    // region_act 块
+    const regionAct = sql.match(/region_act AS \(([\s\S]*?)\n\)/);
+    expect(regionAct).toBeTruthy();
+    expect(regionAct![1]).toContain('SUM(sale_amount) AS sale_amount');
+    expect(regionAct![1]).toContain('SUM(daily_sale) AS daily_sale');
+    expect(regionAct![1]).toContain('MAX(total_days) AS total_days');
+    expect(regionAct![1]).toContain('MAX(days_elapsed) AS days_elapsed');
+    // 无 target 列 rollup（daily-only config，无 target）
+    expect(regionAct![1]).not.toMatch(/sale_target/);
+  });
+
+  it('leaf.columns 未暴露父级 grain 时自动补齐列（rollup 前提保障）', () => {
+    // leaf 只暴露 branch_name，不暴露 war_zone；父级 region 的 columns 补 war_zone 映射
+    const sparseLeafHierarchy: HierarchyLevel[] = [
+      {
+        level: 'store', grain: ['system_book_code', 'branch_num'], target_breakdown: 'store', is_leaf: true,
+        columns: [{ out: 'branch_name', expr: 'branch_name' }],
+      },
+      {
+        level: 'region', grain: ['war_zone'], target_breakdown: 'war_zone', is_leaf: false, rollup_from: 'store',
+        columns: [{ out: 'war_zone', expr: 'first_level_region' }],
+      },
+    ];
+    const config: ViewConfig = {
+      view_name: 'v_sparse_test',
+      metrics: ['sale_amount'],
+      dim_code: 'branch',
+      levels: ['store', 'region'],
+      target_metric_codes: [],
+      scope: { target_window: true, assessed_war_zone: true },
+      hierarchy: sparseLeafHierarchy,
+    };
+    const sql = generateHierarchyView(config,
+      [baseMetric('sale_amount', 'total_sale')], [saleSrc]);
+    // leaf_rows 自动补 db.first_level_region AS war_zone
+    expect(sql).toContain('db.first_level_region AS war_zone');
+    expect(sql).toContain('region_act AS (');
+  });
+});
