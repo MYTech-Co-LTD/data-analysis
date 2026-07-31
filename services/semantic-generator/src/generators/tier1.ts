@@ -14,7 +14,8 @@ function expandAdditive(metric: Metric, ctx: Ctx): string {
     const depMetric = ctx.metrics.find(m => m.metric_code === dep);
     if (!depMetric) continue;
     const depExpr = metricRef(depMetric, ctx);
-    expr = expr.replace(new RegExp(`\\b${dep}\\b`, 'g'), depExpr);
+    // 多源 additive：FULL OUTER JOIN 后某品牌可能缺某 CTE → COALESCE 补 0
+    expr = expr.replace(new RegExp(`\\b${dep}\\b`, 'g'), `COALESCE(${depExpr}, 0)`);
   }
   return expr;
 }
@@ -25,7 +26,8 @@ function expandRate(metric: Metric, ctx: Ctx): string {
   if (parts.length !== 2) throw new Error(`rate metric ${metric.metric_code} 公式非 A/B 结构: ${formula}`);
   const num = expandToken(parts[0].trim(), metric, ctx);
   const den = expandToken(parts[1].trim(), metric, ctx);
-  return `${num} / NULLIF(${den}, 0)`;
+  // 多源 FULL OUTER JOIN 后任何引用都可能 NULL → 分子分母都 COALESCE 补 0
+  return `COALESCE(${num}, 0) / NULLIF(COALESCE(${den}, 0), 0)`;
 }
 
 function expandToken(token: string, owner: Metric, ctx: Ctx): string {
@@ -73,31 +75,28 @@ export function generateTier1View(
     if (m) collect(m);
   }
 
-  // base 指标按 source_table 分组 → 各一个 CTE
-  const tables: string[] = [];
-  const tableMetrics = new Map<string, Metric[]>();
+  // base 指标按 (source_table, source_filter) 分组 → 各一个 CTE。
+  // 同表同 filter 的指标合并为一个 SELECT 的多列（避免 UNION ALL 列错位）。
+  const groups = new Map<string, { table: string; filter: string | null; metrics: Metric[] }>();
   for (const leaf of leaves) {
     const src = sources.find(s => s.metric_code === leaf.metric_code);
     if (!src) continue;
-    if (!tableMetrics.has(src.source_table)) {
-      tableMetrics.set(src.source_table, []);
-      tables.push(src.source_table);
-    }
-    tableMetrics.get(src.source_table)!.push(leaf);
+    const key = `${src.source_table}|${src.source_filter ?? ''}`;
+    if (!groups.has(key)) groups.set(key, { table: src.source_table, filter: src.source_filter, metrics: [] });
+    groups.get(key)!.metrics.push(leaf);
   }
 
   const cteList: string[] = [];
   const cteOf = new Map<string, string>(); // metric_code → cteN
-  tables.forEach((tbl, idx) => {
+  [...groups.values()].forEach((g, idx) => {
     const cteName = `cte${idx}`;
-    const mets = tableMetrics.get(tbl)!;
-    const cols = mets.map(m => {
+    const filter = g.filter ? `\n  WHERE ${g.filter.replace(/\bs\./g, '')}` : '';
+    const cols = g.metrics.map(m => {
       const src = sources.find(s => s.metric_code === m.metric_code)!;
-      const filter = src.source_filter ? `\n  WHERE ${src.source_filter.replace(/\bs\./g, '')}` : '';
-      return `  SELECT ${dimKey},\n    SUM(${src.source_column}) AS ${m.metric_code}\n  FROM ${tbl}${filter}\n  GROUP BY ${dimKey}`;
-    });
-    cteList.push(`${cteName} AS (\n${cols.join('\n  UNION ALL\n')}\n)`);
-    for (const m of mets) cteOf.set(m.metric_code, cteName);
+      return `    SUM(${src.source_column}) AS ${m.metric_code}`;
+    }).join(',\n');
+    cteList.push(`${cteName} AS (\n  SELECT ${dimKey},\n${cols}\n  FROM ${g.table}${filter}\n  GROUP BY ${dimKey}\n)`);
+    for (const m of g.metrics) cteOf.set(m.metric_code, cteName);
   });
 
   // main SELECT 列
@@ -114,14 +113,15 @@ export function generateTier1View(
   }
 
   // brand_code 维度列：从所有 CTE 的 dimKey 中选非 NULL 的
-  const brandCodeExpr = tables.length > 1
-    ? `COALESCE(${tables.map((_, i) => `cte${i}.${dimKey}`).join(', ')})`
+  const cteCount = cteList.length;
+  const brandCodeExpr = cteCount > 1
+    ? `COALESCE(${Array.from({ length: cteCount }, (_, i) => `cte${i}.${dimKey}`).join(', ')})`
     : `cte0.${dimKey}`;
   const dimCol = dim_code === 'brand' ? `${brandCodeExpr} AS brand_code` : 'branch_num';
   sel.unshift(dimCol);
 
   // FROM + FULL OUTER JOIN
-  const joinOns = tables.slice(1).map((_, i) => {
+  const joinOns = Array.from({ length: Math.max(0, cteCount - 1) }, (_, i) => {
     return `FULL OUTER JOIN cte${i + 1} ON cte${i + 1}.${dimKey} = cte0.${dimKey}`;
   });
 

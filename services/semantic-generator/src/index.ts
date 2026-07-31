@@ -1,7 +1,10 @@
 import 'dotenv/config';
 import { Pool } from 'pg';
+import { mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { readRegistry } from './registry-reader.js';
 import { generateTier1View } from './generators/tier1.js';
+import { explainSql } from './explain.js';
 import type { ViewConfig } from './types.js';
 
 export interface GenResult {
@@ -15,19 +18,38 @@ export interface GenOpts {
   outDir: string;
 }
 
-// P1：Tier1 生成器
+// P1：Tier1 生成器 + L2 EXPLAIN + 写文件
 export async function runGenerator(opts: GenOpts): Promise<GenResult> {
   const { metrics, sources } = await readRegistry(opts.client as any);
 
   const produced: string[] = [];
   const explainFailures: string[] = [];
 
+  mkdirSync(opts.outDir, { recursive: true });
+
   for (const config of opts.viewConfigs) {
     try {
       const sql = generateTier1View(config, metrics, sources);
+
+      // L2 EXPLAIN：先建视图再 EXPLAIN SELECT
+      try {
+        await opts.client.query(sql); // DROP + CREATE
+        const r = await explainSql(opts.client as any, `SELECT * FROM ${config.view_name}`);
+        if (!r.ok) {
+          explainFailures.push(`${config.view_name}: ${r.error}`);
+          continue;
+        }
+      } catch (e) {
+        explainFailures.push(`${config.view_name}: ${e instanceof Error ? e.message : String(e)}`);
+        continue;
+      }
+
+      // 写文件
+      const file = join(opts.outDir, `${config.view_name}.sql`);
+      writeFileSync(file, sql + '\n');
       produced.push(config.view_name);
     } catch (err) {
-      explainFailures.push(config.view_name);
+      explainFailures.push(`${config.view_name}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -45,11 +67,13 @@ async function main() {
   try {
     const client = await pool.connect();
     try {
-      // P1：viewConfigs 从参数传入（后续从 src/view-configs.ts 读）
-      const r = await runGenerator({ client, viewConfigs: [], outDir: '../../database/generated' });
+      const { brandMetricView } = await import('./view-configs.js');
+      const r = await runGenerator({ client, viewConfigs: [brandMetricView], outDir: '../../database/generated' });
       console.log(`✅ 生成器完成：产出 ${r.produced.length} 个视图，EXPLAIN 失败 ${r.explainFailures.length} 个`);
+      if (r.produced.length) console.log('  产出:', r.produced.join(', '));
       if (r.explainFailures.length) {
-        console.error('  失败：', r.explainFailures.join(', '));
+        console.error('  失败:');
+        r.explainFailures.forEach(f => console.error('   -', f));
         process.exit(1);
       }
     } finally {
