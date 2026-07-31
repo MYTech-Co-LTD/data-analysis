@@ -234,15 +234,13 @@ app.post("/transform", async (req, res) => {
       if (invalidCount > 0) console.warn(`[transform] ${invalidCount} invalid rows`);
     }
 
-    // 去重
-    if (dedupe_key.length > 0) {
+    // 去重：dedupe_key=['*'] 按整行去重(SELECT DISTINCT *)，仅去除完全相同的真重复；
+    //       否则按指定字段 DISTINCT ON；dedupe_key=[] 不去重
+    if (dedupe_key.length > 0 && dedupe_key[0] === '*') {
+      await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM temp_raw");
+    } else if (dedupe_key.length > 0) {
       const keyCols = dedupe_key.join(', ');
-      await runQuery(`
-        CREATE OR REPLACE TEMP TABLE deduped AS
-        SELECT DISTINCT ON (${keyCols}) *
-        FROM temp_raw
-        ORDER BY ${keyCols}
-      `);
+      await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT ON (${keyCols}) * FROM temp_raw ORDER BY ${keyCols}`);
     } else {
       await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT * FROM temp_raw");
     }
@@ -401,8 +399,10 @@ app.post("/merge", async (req, res) => {
       await runQuery("CREATE OR REPLACE TEMP TABLE combined AS SELECT * FROM temp_raw");
     }
 
-    // 5. 去重（DISTINCT ON，重叠页/重复行自动合并）
-    if (dedupe_key.length > 0) {
+    // 5. 去重：dedupe_key=['*'] 按整行去重(SELECT DISTINCT *)，仅去除完全相同的真重复
+    if (dedupe_key.length > 0 && dedupe_key[0] === '*') {
+      await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM combined");
+    } else if (dedupe_key.length > 0) {
       const keyCols = dedupe_key.join(', ');
       await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT ON (${keyCols}) * FROM combined ORDER BY ${keyCols}`);
     } else {
