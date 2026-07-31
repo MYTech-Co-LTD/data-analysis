@@ -19,6 +19,8 @@
 
 metric_registry 是文档型真相源（无运行时引擎，视图照实现）。新增以下派生指标（depends_on 链清晰），作为本报表公式的权威定义：
 
+> **2026-07-31 更新**：本措辞被 `2026-07-31-semantic-layer-generator-wiring-design.md` 取代——metric_registry 升级为构建期生成器输入，视图由生成器产出（非手写照实现）。本 spec 的目标/口径修复仍有效，实现改走生成器。
+
 | metric_code | measure_type | formula | depends_on |
 |---|---|---|---|
 | `sale_target` | base | fact_table=target_metric_values, value_column=target_value, agg=SUM (metric_code='sale', 对应分解级) | [] |

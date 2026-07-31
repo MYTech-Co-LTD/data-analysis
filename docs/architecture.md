@@ -1004,6 +1004,18 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 - `report_region_breakdown_v`（091 已修）：delivery/sales 按目标品牌过滤
 - 088 metric_registry 重构后业务视图需同步 patch；generator 生成的 `report_distribution_drill_v`/`report_outbound_drill_v`（口径对）为 Phase 2 下钻报表备用
 
+### 10.10 视图生成器（构建期，2026-07-31）
+
+spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design.md`。回归 07-22 初衷补建构建期生成器（**取代 07-29 的「文档型真相源」措辞**——metric_registry 从"文档型"升级为"构建期生成器输入"）。
+
+- **形态**：Node/TS 脚本 `services/semantic-generator/`，读 `metric_registry`+`metric_sources`+`dimensions`，产出静态视图 SQL 到 `database/generated/`（入 git，可 review 可回滚）。
+- **不做运行时动态引擎**（07-22 已 YAGNI，理由：RLS/security_invoker 兼容、可审计、避免外部重型服务）。
+- **两档能力**：Tier1（base 聚合 + additive derived + 率重算 + cost脱敏 + target join）；Tier2（窗口派生：daily/remaining/profit_rate）。
+- **三层校验**：L1 `validate_semantic_registry()`（静态，阻断部署）/ L2 生成时 EXPLAIN（阻断部署，失败不产文件）/ L3a rollup `_audit` 视图（运行期告警）/ L3b 双轨 SUM diff（阻断旧视图下线）。
+- **部署**：migrate.sh 扫 `database/migrations/*.sql` + `database/generated/*.sql`；`scripts/deploy.sh` 迁移后 `docker compose restart postgrest` 刷 schema 缓存（视图变更生效）。
+- **迁移次序**：配销比 → 品牌表 → 下钻表 → KPI 卡 → 类别表（双轨 diff=0 才切前端、下线旧视图）。
+- **metric_definitions 定位调整**：保留作"目标存储 code 命名空间"（`target_metric_values.metric_code` 已存数据主键，不迁）；与 metric_registry 经 `metric_sources.source_filter` 里 `metric_code='xxx'` 链接。
+
 ### 10.9 商品/客户级聚合层（Phase 2 数据层，2026-07-29）
 
 spec：`docs/superpowers/specs/2026-07-29-report-phase2-data-layer-design.md`。在 §10.5 门店/品类级聚合之上补三层细粒度表，解锁品牌×指标表（品品甜配送）、商品 TOP20、出库下钻、批发客户等 Phase 2 报表板块。商品/客户级数据只在原始明细 parquet 有，**不能从现有 report_daily_* 派生**，必须新聚合。迁移 107（表）+ 108（report_definitions 3 项）。
