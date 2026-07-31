@@ -27,6 +27,15 @@ async function duckdbParquetCount(pathGlob: string): Promise<number> {
   } catch { return 0; }
 }
 
+// DuckDB 查 parquet SUM（对账用：parquet 源 SUM vs compute 表 SUM）
+async function duckdbParquetSum(pathGlob: string, valueCol: string): Promise<number> {
+  try {
+    const r = await fetch(`${DUCKDB_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY }, body: JSON.stringify({ sql: `SELECT COALESCE(round(sum(CAST(${valueCol} AS DECIMAL(14,2))),2),0) AS s FROM read_parquet('s3://lemeng-datasource/${pathGlob}')` }) });
+    const d = await r.json();
+    return d.data?.[0]?.s || 0;
+  } catch { return 0; }
+}
+
 // 调度器状态：用 globalThis 持有，跨 chunk 单例。
 // Next.js 把 instrumentation.ts 与 route handler 打包进不同 chunk，各自有独立模块作用域，
 // 模块级变量不共享 → 会出现「两个 scheduler 实例」导致同一 cron 双触发、防重入锁也跨实例失效。
@@ -80,6 +89,7 @@ export async function ensureSchedulerInitialized(): Promise<boolean> {
 
   // 通讯录全量兜底（平台基础设施，独立于 collect_tasks；先注册，不依赖采集任务查询结果/是否为空）
   registerDailyReconcileJob();
+  registerDailySourceReconcileJob();
   registerContactSyncJob();
   registerCarryDimsJob();
   registerDimCustomerJob();
@@ -778,6 +788,56 @@ function registerDailyReconcileJob() {
   }, { timezone: "Asia/Shanghai" });
   scheduledJobs.set(JOB_KEY, job);
   console.log("[scheduler] 注册每日02:00明细对账 (0 2 * * *, Asia/Shanghai)");
+}
+
+/**
+ * 每日源对账（09:07）：pipeline 表 SUM vs DuckDB parquet SUM，差>1元告警。
+ * 确保 compute 表与 parquet 源精确一致，任何计算/去重 bug 都能自动发现。
+ */
+function registerDailySourceReconcileJob() {
+  const JOB_KEY = "__daily_source_reconcile";
+  if (scheduledJobs.has(JOB_KEY)) return;
+  const CRON = "7 9 * * *";
+  if (!cron.validate(CRON)) return;
+  const job = cron.schedule(CRON, async () => {
+    if (runningTasks.has(JOB_KEY)) return;
+    runningTasks.add(JOB_KEY);
+    try {
+      const yesterday = getDateOffsetChina(-1);
+      const compactDate = yesterday.replace(/-/g, '');
+      const companyId = '3120';
+      console.log(`[scheduler] ⏰ 每日源对账: ${yesterday}`);
+      // [metric, parquetPath, valueCol]
+      const checks = [
+        { metric: 'sales', path: `lemeng/retail_detail/${companyId}/${yesterday}/all.parquet`, col: 'sale_money' },
+        { metric: 'delivery', path: `lemeng/transfer_detail/${companyId}/${compactDate}/all.parquet`, col: 'out_money' },
+        { metric: 'wholesale', path: `lemeng/wholesale_detail/${companyId}/${compactDate}/all.parquet`, col: 'wholesale_money' },
+      ];
+      // 表 SUM（RPC 一次拿全）
+      const rpcRes = await fetch(`${POSTGREST_URL}/rpc/reconcile_table_consistency`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` },
+        body: JSON.stringify({ p_date: yesterday }),
+      });
+      const tableData = await rpcRes.json();
+      const tableSums = new Map<string, number>((tableData || []).map((r: any) => [r.metric, Number(r.table_sum) || 0]));
+      const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
+      const alerts: string[] = [];
+      for (const c of checks) {
+        const parquetSum = await duckdbParquetSum(c.path, c.col);
+        const tableSum = tableSums.get(c.metric) || 0;
+        const diff = Math.round((parquetSum - tableSum) * 100) / 100;
+        const ok = Math.abs(diff) <= 1;
+        await client.database.from('reconcile_daily_results').insert([{ check_date: yesterday, metric: c.metric, table_sum: tableSum, parquet_sum: parquetSum, diff, status: ok ? 'ok' : 'mismatch' }]);
+        if (!ok) alerts.push(`${c.metric}: 表 ${tableSum} / parquet ${parquetSum} / 差 ${diff}`);
+        console.log(`[scheduler] 对账 ${c.metric}: 表=${tableSum} parquet=${parquetSum} 差=${diff} ${ok ? '✅' : '❌'}`);
+      }
+      if (alerts.length) await notifyWecom('⚠️ 每日源对账异常', `**日期**: ${yesterday}\n${alerts.join('\n')}`);
+      else console.log(`[scheduler] ✅ 每日源对账全通过: ${yesterday}`);
+    } catch (e: any) { console.error('[scheduler] 每日源对账异常:', e?.message ?? e); }
+    finally { runningTasks.delete(JOB_KEY); }
+  }, { timezone: 'Asia/Shanghai' });
+  scheduledJobs.set(JOB_KEY, job);
+  console.log('[scheduler] 注册每日源对账 (7 9 * * *, Asia/Shanghai)');
 }
 
 function registerWeeklyReconcileJob() {
