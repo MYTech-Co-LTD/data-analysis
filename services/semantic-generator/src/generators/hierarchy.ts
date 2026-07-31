@@ -71,15 +71,25 @@ export function generateHierarchyView(
   const leaves = collectLeaves(metricCodes, metrics);
 
   // daily 指标识别：derived + formula 含 FILTER(biz_date=latest_day)
-  // → 在其 depends_on[0] 所属 base 的 actual CTE 里额外产 FILTER(latest_day) 聚合列
-  const dailyMap = new Map<string, string>();      // baseMetricCode → dailyMetricCode
+  // → 在其 depends_on[0] 的所有叶 base 的 actual CTE 里产 FILTER(latest_day) 列
+  // daily-of-derived：depends_on[0] 若是 additive derived（如 distribution_amount），
+  //   解析到其全部叶 base（delivery_amount + wholesale_pp_amount），各 CTE 产 FILTER 列，daily 值 = 各列之和
+  const dailyBases = new Map<string, string[]>();   // dailyCode → 依赖的叶 baseCode 列表
+  const dailyFeeds = new Map<string, string[]>();   // dailyCode → 实际产 FILTER 列的 CTE 名列表（leaf_act_N）
   for (const code of metricCodes) {
     const m = metrics.find(x => x.metric_code === code);
     if (!m || m.measure_type !== 'derived') continue;
-    const formula = m.formula ?? '';
-    if (!/FILTER\s*\(\s*biz_date\s*=\s*latest_day\s*\)/i.test(formula)) continue;
-    const baseCode = m.depends_on[0];
-    if (baseCode) dailyMap.set(baseCode, code);
+    if (!/FILTER\s*\(\s*biz_date\s*=\s*latest_day\s*\)/i.test(m.formula ?? '')) continue;
+    const target = m.depends_on[0];
+    const targetMetric = metrics.find(x => x.metric_code === target);
+    let bases: string[] = [];
+    if (targetMetric) {
+      bases = targetMetric.measure_type === 'base'
+        ? [target]
+        : collectLeaves([target], metrics).map(x => x.metric_code);
+    }
+    dailyBases.set(code, bases);
+    dailyFeeds.set(code, []);
   }
 
   // base 叶子按 (source_table, source_filter) 分组；target_metric_values 单独走 target CTE
@@ -118,12 +128,17 @@ export function generateHierarchyView(
       const src = sources.find(s => s.metric_code === m.metric_code)!;
       return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
     });
-    // daily FILTER 列：依附于 base metric 的 actual CTE
+    // daily FILTER 列：遍历 dailyBases，该 base 是某 daily 的依赖叶 → 产 FILTER 列
+    const dailyInThisCte = new Set<string>();
     for (const m of g.metrics) {
-      const dailyCode = dailyMap.get(m.metric_code);
-      if (!dailyCode) continue;
       const src = sources.find(s => s.metric_code === m.metric_code)!;
-      cols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
+      for (const [dc, bases] of dailyBases) {
+        if (bases.includes(m.metric_code) && !dailyInThisCte.has(dc)) {
+          cols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dc}`);
+          dailyInThisCte.add(dc);
+          dailyFeeds.get(dc)!.push(cteName);
+        }
+      }
     }
     const colsStr = cols.join(',\n    ');
 
@@ -146,8 +161,6 @@ export function generateHierarchyView(
 )`);
     for (const m of g.metrics) {
       cteOf.set(m.metric_code, cteName);
-      const dc = dailyMap.get(m.metric_code);
-      if (dc) cteOf.set(dc, cteName);
     }
   }
 
@@ -196,17 +209,28 @@ export function generateHierarchyView(
   });
 
   // 收集所有需 COALESCE 的指标列（actual base + daily + target），保留 metrics 配置顺序
-  const metricCols: { code: string; cte: string }[] = [];
+  // daily 列可能由多个 actual CTE 供数（daily-of-derived），用 ctes 数组记录全部供数 CTE
+  const metricCols: { code: string; ctes: string[]; isDaily: boolean }[] = [];
   const seen = new Set<string>();
   for (const g of actualGroups.values()) {
     for (const m of g.metrics) {
-      if (!seen.has(m.metric_code)) { metricCols.push({ code: m.metric_code, cte: cteOf.get(m.metric_code)! }); seen.add(m.metric_code); }
-      const dc = dailyMap.get(m.metric_code);
-      if (dc && !seen.has(dc)) { metricCols.push({ code: dc, cte: cteOf.get(dc)! }); seen.add(dc); }
+      if (!seen.has(m.metric_code)) {
+        metricCols.push({ code: m.metric_code, ctes: [cteOf.get(m.metric_code)!], isDaily: false });
+        seen.add(m.metric_code);
+      }
+    }
+  }
+  for (const dc of dailyBases.keys()) {
+    if (!seen.has(dc)) {
+      metricCols.push({ code: dc, ctes: dailyFeeds.get(dc)!, isDaily: true });
+      seen.add(dc);
     }
   }
   for (const tl of targetLeaves) {
-    if (!seen.has(tl.metric_code)) { metricCols.push({ code: tl.metric_code, cte: 'leaf_tgt' }); seen.add(tl.metric_code); }
+    if (!seen.has(tl.metric_code)) {
+      metricCols.push({ code: tl.metric_code, ctes: ['leaf_tgt'], isDaily: false });
+      seen.add(tl.metric_code);
+    }
   }
 
   const sel: string[] = [];
@@ -248,8 +272,17 @@ export function generateHierarchyView(
     selOuts.add(col.out);
   }
   for (const mc of metricCols) {
-    const al = cteAlias.get(mc.cte)!;
-    sel.push(`COALESCE(${al}.${mc.code}, 0) AS ${mc.code}`);
+    if (mc.isDaily) {
+      // daily：多 CTE 供数时求和（daily-of-derived，如 daily_delivery = 调拨daily + 批发daily）
+      const alList = mc.ctes.map(cn => cteAlias.get(cn)!);
+      const sumExpr = alList.length > 1
+        ? alList.map(al => `COALESCE(${al}.${mc.code}, 0)`).join(' + ')
+        : `COALESCE(${alList[0]}.${mc.code}, 0)`;
+      sel.push(`${sumExpr} AS ${mc.code}`);
+    } else {
+      const al = cteAlias.get(mc.ctes[0])!;
+      sel.push(`COALESCE(${al}.${mc.code}, 0) AS ${mc.code}`);
+    }
   }
   sel.push(`tgt.total_days`);
   sel.push(`tgt.days_elapsed`);
@@ -281,7 +314,7 @@ export function generateHierarchyView(
     //     target 列不 rollup（父级 target 由 5b 独立 CTE 给）
     const actCteName = `${p.level}_act`;
     const actCols = metricCols
-      .filter(mc => mc.cte !== 'leaf_tgt')
+      .filter(mc => mc.ctes[0] !== 'leaf_tgt')
       .map(mc => `SUM(${mc.code}) AS ${mc.code}`);
     actCols.push('MAX(total_days) AS total_days', 'MAX(days_elapsed) AS days_elapsed');
     cteList.push(`${actCteName} AS (
@@ -377,6 +410,14 @@ function buildFinalSelect(
     return `a.${m.metric_code}`;
   };
 
+  // 操作数引用：base → baseRef；derived → 递归 metricExpr 展开（如 rate 的分子 distribution_amount）
+  const operandRef = (code: string, isLeaf: boolean, hasTgt: boolean): string => {
+    const m = metrics.find(x => x.metric_code === code);
+    if (!m) return code;
+    if (m.measure_type === 'base') return `COALESCE(${baseRef(m, isLeaf, hasTgt)}, 0)`;
+    return `(${metricExpr(m, isLeaf, hasTgt)})`;
+  };
+
   // 单个 metric 在某级 SELECT 的 SQL 表达式（不含 cost 脱敏、不含 alias）
   const metricExpr = (m: Metric, isLeaf: boolean, hasTgt: boolean): string => {
     if (m.measure_type === 'base') {
@@ -385,15 +426,12 @@ function buildFinalSelect(
     const cls = classifyDerived(m);
     if (cls === 'daily') return `COALESCE(a.${m.metric_code}, 0)`;
     if (cls === 'rate') {
-      // formula: A/B（A、B 为 metric_code）
+      // formula: A/B（A、B 为 metric_code，可能本身是 derived 如 distribution_amount）
       const parts = (m.formula ?? '').split('/').map(s => s.trim());
       if (parts.length === 2) {
-        const [aCode, bCode] = parts;
-        const aM = metrics.find(x => x.metric_code === aCode);
-        const bM = metrics.find(x => x.metric_code === bCode);
-        const aRef = aM ? baseRef(aM, isLeaf, hasTgt) : aCode;
-        const bRef = bM ? baseRef(bM, isLeaf, hasTgt) : bCode;
-        return `round(COALESCE(${aRef}, 0) / NULLIF(COALESCE(${bRef}, 0), 0), 4)`;
+        const aRef = operandRef(parts[0], isLeaf, hasTgt);
+        const bRef = operandRef(parts[1], isLeaf, hasTgt);
+        return `round(${aRef} / NULLIF(${bRef}, 0), 4)`;
       }
       return 'NULL';
     }
@@ -410,13 +448,11 @@ function buildFinalSelect(
       const numTokens = numPart.split('-');
       const denTokens = denCore.split('-');
       if (numTokens.length === 2 && denTokens.length === 2) {
-        const tM = metrics.find(x => x.metric_code === numTokens[0]);
-        const aM = metrics.find(x => x.metric_code === numTokens[1]);
-        const tRef = tM ? baseRef(tM, isLeaf, hasTgt) : numTokens[0];
-        const aRef = aM ? baseRef(aM, isLeaf, hasTgt) : numTokens[1];
+        const tRef = operandRef(numTokens[0], isLeaf, hasTgt);
+        const aRef = operandRef(numTokens[1], isLeaf, hasTgt);
         const tdRef = `a.${denTokens[0]}`;
         const deRef = `a.${denTokens[1]}`;
-        return `round((COALESCE(${tRef}, 0) - COALESCE(${aRef}, 0)) / NULLIF(COALESCE(${tdRef}, 0) - COALESCE(${deRef}, 0), 0), 2)`;
+        return `round((${tRef} - ${aRef}) / NULLIF(COALESCE(${tdRef}, 0) - COALESCE(${deRef}, 0), 0), 2)`;
       }
       return 'NULL';
     }

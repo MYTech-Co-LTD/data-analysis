@@ -59,10 +59,10 @@ export const regionBreakdownView: ViewConfig = {
     'sale_target',
     'sale_rate',
     'daily_sale',
-    'delivery_amount',      // → delivery_actual（alias）
+    'distribution_amount',  // → delivery_actual（alias；配送=调拨+品品甜批发，对齐120）
     'delivery_target',
-    'delivery_rate',
-    'daily_delivery',
+    'delivery_rate',        // = distribution_amount / delivery_target（127 已改 distribution 口径）
+    'daily_delivery',       // = distribution_amount FILTER(latest_day)（127 已改）
     'remaining_daily_sale',       // → remaining_daily_sale_target（alias）
     'remaining_daily_delivery',   // → remaining_daily_delivery_target（alias）
   ],
@@ -72,7 +72,7 @@ export const regionBreakdownView: ViewConfig = {
   scope: { target_window: true, assessed_war_zone: true },
   aliases: {
     sale_amount: 'sale_actual',
-    delivery_amount: 'delivery_actual',
+    distribution_amount: 'delivery_actual',
     remaining_daily_sale: 'remaining_daily_sale_target',
     remaining_daily_delivery: 'remaining_daily_delivery_target',
   },
