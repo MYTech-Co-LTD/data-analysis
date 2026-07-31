@@ -100,6 +100,22 @@ export function generateTier1View(
 
   const leaves = collectLeaves(metricCodes, metrics);
 
+  // 识别 daily 指标：selected derived，formula 含 FILTER(biz_date=latest_day)
+  // → 在 depends_on[0] 所属 base 的 actual CTE 里额外产 FILTER(latest_day) 聚合列
+  // dailyMap: baseMetricCode → dailyMetricCode；dailyCodes 用于 SELECT 阶段按 base 引用
+  const dailyMap = new Map<string, string>();
+  const dailyCodes = new Set<string>();
+  for (const code of metricCodes) {
+    const m = metrics.find(x => x.metric_code === code);
+    if (!m || m.measure_type !== 'derived') continue;
+    const formula = m.formula ?? '';
+    if (!/FILTER\s*\(\s*biz_date\s*=\s*latest_day\s*\)/i.test(formula)) continue;
+    const baseCode = m.depends_on[0];
+    if (!baseCode) continue;
+    dailyMap.set(baseCode, m.metric_code);
+    dailyCodes.add(m.metric_code);
+  }
+
   // base 叶子按 (source_table, source_filter) 分组
   // target_metric_values 单独走 target CTE，不进 actual CTE
   const actualGroups = new Map<string, { table: string; filter: string | null; metrics: Metric[] }>();
@@ -137,7 +153,17 @@ export function generateTier1View(
     const cols = g.metrics.map(m => {
       const src = sources.find(s => s.metric_code === m.metric_code)!;
       return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
-    }).join(',\n    ');
+    });
+    // daily FILTER 列：仅 useTargetWindow 时（无窗口则无 tgt.latest_day，跳过避免无效 SQL）
+    if (useTargetWindow) {
+      for (const m of g.metrics) {
+        const dailyCode = dailyMap.get(m.metric_code);
+        if (!dailyCode) continue;
+        const src = sources.find(s => s.metric_code === m.metric_code)!;
+        cols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
+      }
+    }
+    const colsStr = cols.join(',\n    ');
 
     const joins: string[] = [];
     let selectDims = `s.${dimKey}`;
@@ -159,11 +185,15 @@ export function generateTier1View(
     const whereClause = where.length ? `\n  WHERE ${where.join(' AND ')}` : '';
     cteList.push(`${cteName} AS (
   SELECT ${selectDims},
-    ${cols}
+    ${colsStr}
   FROM ${g.table} s${joins.length ? '\n  ' + joins.join('\n  ') : ''}${whereClause}
   GROUP BY ${groupDims}
 )`);
-    for (const m of g.metrics) cteOf.set(m.metric_code, cteName);
+    for (const m of g.metrics) {
+      cteOf.set(m.metric_code, cteName);
+      const dailyCode = dailyMap.get(m.metric_code);
+      if (dailyCode) cteOf.set(dailyCode, cteName);
+    }
   }
 
   // target base CTE（target_metric_values）
@@ -204,10 +234,12 @@ export function generateTier1View(
   for (const code of metricCodes) {
     const m = metrics.find(x => x.metric_code === code);
     if (!m) continue;
-    const expr = m.measure_type === 'base' ? baseRef(m, ctx) : metricRef(m, ctx);
-    const masked = m.measure_type === 'base' ? expr : maskCost(expr, m);
+    // daily 指标已在 actual CTE 聚合，SELECT 阶段像 base 一样直接引用 cte 列
+    const treatAsBase = m.measure_type === 'base' || dailyCodes.has(code);
+    const expr = treatAsBase ? baseRef(m, ctx) : metricRef(m, ctx);
+    const masked = treatAsBase ? expr : maskCost(expr, m);
     // base 的 cost 脱敏
-    const finalExpr = m.measure_type === 'base' && m.cost_sensitive ? maskCost(expr, m) : masked;
+    const finalExpr = treatAsBase && m.cost_sensitive ? maskCost(expr, m) : masked;
     const outName = aliases?.[code] ?? code;
     sel.push(`${finalExpr} AS ${outName}`);
   }

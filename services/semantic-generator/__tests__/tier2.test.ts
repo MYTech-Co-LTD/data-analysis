@@ -23,4 +23,46 @@ describe('Tier2 window context', () => {
     expect(sql).toContain('latest_day');
     expect(sql).toContain('GREATEST(LEAST(current_date');
   });
+
+  it('daily 指标 → base CTE 加 FILTER(latest_day) 聚合列', () => {
+    const dailyMetric: Metric = {
+      ...baseMetric('daily_sale', 'total_sale'),
+      measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+      formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'],
+      additive: true,
+    };
+    const config: ViewConfig = {
+      view_name: 'v_test', metrics: ['sale_amount', 'daily_sale'], dim_code: 'brand',
+      levels: [], target_metric_codes: [],
+      scope: { target_window: true, assessed_war_zone: false },
+    };
+    const sql = generateTier1View(config,
+      [baseMetric('sale_amount', 'total_sale'), dailyMetric],
+      [{ metric_code: 'sale_amount', source_table: 'report_daily_sales', source_column: 'total_sale', source_filter: null, note: null }]);
+    // base CTE 多一列用 FILTER 聚合到 latest_day
+    expect(sql).toContain('FILTER (WHERE s.biz_date = tgt.latest_day)');
+    expect(sql).toContain('AS daily_sale');
+    // SELECT 阶段 daily 指标像 base 一样直接引用 cte 列（不走 formula 展开）
+    expect(sql).not.toContain('FILTER(biz_date=latest_day)');
+    expect(sql).toMatch(/cte\d+\.daily_sale AS daily_sale/);
+  });
+
+  it('daily 指标在无 target_window 场景跳过 FILTER 列（无 latest_day）', () => {
+    const dailyMetric: Metric = {
+      ...baseMetric('daily_sale', 'total_sale'),
+      measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+      formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'],
+      additive: true,
+    };
+    const config: ViewConfig = {
+      view_name: 'v_test', metrics: ['sale_amount', 'daily_sale'], dim_code: 'brand',
+      levels: [], target_metric_codes: [],
+      scope: { target_window: false, assessed_war_zone: false },
+    };
+    const sql = generateTier1View(config,
+      [baseMetric('sale_amount', 'total_sale'), dailyMetric],
+      [{ metric_code: 'sale_amount', source_table: 'report_daily_sales', source_column: 'total_sale', source_filter: null, note: null }]);
+    // 无窗口时不该产出 FILTER(latest_day) 列
+    expect(sql).not.toContain('tgt.latest_day');
+  });
 });
