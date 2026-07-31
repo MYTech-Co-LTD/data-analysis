@@ -74,7 +74,7 @@ async function reconcileTrailingDays(
     const api = await apiCount(d);
     if (api <= 0) continue; // 该天 API 无数据（节假日/未来日），跳过
     const lib = await libCount(d);
-    if (lib < api) return d;
+    if (lib !== api) return d; // 少了=漏采 OR 多了=stale/退货 → full 重采
   }
   return null;
 }
