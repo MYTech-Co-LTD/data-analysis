@@ -33,4 +33,19 @@ for sql in "$MIGRATIONS_DIR"/*.sql; do
     -U "$PGUSER" -d "$PGDB" -f "/migrations/$name"
 done
 shopt -u nullglob
+
+# 生成器产物（services/semantic-generator 产出，DROP+CREATE 幂等）
+GENERATED_DIR="$ROOT/database/generated"
+if [ -d "$GENERATED_DIR" ]; then
+  echo "▶ 执行生成器产物（${GENERATED_DIR}）..."
+  shopt -s nullglob
+  for sql in "$GENERATED_DIR"/*.sql; do
+    name="$(basename "$sql")"
+    echo "  · $name"
+    docker compose exec -T postgres psql -v ON_ERROR_STOP=1 \
+      -U "$PGUSER" -d "$PGDB" -f "/generated/$name"
+  done
+  shopt -u nullglob
+fi
+
 echo "✅ 迁移完成"
