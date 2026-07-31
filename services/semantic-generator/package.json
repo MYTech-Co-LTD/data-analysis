@@ -1,0 +1,23 @@
+{
+  "name": "semantic-generator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "构建期视图生成器：读 metric_registry+metric_sources 产出静态视图 SQL",
+  "type": "module",
+  "scripts": {
+    "gen-views": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "pg": "^8.13.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/pg": "^8.11.0",
+    "@types/node": "^22.0.0"
+  }
+}
