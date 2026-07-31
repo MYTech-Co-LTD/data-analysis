@@ -209,7 +209,19 @@ export async function collectWholesaleOnce(
   // 落 Parquet：full 用 /transform 覆盖；incremental 用 /merge
   if (result.records.length > 0) {
     try {
-      const flat = flattenRecords(result.records);
+      const flatRaw = flattenRecords(result.records);
+      // 去重：lemeng wholesale API 分页故障会重复返回同一条业务记录（每次生成新 id），
+      // 按【除 id 外全部字段】去重——id 是 lemeng 侧每次请求新生成的行 id，非业务键
+      const seen = new Set<string>();
+      const flat = flatRaw.filter(r => {
+        const key = JSON.stringify(r, (k, v) => (k === 'id' ? undefined : v));
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (flat.length < flatRaw.length) {
+        console.warn(`[collect-wholesale] 去重: ${flatRaw.length} → ${flat.length}（移除 ${flatRaw.length - flat.length} 条 lemeng 分页重复）`);
+      }
       const dateStr = dateFrom.slice(0, 10).replace(/-/g, '');
       const isInc = mode === 'incremental';
       const endpoint = isInc ? '/merge' : '/transform';
