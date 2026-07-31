@@ -1,5 +1,6 @@
 // web/lib/report-center/brand-metric.ts
-// 品牌×指标表数据获取（report_brand_metric_v，3 行：熊喵/品品甜/合计）
+// 品牌×指标表数据获取（report_brand_metric_gen，3 行：熊喵/品品甜/合计）
+// P1: 切换到语义层生成器产物（口径源自 metric_registry，双轨 diff=0 已验证）
 import { getClient } from "@/lib/api";
 
 export interface BrandMetricRow {
@@ -19,7 +20,7 @@ export async function getBrandMetric(
 ): Promise<BrandMetricRow[]> {
   const client = await getClient();
   const { data, error } = await client.database
-    .from("report_brand_metric_v")
+    .from("report_brand_metric_gen")
     .select("*")
     .eq("target_id", targetId)
     .order("system_book_code", { ascending: true }); // 3120, 64188, 合计
