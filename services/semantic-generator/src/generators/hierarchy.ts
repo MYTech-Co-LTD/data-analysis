@@ -285,10 +285,10 @@ export function generateHierarchyView(
       .map(mc => `SUM(${mc.code}) AS ${mc.code}`);
     actCols.push('MAX(total_days) AS total_days', 'MAX(days_elapsed) AS days_elapsed');
     cteList.push(`${actCteName} AS (
-  SELECT tgt.target_id, ${pgrain.join(', ')},
+  SELECT target_id, ${pgrain.join(', ')},
     ${actCols.join(',\n    ')}
   FROM leaf_rows
-  GROUP BY tgt.target_id, ${pgrain.join(', ')}
+  GROUP BY target_id, ${pgrain.join(', ')}
 )`);
 
     // 5b. 父级 target CTE：target_metric_values 按 p.target_breakdown 聚合
@@ -398,13 +398,17 @@ function buildFinalSelect(
       return 'NULL';
     }
     if (cls === 'remaining') {
-      // formula 形如 (T-A)/(total_days-days_elapsed)
+      // formula 形如 (T-A)/(total_days-days_elapsed) 或 (T-A)/nullif(total_days-days_elapsed, 0)
+      //   分母 nullif 防除零——与 120 CASE WHEN total_days>days_elapsed 等价
       const f = (m.formula ?? '').replace(/\s/g, '');
-      const match = f.match(/^\(([^()]+)\)\/\(([^()]+)\)$/);
+      const match = f.match(/^\(([^()]+)\)\/(?:nullif\(([^()]+)\)|\(([^()]+)\))$/);
       if (!match) return 'NULL';
-      const [, numPart, denPart] = match;
+      const [, numPart, denNullifPart, denParenPart] = match;
+      const denPart = denNullifPart ?? denParenPart;
+      // nullif 形态分母含 ",0" 尾巴（如 total_days-days_elapsed,0）→ 取逗号前
+      const denCore = denPart.split(',')[0];
       const numTokens = numPart.split('-');
-      const denTokens = denPart.split('-');
+      const denTokens = denCore.split('-');
       if (numTokens.length === 2 && denTokens.length === 2) {
         const tM = metrics.find(x => x.metric_code === numTokens[0]);
         const aM = metrics.find(x => x.metric_code === numTokens[1]);

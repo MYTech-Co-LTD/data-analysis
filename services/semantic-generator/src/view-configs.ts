@@ -31,3 +31,96 @@ export const brandMetricView: ViewConfig = {
     distribution_margin: 'delivery_margin',
   },
 };
+
+/**
+ * 门店下钻视图配置（对应 report_region_breakdown_v 120）
+ * 三级层级：region(战区) → sub_region(二级区域) → store(门店)
+ *
+ * 口径对齐 120：
+ * - targets 表按 breakdown_level 分解（store/region_l2/war_zone）给各级 target
+ * - actual 从叶级 store 聚合后 rollup 到父级（SUM additive + MAX 窗口）
+ * - rate/remaining 非累加，在 final SELECT 重算（不 SUM）
+ *
+ * 关键：dim_branch 列为 first_level_region/second_level_region（非 war_zone/region_l2），
+ *   故 leaf.columns 的 expr 必须用 dim_branch 真实列名；同时通过 out='war_zone'/'region_l2'
+ *   暴露桥接列供父级 rollup GROUP BY（targets 表列名）。前端列名（region_code 等）
+ *   通过同 column 的另一 out 暴露。
+ *
+ * 输出列对齐前端 RegionBreakdownRow（web/lib/report-center/region-breakdown.ts）：
+ *   target_id, level, parent_code, region_code, region_name, sub_region_code, sub_region_name,
+ *   branch_num, branch_name, sale_target, sale_actual, sale_rate, delivery_target, delivery_actual,
+ *   delivery_rate, daily_sale, daily_delivery, remaining_daily_sale_target, remaining_daily_delivery_target.
+ *   另含 war_zone/region_l2 两列 rollup 桥接（前端忽略，不破坏 interface 断言）。
+ */
+export const regionBreakdownView: ViewConfig = {
+  view_name: 'report_region_breakdown_gen',
+  metrics: [
+    'sale_amount',          // → sale_actual（alias）
+    'sale_target',
+    'sale_rate',
+    'daily_sale',
+    'delivery_amount',      // → delivery_actual（alias）
+    'delivery_target',
+    'delivery_rate',
+    'daily_delivery',
+    'remaining_daily_sale',       // → remaining_daily_sale_target（alias）
+    'remaining_daily_delivery',   // → remaining_daily_delivery_target（alias）
+  ],
+  dim_code: 'branch',
+  levels: ['store', 'sub_region', 'region'],
+  target_metric_codes: ['sale_target', 'delivery_target'],
+  scope: { target_window: true, assessed_war_zone: true },
+  aliases: {
+    sale_amount: 'sale_actual',
+    delivery_amount: 'delivery_actual',
+    remaining_daily_sale: 'remaining_daily_sale_target',
+    remaining_daily_delivery: 'remaining_daily_delivery_target',
+  },
+  hierarchy: [
+    {
+      level: 'region',
+      grain: ['war_zone'],
+      target_breakdown: 'war_zone',
+      rollup_from: 'store',
+      is_leaf: false,
+      parent_expr: null,        // 顶级：parent_code = NULL（照 120 wz_rows）
+      columns: [
+        { out: 'region_code', expr: 'war_zone' },
+        { out: 'region_name', expr: 'war_zone' },
+      ],
+    },
+    {
+      level: 'sub_region',
+      grain: ['war_zone', 'region_l2'],
+      target_breakdown: 'region_l2',
+      rollup_from: 'store',
+      is_leaf: false,
+      parent_expr: 'war_zone',
+      columns: [
+        { out: 'region_code', expr: 'war_zone' },
+        { out: 'region_name', expr: 'war_zone' },
+        { out: 'sub_region_code', expr: 'region_l2' },
+        { out: 'sub_region_name', expr: 'region_l2' },
+      ],
+    },
+    {
+      level: 'store',
+      grain: ['system_book_code', 'branch_num'],   // 复合门店键
+      target_breakdown: 'store',
+      is_leaf: true,
+      parent_expr: 'region_l2',
+      columns: [
+        // 前端输出列（expr = dim_branch 真实列名）
+        { out: 'region_code', expr: 'first_level_region' },
+        { out: 'region_name', expr: 'first_level_region' },
+        { out: 'sub_region_code', expr: 'second_level_region' },
+        { out: 'sub_region_name', expr: 'second_level_region' },
+        { out: 'branch_num', expr: 'branch_num' },
+        { out: 'branch_name', expr: 'branch_name' },
+        // rollup 桥接列：父级 grain GROUP BY 依赖（out = targets 表列名）
+        { out: 'war_zone', expr: 'first_level_region' },
+        { out: 'region_l2', expr: 'second_level_region' },
+      ],
+    },
+  ],
+};

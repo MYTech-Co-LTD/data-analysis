@@ -1,7 +1,10 @@
 DROP VIEW IF EXISTS report_brand_metric_gen;
 CREATE VIEW report_brand_metric_gen AS
 WITH tgt AS (
-  SELECT id AS target_id, start_date, end_date
+  SELECT id AS target_id, start_date, end_date,
+    (end_date - start_date + 1) AS total_days,
+    GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
+    LEAST(current_date, end_date) AS latest_day
   FROM targets WHERE target_level='total' AND status='active'
 ),
 cte0 AS (

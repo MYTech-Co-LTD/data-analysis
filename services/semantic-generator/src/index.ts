@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { readRegistry } from './registry-reader.js';
 import { generateTier1View } from './generators/tier1.js';
+import { generateHierarchyView } from './generators/hierarchy.js';
 import { explainSql } from './explain.js';
 import type { ViewConfig } from './types.js';
 
@@ -29,7 +30,10 @@ export async function runGenerator(opts: GenOpts): Promise<GenResult> {
 
   for (const config of opts.viewConfigs) {
     try {
-      const sql = generateTier1View(config, metrics, sources);
+      // hierarchy config → 多级 UNION ALL 视图（下钻表）；否则 Tier1 单级
+      const sql = config.hierarchy
+        ? generateHierarchyView(config, metrics, sources)
+        : generateTier1View(config, metrics, sources);
 
       // L2 EXPLAIN：先建视图再 EXPLAIN SELECT
       try {
@@ -67,8 +71,8 @@ async function main() {
   try {
     const client = await pool.connect();
     try {
-      const { brandMetricView } = await import('./view-configs.js');
-      const r = await runGenerator({ client, viewConfigs: [brandMetricView], outDir: '../../database/generated' });
+      const { brandMetricView, regionBreakdownView } = await import('./view-configs.js');
+      const r = await runGenerator({ client, viewConfigs: [brandMetricView, regionBreakdownView], outDir: '../../database/generated' });
       console.log(`✅ 生成器完成：产出 ${r.produced.length} 个视图，EXPLAIN 失败 ${r.explainFailures.length} 个`);
       if (r.produced.length) console.log('  产出:', r.produced.join(', '));
       if (r.explainFailures.length) {
