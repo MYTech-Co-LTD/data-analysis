@@ -1,6 +1,13 @@
 // 配销比 = 配送 / 销售。派生值，不落库。
-// 目标配销比用目标值；配销比达成率 = 实际配销比 / 目标配销比。
+// 实际配销比用实际值；目标配销比用目标值；配销比达成率 = 实际配销比 / 目标配销比。
 
+// 实际配销比 = 配送金额 / 销售金额
+export function actualRatio(deliveryActual: number, saleActual: number): number | null {
+  if (!saleActual) return null;
+  return deliveryActual / saleActual;
+}
+
+// 目标配销比 = 配送目标 / 销售目标
 export function targetRatio(deliveryTarget: number, saleTarget: number): number | null {
   if (!saleTarget) return null;
   return deliveryTarget / saleTarget;

@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { targetRatio, ratioAchievement, formatRatio } from '../ratio';
+import { actualRatio, targetRatio, ratioAchievement, formatRatio } from '../ratio';
+
+describe('actualRatio', () => {
+  it('正常 = 配送/销售', () => {
+    expect(actualRatio(2000, 5000)).toBeCloseTo(0.4);
+  });
+  it('销售为 0 返回 null（除零）', () => {
+    expect(actualRatio(2000, 0)).toBeNull();
+  });
+  it('配送为 0 返回 0', () => {
+    expect(actualRatio(0, 5000)).toBe(0);
+  });
+});
 
 describe('targetRatio', () => {
   it('正常比值', () => {
