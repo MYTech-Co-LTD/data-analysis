@@ -1,5 +1,6 @@
 // web/lib/report-center/region-breakdown.ts
 // 门店零售/配送数据报表下钻数据获取
+// P2: 切换到语义层生成器产物（口径源自 metric_registry，三级层级生成器产出，双轨 diff=0 已验证）
 import { getClient } from "@/lib/api";
 
 export interface RegionBreakdownRow {
@@ -30,7 +31,7 @@ export async function getRegionBreakdown(
   const client = await getClient();
 
   const { data, error } = await client.database
-    .from("report_region_breakdown_v")
+    .from("report_region_breakdown_gen")
     .select("*")
     .eq("target_id", targetId)
     .order("sale_rate", { ascending: false, nullsFirst: false });
