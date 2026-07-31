@@ -15,7 +15,10 @@ import { Metric, MetricSource, ViewConfig } from '../types';
  *   UNION ALL 合计行
  */
 
-type Ctx = { metrics: Metric[]; sources: MetricSource[]; cteOf: Map<string, string> };
+type Ctx = { metrics: Metric[]; sources: MetricSource[]; cteOf: Map<string, string>; useTargetWindow?: boolean };
+
+/** tgt 窗口列集合：formula 里这些 token 在 useTargetWindow 时需写成 tgt.<col> */
+const WINDOW_COLS = ['total_days', 'days_elapsed', 'latest_day'];
 
 function baseRef(metric: Metric, ctx: Ctx): string {
   const cte = ctx.cteOf.get(metric.metric_code);
@@ -30,6 +33,11 @@ function expandAdditive(metric: Metric, ctx: Ctx): string {
     if (!depMetric) continue;
     const depExpr = metricRef(depMetric, ctx);
     expr = expr.replace(new RegExp(`\\b${dep}\\b`, 'g'), `COALESCE(${depExpr}, 0)`);
+  }
+  // 窗口列（total_days/days_elapsed/latest_day）在 tgt CTE 里 → 仅 useTargetWindow 时前缀 tgt.
+  // 其它非 metric_code token（nullif/数字/current_date 等）原样保留
+  if (ctx.useTargetWindow) {
+    expr = expr.replace(new RegExp(`\\b(${WINDOW_COLS.join('|')})\\b`, 'g'), 'tgt.$1');
   }
   return expr;
 }
@@ -216,7 +224,7 @@ export function generateTier1View(
   }
 
   // 组装 main SELECT
-  const ctx: Ctx = { metrics, sources, cteOf };
+  const ctx: Ctx = { metrics, sources, cteOf, useTargetWindow };
   const sel: string[] = [];
 
   // 维度列

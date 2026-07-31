@@ -47,6 +47,67 @@ describe('Tier2 window context', () => {
     expect(sql).toMatch(/cte\d+\.daily_sale AS daily_sale/);
   });
 
+  it('remaining_daily 指标 → 引用 tgt.total_days/days_elapsed，nullif 原样保留', () => {
+    const saleTarget: Metric = {
+      ...baseMetric('sale_target', 'target_value'),
+      fact_table: null,
+    };
+    const remMetric: Metric = {
+      ...baseMetric('remaining_daily_sale', ''),
+      measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+      formula: '(sale_target - sale_amount) / nullif(total_days - days_elapsed, 0)',
+      depends_on: ['sale_target', 'sale_amount'], additive: true,
+    };
+    const config: ViewConfig = {
+      view_name: 'v_test', metrics: ['sale_amount', 'sale_target', 'remaining_daily_sale'],
+      dim_code: 'brand', levels: [], target_metric_codes: [],
+      scope: { target_window: true, assessed_war_zone: false },
+    };
+    const sql = generateTier1View(config,
+      [baseMetric('sale_amount', 'total_sale'), saleTarget, remMetric],
+      [
+        { metric_code: 'sale_amount', source_table: 'report_daily_sales', source_column: 'total_sale', source_filter: null, note: null },
+        { metric_code: 'sale_target', source_table: 'target_metric_values', source_column: 'target_value', source_filter: "metric_code='sale'", note: null },
+      ]);
+    // 窗口列必须以 tgt. 前缀出现（在 tgt CTE 里）
+    expect(sql).toContain('tgt.total_days');
+    expect(sql).toContain('tgt.days_elapsed');
+    // nullif / 数字 0 原样保留
+    expect(sql).toContain('nullif(');
+    // 不该出现裸 total_days（即 nullif(total_days 这种）
+    expect(sql).not.toContain('nullif(total_days');
+    expect(sql).not.toContain('- total_days');
+    // 输出列存在
+    expect(sql).toContain('AS remaining_daily_sale');
+  });
+
+  it('remaining_daily 无 target_window 时窗口列原样保留（不前缀 tgt.）', () => {
+    const saleTarget: Metric = {
+      ...baseMetric('sale_target', 'target_value'),
+      fact_table: null,
+    };
+    const remMetric: Metric = {
+      ...baseMetric('remaining_daily_sale', ''),
+      measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+      formula: '(sale_target - sale_amount) / nullif(total_days - days_elapsed, 0)',
+      depends_on: ['sale_target', 'sale_amount'], additive: true,
+    };
+    const config: ViewConfig = {
+      view_name: 'v_test', metrics: ['sale_amount', 'sale_target', 'remaining_daily_sale'],
+      dim_code: 'brand', levels: [], target_metric_codes: [],
+      scope: { target_window: false, assessed_war_zone: false },
+    };
+    const sql = generateTier1View(config,
+      [baseMetric('sale_amount', 'total_sale'), saleTarget, remMetric],
+      [
+        { metric_code: 'sale_amount', source_table: 'report_daily_sales', source_column: 'total_sale', source_filter: null, note: null },
+        { metric_code: 'sale_target', source_table: 'target_metric_values', source_column: 'target_value', source_filter: "metric_code='sale'", note: null },
+      ]);
+    // 无窗口不应注入 tgt. 前缀
+    expect(sql).not.toContain('tgt.total_days');
+    expect(sql).not.toContain('tgt.days_elapsed');
+  });
+
   it('daily 指标在无 target_window 场景跳过 FILTER 列（无 latest_day）', () => {
     const dailyMetric: Metric = {
       ...baseMetric('daily_sale', 'total_sale'),
