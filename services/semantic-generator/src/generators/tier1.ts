@@ -119,10 +119,13 @@ export function generateTier1View(
   const cteList: string[] = [];
   const cteOf = new Map<string, string>();
 
-  // tgt CTE（目标窗口）
+  // tgt CTE（目标窗口 + 窗口列 total_days/days_elapsed/latest_day，照手写视图 120 口径）
   if (useTargetWindow) {
     cteList.push(`tgt AS (
-  SELECT id AS target_id, start_date, end_date
+  SELECT id AS target_id, start_date, end_date,
+    (end_date - start_date + 1) AS total_days,
+    GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
+    LEAST(current_date, end_date) AS latest_day
   FROM targets WHERE target_level='total' AND status='active'
 )`);
   }
