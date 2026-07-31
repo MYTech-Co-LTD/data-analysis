@@ -29,6 +29,16 @@ export interface MetricSource {
   note: string | null;
 }
 
+// 维度层级：生成器按 hierarchy 配置产出多级 UNION ALL 视图（照手写视图 120 三级结构）
+export interface HierarchyLevel {
+  level: string;                // 'store' | 'sub_region' | 'region'
+  grain: string[];              // 该级分组键，如 ['system_book_code','branch_num']（store 级必含复合门店键）
+  target_breakdown: string;     // target_metric_values 的 breakdown_level，如 'store' | 'region_l2' | 'war_zone'
+  rollup_from?: string;         // 父级 actual 从哪级 rollup（叶级无；父级如 'store'）
+  is_leaf: boolean;
+  columns: { out: string; expr: string }[]; // 输出维度列映射（如 {out:'war_zone', expr:'first_level_region'}）
+}
+
 // 视图配置：生成器按配置产出 report_*_gen.sql。P0 无配置（空跑），P1 起填充。
 export interface ViewScope {
   target_window: boolean;       // true: base 数据按 active total target 的日期窗口过滤
@@ -45,4 +55,5 @@ export interface ViewConfig {
   total_row?: boolean;          // true: 末尾 UNION ALL 合计行（SUM rollup）
   dim_table?: string | null;    // 维度维表（如 dim_brand）cross-join 保证空品牌也出现
   aliases?: Record<string, string>; // metric_code → 输出列名（如 distribution_amount→delivery_amount）
+  hierarchy?: HierarchyLevel[]; // 维度层级（存在时走 generateHierarchyView，产多级 UNION ALL 视图）
 }
