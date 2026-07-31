@@ -436,14 +436,16 @@ function buildFinalSelect(
       return 'NULL';
     }
     if (cls === 'remaining') {
-      // formula 形如 (T-A)/(total_days-days_elapsed) 或 (T-A)/nullif(total_days-days_elapsed, 0)
-      //   分母 nullif 防除零——与 120 CASE WHEN total_days>days_elapsed 等价
+      // formula 形如 (T-A)/(total_days-days_elapsed)、(T-A)/nullif(total_days-days_elapsed, 0)
+      //   或 (T-A)/greatest(total_days-days_elapsed, 1)
+      //   nullif 分母：NULLIF 防除零——与 120 CASE WHEN total_days>days_elapsed 等价
+      //   greatest 分母：剩余天数下限 1，月末最后一天显示剩余缺口全额（129 口径）
       const f = (m.formula ?? '').replace(/\s/g, '');
-      const match = f.match(/^\(([^()]+)\)\/(?:nullif\(([^()]+)\)|\(([^()]+)\))$/);
+      const match = f.match(/^\(([^()]+)\)\/(?:(nullif|greatest)\(([^()]+)\)|\(([^()]+)\))$/);
       if (!match) return 'NULL';
-      const [, numPart, denNullifPart, denParenPart] = match;
-      const denPart = denNullifPart ?? denParenPart;
-      // nullif 形态分母含 ",0" 尾巴（如 total_days-days_elapsed,0）→ 取逗号前
+      const [, numPart, wrapper, denWrappedPart, denParenPart] = match;
+      const denPart = denWrappedPart ?? denParenPart;
+      // 包装形态分母含 ",0"/",1" 尾巴（如 total_days-days_elapsed,0）→ 取逗号前
       const denCore = denPart.split(',')[0];
       const numTokens = numPart.split('-');
       const denTokens = denCore.split('-');
@@ -452,7 +454,9 @@ function buildFinalSelect(
         const aRef = operandRef(numTokens[1], isLeaf, hasTgt);
         const tdRef = `a.${denTokens[0]}`;
         const deRef = `a.${denTokens[1]}`;
-        return `round((${tRef} - ${aRef}) / NULLIF(COALESCE(${tdRef}, 0) - COALESCE(${deRef}, 0), 0), 2)`;
+        const diff = `COALESCE(${tdRef}, 0) - COALESCE(${deRef}, 0)`;
+        const den = wrapper === 'greatest' ? `GREATEST(${diff}, 1)` : `NULLIF(${diff}, 0)`;
+        return `round((${tRef} - ${aRef}) / ${den}, 2)`;
       }
       return 'NULL';
     }

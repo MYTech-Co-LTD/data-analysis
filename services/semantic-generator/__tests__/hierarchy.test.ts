@@ -382,7 +382,7 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
   const dailySaleM = derivedMetric('daily_sale', 'sale_amount FILTER(biz_date=latest_day)', ['sale_amount'], true);
   const remainingSaleM = derivedMetric(
     'remaining_daily_sale_target',
-    '(sale_target-sale_amount)/(total_days-days_elapsed)',
+    '(sale_target - sale_amount) / greatest(total_days - days_elapsed, 1)',
     ['sale_target', 'sale_amount'],
   );
 
@@ -506,7 +506,7 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
     expect(sql).toContain('AS sale_rate');
   });
 
-  it('remaining 指标：(target-actual)/nullif(total_days-days_elapsed,0)，含 total_days', () => {
+  it('remaining 指标：greatest 分母 → (target-actual)/GREATEST(total_days-days_elapsed,1)（月末最后一天按 1 天算）', () => {
     const config = baseConfig(
       [saleM, saleTargetM, remainingSaleM], [saleSrc, {
         metric_code: 'sale_target', source_table: 'target_metric_values',
@@ -524,8 +524,32 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
     expect(sql).toContain('a.days_elapsed');
     // 输出列名
     expect(sql).toContain('AS remaining_daily_sale_target');
+    // greatest 分母 → GREATEST(diff, 1)，月末剩余 0 天不再 NULL
+    expect(sql).toMatch(/GREATEST\(COALESCE\(a\.total_days, 0\) - COALESCE\(a\.days_elapsed, 0\), 1\)/);
     // round(...,2) 对齐 120 行 138-139
     expect(sql).toMatch(/round\([\s\S]*,\s*2\)/);
+  });
+
+  it('remaining 指标：nullif 分母（旧口径）→ NULLIF(diff, 0)，向后兼容', () => {
+    const legacyRemainingM = derivedMetric(
+      'remaining_daily_sale_target',
+      '(sale_target - sale_amount) / nullif(total_days - days_elapsed, 0)',
+      ['sale_target', 'sale_amount'],
+    );
+    const config = baseConfig(
+      [saleM, saleTargetM, legacyRemainingM], [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target', 'remaining_daily_sale_target'],
+    );
+    const sql = generateHierarchyView(config, [saleM, saleTargetM, legacyRemainingM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    expect(sql).toMatch(/NULLIF\(COALESCE\(a\.total_days, 0\) - COALESCE\(a\.days_elapsed, 0\), 0\)/);
+    expect(sql).toContain('AS remaining_daily_sale_target');
   });
 
   it('daily 指标从 act CTE 直接引用（叶级 leaf_rows、父级 <level>_act 均已聚合）', () => {
