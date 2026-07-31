@@ -43,6 +43,10 @@ done
 echo "==== [3/5] 数据库迁移 ===="
 bash "$ROOT/scripts/migrate.sh"
 
+# 刷 PostgREST schema 缓存：migrate 改表/视图后必须重启，否则 400 "Could not find ... in the schema cache"
+echo "  · restart postgrest（刷 schema 缓存）"
+$COMPOSE restart postgrest
+
 echo "==== [4/5] 部署 edge functions + secrets ===="
 # function 部署为"尽力而为"：失败不阻断前端构建（function 可用 MCP 单独更新）
 bash "$ROOT/scripts/deploy-functions.sh" || echo "⚠ function 部署步骤失败，跳过继续前端构建（function 可用 MCP 单独更新）"
