@@ -37,6 +37,11 @@ export interface HierarchyLevel {
   rollup_from?: string;         // 父级 actual 从哪级 rollup（叶级无；父级如 'store'）
   is_leaf: boolean;
   columns: { out: string; expr: string }[]; // 输出维度列映射（如 {out:'war_zone', expr:'first_level_region'}）
+  // T6: 该级 parent_code 列的取值表达式。省略/null → NULL::text AS parent_code。
+  //   - 叶级：expr 应为 leaf_rows 已暴露的列名（如 'region_l2'）→ a.region_l2 AS parent_code
+  //   - 父级：expr 应为该级 act CTE 的列名（即 grain 元素，如 'war_zone'）→ a.war_zone AS parent_code
+  //   照 120：store 级 = second_level_region；sub_region 级 = war_zone；region 级 = NULL
+  parent_expr?: string | null;
 }
 
 // 视图配置：生成器按配置产出 report_*_gen.sql。P0 无配置（空跑），P1 起填充。

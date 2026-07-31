@@ -1,7 +1,7 @@
-import { Metric, MetricSource, ViewConfig } from '../types';
+import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../types';
 
 /**
- * 层级视图生成器（T5：叶级 + 父级 rollup）
+ * 层级视图生成器（T6：final SELECT + 各级 UNION ALL）
  *
  * 能力：按 hierarchy 配置找到 is_leaf level，产出叶级 grain 上的
  *      actual + target + daily 聚合，汇总为 leaf_rows CTE
@@ -9,8 +9,12 @@ import { Metric, MetricSource, ViewConfig } from '../types';
  *      T5：在每个父级 level（is_leaf=false）上，从 leaf_rows 做 actual rollup
  *      （SUM additive + MAX 窗口），并按 target_breakdown 产父级 target CTE。
  *      维护 levelCtes: Map<level, {act, tgt, grain}> 供 T6 各级 UNION ALL。
+ *      T6：对每级生成 SELECT（target_id/level/parent_code + 合并维度列 + 指标列），
+ *          各级 UNION ALL。指标列含 base actual/target 引用、daily 引用、
+ *          rate 重算（actual/nullif(target,0)）、remaining 重算（窗口列）。
  *
- * 结构（照手写视图 120 的 store_tgt / sale_act / store_rows + region_rows / region_tgt）：
+ * 结构（照手写视图 120 的 store_tgt / sale_act / store_rows + region_rows / region_tgt
+ *      + 末段 all_rows UNION ALL + 最终 SELECT 列加工）：
  *   WITH tgt AS (active total target 日期窗口 + 窗口列),
  *        leaf_act_N AS (base 表按叶级 grain + tgt 窗口 + assessed 聚合，含 daily FILTER),
  *        leaf_tgt AS (target_metric_values 按 leaf.target_breakdown + 叶级 grain 聚合),
@@ -18,10 +22,7 @@ import { Metric, MetricSource, ViewConfig } from '../types';
  *                      + 补齐父级 grain 依赖的维度列),
  *        <parent>_act AS (从 leaf_rows 按 pgrain SUM actual/daily + MAX 窗口),
  *        <parent>_tgt AS (target_metric_values 按 p.target_breakdown 聚合，不 join dim_branch)
- *   SELECT * FROM leaf_rows
- *
- * 衔接：
- *   T6 做 SELECT 列加工（rate/remaining/cost 脱敏）+ 各级 UNION ALL（用 levelCtes）。
+ *   <各级 SELECT UNION ALL>
  *
  * 门店键铁律：store 级 grain 必含 (system_book_code, branch_num) 复合键，
  *            禁 branch_num 单独 join。
@@ -209,17 +210,25 @@ export function generateHierarchyView(
   }
 
   const sel: string[] = [];
+  const selOuts = new Set<string>();   // 去重：grain 暴露列与 leaf.columns 重叠时跳过（避免 duplicate column）
   sel.push(`tgt.target_id`);
+  selOuts.add('target_id');
   sel.push(`'${leaf.level}' AS level`);
-  for (const g of grain) sel.push(`db.${g} AS ${g}`);
+  selOuts.add('level');
+  for (const g of grain) {
+    sel.push(`db.${g} AS ${g}`);
+    selOuts.add(g);
+  }
   // leaf.columns 输出维度列（来自 dim_branch，expr 无前缀时补 db.）
   for (const col of leaf.columns) {
+    if (selOuts.has(col.out)) continue;   // grain 已暴露（如 branch_num）→ 跳过避免重复
     const expr = col.expr.includes('.') ? col.expr : `db.${col.expr}`;
     sel.push(`${expr} AS ${col.out}`);
+    selOuts.add(col.out);
   }
   // T5: 补齐父级 rollup 依赖的维度列 —— leaf.columns 未暴露的父级 grain 列，
   //     从父级 level.columns 取 expr 映射（照 120 store_rows 行 85 暴露 war_zone/region_l2）
-  const leafOuts = new Set(leaf.columns.map(c => c.out));
+  const leafOuts = selOuts;  // alias：已含 grain + leaf.columns 的 out
   const extraParentDims: { out: string; expr: string }[] = [];
   for (const p of parentLevels) {
     for (const g of p.grain) {
@@ -236,6 +245,7 @@ export function generateHierarchyView(
   for (const col of extraParentDims) {
     const expr = col.expr.includes('.') ? col.expr : `db.${col.expr}`;
     sel.push(`${expr} AS ${col.out}`);
+    selOuts.add(col.out);
   }
   for (const mc of metricCols) {
     const al = cteAlias.get(mc.cte)!;
@@ -310,14 +320,174 @@ export function generateHierarchyView(
     }
     levelCtes.set(p.level, { act: actCteName, tgt: tgtCteName, grain: pgrain });
   }
-  // levelCtes 暂留供 T6 衔接（各级 act/tgt/grain），本任务 final SELECT 仍返回 leaf_rows
-  void levelCtes;
 
-  // T4 final SELECT：先返回叶级行；T5/T6 改为父级 rollup + UNION ALL + 列加工
-  const sql = `DROP VIEW IF EXISTS ${view_name};
+  // 6. T6 final SELECT：对每级生成 SELECT（target_id/level/parent_code + 合并维度列 + 指标列），
+  //    各级 UNION ALL。指标列含 base actual/target 引用、daily 引用、rate 重算、remaining 重算。
+  //    照 120 末段 all_rows UNION ALL + 最终 SELECT 列加工（rate/remaining/daily）。
+  const sql = buildFinalSelect(config, metrics, hierarchy ?? [], levelCtes, targetLeaves, cteList, view_name);
+  return sql;
+}
+
+// ──────────── T6 辅助：final SELECT + 各级 UNION ALL ────────────
+
+/** derived metric 子类分类（daily/rate/remaining/additive） */
+function classifyDerived(m: Metric): 'daily' | 'rate' | 'remaining' | 'additive' {
+  const f = m.formula ?? '';
+  if (/FILTER\s*\(\s*biz_date\s*=\s*latest_day\s*\)/i.test(f)) return 'daily';
+  if (/\b(total_days|days_elapsed)\b/.test(f)) return 'remaining';
+  if (f.includes('/')) return 'rate';
+  return 'additive';
+}
+
+/** cost 脱敏（与 tier1 一致；下钻表当前无 cost_sensitive 指标，保留调用点） */
+function maskCost(expr: string, m: Metric): string {
+  if (!m.cost_sensitive) return expr;
+  return `CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN ${expr} END`;
+}
+
+/** 构建最终的 DROP+CREATE VIEW SQL：CTE 链 + 各级 SELECT UNION ALL */
+function buildFinalSelect(
+  config: ViewConfig,
+  metrics: Metric[],
+  hierarchy: HierarchyLevel[],
+  levelCtes: Map<string, { act: string; tgt: string | null; grain: string[] }>,
+  targetLeaves: Metric[],
+  cteList: string[],
+  view_name: string,
+): string {
+  const targetLeafCodes = new Set(targetLeaves.map(tl => tl.metric_code));
+
+  // 合并输出维度列集合（按首次出现顺序；照 120 schema 对齐前端期望）
+  const unionCols: string[] = [];
+  const seenOut = new Set<string>();
+  for (const lvl of hierarchy) {
+    for (const col of lvl.columns) {
+      if (!seenOut.has(col.out)) { seenOut.add(col.out); unionCols.push(col.out); }
+    }
+  }
+
+  // base/daily metric 在某级 SELECT 中的引用（不含 COALESCE/alias）
+  //   target 指标：叶级 leaf_rows 已合并 → a.<code>；父级需 LEFT JOIN tgt → t.<code>；无 tgt → 字面量 0
+  //   actual base / daily：act CTE 含 → a.<code>
+  const baseRef = (m: Metric, isLeaf: boolean, hasTgt: boolean): string => {
+    if (targetLeafCodes.has(m.metric_code)) {
+      if (isLeaf) return `a.${m.metric_code}`;
+      return hasTgt ? `t.${m.metric_code}` : `0`;
+    }
+    return `a.${m.metric_code}`;
+  };
+
+  // 单个 metric 在某级 SELECT 的 SQL 表达式（不含 cost 脱敏、不含 alias）
+  const metricExpr = (m: Metric, isLeaf: boolean, hasTgt: boolean): string => {
+    if (m.measure_type === 'base') {
+      return `COALESCE(${baseRef(m, isLeaf, hasTgt)}, 0)`;
+    }
+    const cls = classifyDerived(m);
+    if (cls === 'daily') return `COALESCE(a.${m.metric_code}, 0)`;
+    if (cls === 'rate') {
+      // formula: A/B（A、B 为 metric_code）
+      const parts = (m.formula ?? '').split('/').map(s => s.trim());
+      if (parts.length === 2) {
+        const [aCode, bCode] = parts;
+        const aM = metrics.find(x => x.metric_code === aCode);
+        const bM = metrics.find(x => x.metric_code === bCode);
+        const aRef = aM ? baseRef(aM, isLeaf, hasTgt) : aCode;
+        const bRef = bM ? baseRef(bM, isLeaf, hasTgt) : bCode;
+        return `round(COALESCE(${aRef}, 0) / NULLIF(COALESCE(${bRef}, 0), 0), 4)`;
+      }
+      return 'NULL';
+    }
+    if (cls === 'remaining') {
+      // formula 形如 (T-A)/(total_days-days_elapsed)
+      const f = (m.formula ?? '').replace(/\s/g, '');
+      const match = f.match(/^\(([^()]+)\)\/\(([^()]+)\)$/);
+      if (!match) return 'NULL';
+      const [, numPart, denPart] = match;
+      const numTokens = numPart.split('-');
+      const denTokens = denPart.split('-');
+      if (numTokens.length === 2 && denTokens.length === 2) {
+        const tM = metrics.find(x => x.metric_code === numTokens[0]);
+        const aM = metrics.find(x => x.metric_code === numTokens[1]);
+        const tRef = tM ? baseRef(tM, isLeaf, hasTgt) : numTokens[0];
+        const aRef = aM ? baseRef(aM, isLeaf, hasTgt) : numTokens[1];
+        const tdRef = `a.${denTokens[0]}`;
+        const deRef = `a.${denTokens[1]}`;
+        return `round((COALESCE(${tRef}, 0) - COALESCE(${aRef}, 0)) / NULLIF(COALESCE(${tdRef}, 0) - COALESCE(${deRef}, 0), 0), 2)`;
+      }
+      return 'NULL';
+    }
+    // additive derived：展开公式（替换依赖为 COALESCE(baseRef,0)）
+    let expr = m.formula ?? '';
+    for (const dep of m.depends_on) {
+      const depM = metrics.find(x => x.metric_code === dep);
+      if (!depM) continue;
+      expr = expr.replace(new RegExp(`\\b${dep}\\b`, 'g'), `COALESCE(${baseRef(depM, isLeaf, hasTgt)}, 0)`);
+    }
+    return expr;
+  };
+
+  // 对每级生成一个 SELECT 子查询
+  const levelSelects: string[] = [];
+  for (const lvl of hierarchy) {
+    const info = levelCtes.get(lvl.level);
+    if (!info) {
+      throw new Error(`generateHierarchyView: levelCtes 缺 level='${lvl.level}'（hierarchy 配置与生成器状态不一致）`);
+    }
+    const isLeaf = lvl.is_leaf;
+    const hasTgt = !!info.tgt;
+    const cols: string[] = [];
+
+    // target_id, level, parent_code
+    cols.push('a.target_id');
+    cols.push(`'${lvl.level}' AS level`);
+    if (lvl.parent_expr) {
+      // 叶级引 leaf_rows 暴露列；父级引 act CTE 列（即 grain 元素）
+      cols.push(`a.${lvl.parent_expr} AS parent_code`);
+    } else {
+      cols.push(`NULL::text AS parent_code`);
+    }
+
+    // 维度列（合并集合）：该级有的取引用，没有的 NULL::text
+    const lvlOuts = new Set(lvl.columns.map(c => c.out));
+    for (const ucol of unionCols) {
+      const colDef = lvl.columns.find(c => c.out === ucol);
+      if (colDef) {
+        // 叶级：leaf_rows 用 out 命名列 → 引 a.<out>
+        // 父级：act CTE 按 grain 元素命名 → columns.expr 应为 grain 元素 → 引 a.<expr>
+        const ref = isLeaf ? `a.${colDef.out}` : `a.${colDef.expr}`;
+        cols.push(`${ref} AS ${ucol}`);
+      } else {
+        cols.push(`NULL::text AS ${ucol}`);
+      }
+    }
+
+    // 指标列（按 config.metrics 顺序，应用 aliases）
+    for (const code of config.metrics) {
+      const m = metrics.find(x => x.metric_code === code);
+      if (!m) continue;
+      const outName = config.aliases?.[code] ?? code;
+      const expr = metricExpr(m, isLeaf, hasTgt);
+      cols.push(`${maskCost(expr, m)} AS ${outName}`);
+    }
+
+    // FROM：叶级 leaf_rows（target 已合并）；父级 <level>_act LEFT JOIN <level>_tgt
+    let from: string;
+    if (isLeaf) {
+      from = `FROM leaf_rows a`;
+    } else {
+      from = `FROM ${info.act} a`;
+      if (hasTgt) {
+        const onParts = [`t.target_id = a.target_id`, ...info.grain.map(g => `t.${g} = a.${g}`)];
+        from += ` LEFT JOIN ${info.tgt} t ON ${onParts.join(' AND ')}`;
+      }
+    }
+
+    levelSelects.push(`SELECT\n  ${cols.join(',\n  ')}\n${from}`);
+  }
+
+  const finalSelect = levelSelects.join('\nUNION ALL\n');
+  return `DROP VIEW IF EXISTS ${view_name};
 CREATE VIEW ${view_name} AS
 WITH ${cteList.join(',\n')}
-SELECT * FROM leaf_rows;`;
-
-  return sql;
+${finalSelect};`;
 }

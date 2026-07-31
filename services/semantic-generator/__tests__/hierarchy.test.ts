@@ -130,8 +130,9 @@ describe('Hierarchy Generator (T4 leaf level)', () => {
     // 窗口列挂在 leaf_rows
     expect(sql).toContain('total_days');
     expect(sql).toContain('days_elapsed');
-    // final SELECT 引用 leaf_rows（T5/T6 改此处）
-    expect(sql).toContain('SELECT * FROM leaf_rows');
+    // T6: final SELECT 从 leaf_rows 选列（FROM leaf_rows a），不再是 T4 占位
+    expect(sql).toContain('FROM leaf_rows');
+    expect(sql).not.toContain('SELECT * FROM leaf_rows');
     // DROP + CREATE 视图
     expect(sql).toContain('DROP VIEW IF EXISTS v_leaf_test');
     expect(sql).toContain('CREATE VIEW v_leaf_test AS');
@@ -324,5 +325,231 @@ describe('Hierarchy Generator (T5 parent rollup + parent target)', () => {
     // leaf_rows 自动补 db.first_level_region AS war_zone
     expect(sql).toContain('db.first_level_region AS war_zone');
     expect(sql).toContain('region_act AS (');
+  });
+});
+
+// 三级 hierarchy（照手写视图 120 的 store + sub_region + region）
+const threeLevelHierarchy: HierarchyLevel[] = [
+  {
+    level: 'store',
+    grain: ['system_book_code', 'branch_num'],
+    target_breakdown: 'store',
+    is_leaf: true,
+    parent_expr: 'region_l2',
+    columns: [
+      { out: 'branch_num', expr: 'branch_num' },
+      { out: 'branch_name', expr: 'branch_name' },
+      { out: 'war_zone', expr: 'first_level_region' },
+      { out: 'region_l2', expr: 'second_level_region' },
+    ],
+  },
+  {
+    level: 'sub_region',
+    grain: ['war_zone', 'region_l2'],
+    target_breakdown: 'region_l2',
+    is_leaf: false,
+    rollup_from: 'store',
+    parent_expr: 'war_zone',
+    columns: [
+      { out: 'war_zone', expr: 'war_zone' },
+      { out: 'region_l2', expr: 'region_l2' },
+    ],
+  },
+  {
+    level: 'region',
+    grain: ['war_zone'],
+    target_breakdown: 'war_zone',
+    is_leaf: false,
+    rollup_from: 'sub_region',
+    // parent_expr 省略 → NULL::text AS parent_code（照 120 region 级）
+    columns: [
+      { out: 'war_zone', expr: 'war_zone' },
+    ],
+  },
+];
+
+// derived metric 构造辅助
+const derivedMetric = (code: string, formula: string, depends_on: string[], additive = false): Metric => ({
+  metric_code: code, name: code, measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+  formula, depends_on, additive, cost_sensitive: false, unit: '元', data_ready: true, enabled: true,
+  description: null, business_formula: null,
+});
+
+describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
+  const saleM = baseMetric('sale_amount', 'total_sale');
+  const saleTargetM: Metric = { ...baseMetric('sale_target', 'target_value'), fact_table: null };
+  const saleRateM = derivedMetric('sale_rate', 'sale_amount/sale_target', ['sale_amount', 'sale_target']);
+  const dailySaleM = derivedMetric('daily_sale', 'sale_amount FILTER(biz_date=latest_day)', ['sale_amount'], true);
+  const remainingSaleM = derivedMetric(
+    'remaining_daily_sale_target',
+    '(sale_target-sale_amount)/(total_days-days_elapsed)',
+    ['sale_target', 'sale_amount'],
+  );
+
+  const baseConfig = (metrics: Metric[], sources: MetricSource[], metricCodes: string[]): ViewConfig => ({
+    view_name: 'v_three_level_test',
+    metrics: metricCodes,
+    dim_code: 'branch',
+    levels: ['store', 'sub_region', 'region'],
+    target_metric_codes: ['sale_target'],
+    scope: { target_window: true, assessed_war_zone: true },
+    hierarchy: threeLevelHierarchy,
+  });
+
+  it('三级 SELECT UNION ALL，每级输出 level 字面量', () => {
+    const config = baseConfig(
+      [saleM, saleTargetM, saleRateM, dailySaleM, remainingSaleM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target', 'sale_rate', 'daily_sale', 'remaining_daily_sale_target'],
+    );
+    const sql = generateHierarchyView(config,
+      [saleM, saleTargetM, saleRateM, dailySaleM, remainingSaleM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    // 三级 → 至少 2 个 UNION ALL
+    expect((sql.match(/UNION ALL/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    // 各级 level 字面量
+    expect(sql).toContain(`'store' AS level`);
+    expect(sql).toContain(`'sub_region' AS level`);
+    expect(sql).toContain(`'region' AS level`);
+    // 不再含 T4 占位 final SELECT
+    expect(sql).not.toContain('SELECT * FROM leaf_rows');
+    // DROP + CREATE 视图
+    expect(sql).toContain('DROP VIEW IF EXISTS v_three_level_test');
+    expect(sql).toContain('CREATE VIEW v_three_level_test AS');
+  });
+
+  it('每级 FROM 对应 act CTE；叶级 FROM leaf_rows，父级 FROM <level>_act', () => {
+    const config = baseConfig(
+      [saleM, saleTargetM], [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target'],
+    );
+    const sql = generateHierarchyView(config, [saleM, saleTargetM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    expect(sql).toContain('FROM leaf_rows a');
+    expect(sql).toContain('FROM sub_region_act a');
+    expect(sql).toContain('FROM region_act a');
+    // 父级 LEFT JOIN 该级 tgt CTE 取 target 列（复合 grain + target_id）
+    expect(sql).toMatch(/LEFT JOIN sub_region_tgt t ON t\.target_id = a\.target_id AND t\.war_zone = a\.war_zone AND t\.region_l2 = a\.region_l2/);
+    expect(sql).toMatch(/LEFT JOIN region_tgt t ON t\.target_id = a\.target_id AND t\.war_zone = a\.war_zone/);
+  });
+
+  it('store 级输出 branch_num 真值，region 级 branch_num 为 NULL::text', () => {
+    const config = baseConfig(
+      [saleM, saleTargetM], [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target'],
+    );
+    const sql = generateHierarchyView(config, [saleM, saleTargetM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    // store 级（叶级）按 leaf_rows 暴露的 out 引用 → a.branch_num AS branch_num
+    expect(sql).toContain('a.branch_num AS branch_num');
+    // region 级 columns 不含 branch_num → NULL::text AS branch_num
+    expect(sql).toContain('NULL::text AS branch_num');
+    // region 级输出 war_zone 真值（grain 元素，父级按 expr 引用）
+    expect(sql).toContain('a.war_zone AS war_zone');
+  });
+
+  it('parent_code 按 level.parent_expr 取值；省略时 NULL::text', () => {
+    const config = baseConfig(
+      [saleM, saleTargetM], [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target'],
+    );
+    const sql = generateHierarchyView(config, [saleM, saleTargetM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    // store 级 parent_expr='region_l2' → a.region_l2 AS parent_code
+    expect(sql).toContain('a.region_l2 AS parent_code');
+    // sub_region 级 parent_expr='war_zone' → a.war_zone AS parent_code
+    expect(sql).toContain('a.war_zone AS parent_code');
+    // region 级省略 parent_expr → NULL::text AS parent_code
+    expect(sql).toContain('NULL::text AS parent_code');
+  });
+
+  it('rate 指标重算：round(actual/nullif(target,0),4) 含 NULLIF', () => {
+    const config = baseConfig(
+      [saleM, saleTargetM, saleRateM], [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target', 'sale_rate'],
+    );
+    const sql = generateHierarchyView(config, [saleM, saleTargetM, saleRateM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    // sale_rate 表达式含 NULLIF + round(...,4)
+    expect(sql).toMatch(/round\([\s\S]*NULLIF\([\s\S]*,\s*0\)[\s\S]*,\s*4\)/);
+    // 输出列名按 alias/code
+    expect(sql).toContain('AS sale_rate');
+  });
+
+  it('remaining 指标：(target-actual)/nullif(total_days-days_elapsed,0)，含 total_days', () => {
+    const config = baseConfig(
+      [saleM, saleTargetM, remainingSaleM], [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target', 'remaining_daily_sale_target'],
+    );
+    const sql = generateHierarchyView(config, [saleM, saleTargetM, remainingSaleM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    // remaining 表达式含 a.total_days / a.days_elapsed
+    expect(sql).toContain('a.total_days');
+    expect(sql).toContain('a.days_elapsed');
+    // 输出列名
+    expect(sql).toContain('AS remaining_daily_sale_target');
+    // round(...,2) 对齐 120 行 138-139
+    expect(sql).toMatch(/round\([\s\S]*,\s*2\)/);
+  });
+
+  it('daily 指标从 act CTE 直接引用（叶级 leaf_rows、父级 <level>_act 均已聚合）', () => {
+    const config = baseConfig(
+      [saleM, saleTargetM, dailySaleM], [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }],
+      ['sale_amount', 'sale_target', 'daily_sale'],
+    );
+    const sql = generateHierarchyView(config, [saleM, saleTargetM, dailySaleM],
+      [saleSrc, {
+        metric_code: 'sale_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
+      }]);
+    expect(sql).toContain('COALESCE(a.daily_sale, 0) AS daily_sale');
+  });
+
+  it('aliases 映射 metric_code → 输出列名', () => {
+    const config: ViewConfig = {
+      ...baseConfig([saleM], [saleSrc], ['sale_amount']),
+      aliases: { sale_amount: 'sale_actual' },
+    };
+    const sql = generateHierarchyView(config, [saleM], [saleSrc]);
+    expect(sql).toContain('AS sale_actual');
   });
 });
