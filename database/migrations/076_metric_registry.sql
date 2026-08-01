@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS metric_registry (
   fact_table       TEXT,                    -- base: datasets 注册名（retail_detail 等）；derived: NULL
   value_column     TEXT,                    -- base: 聚合列；derived: NULL
   agg              TEXT CHECK (agg IS NULL OR agg IN ('SUM','COUNT_DISTINCT','AVG','MAX','MIN')),
-  formula          TEXT,                    -- derived: 运算公式；base: NULL
   depends_on       JSONB DEFAULT '[]'::jsonb, -- derived: 依赖的 metric_code 数组；base: []
   additive         BOOLEAN NOT NULL,        -- true: 可按维度 SUM；false: 比率须重算
   cost_sensitive   BOOLEAN DEFAULT false,   -- 是否需 can_see_cost 脱敏
@@ -25,22 +24,22 @@ CREATE TABLE IF NOT EXISTS metric_registry (
     (measure_type <> 'base') OR (fact_table IS NOT NULL AND value_column IS NOT NULL AND agg IS NOT NULL)
   ),
   CONSTRAINT chk_measure_derived CHECK (
-    (measure_type <> 'derived') OR (formula IS NOT NULL)
+    (measure_type <> 'derived') OR (depends_on::text <> '[]')
   )
 );
 
 COMMENT ON TABLE metric_registry IS '语义层指标注册表：base=事实表聚合，derived=基于他指标运算。单一口径来源';
 
-INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, fact_table, value_column, agg, formula, depends_on, additive, cost_sensitive, unit) VALUES
-  ('sale_amount','销售金额','所有门店零售金额合计，不含批发','各门店 sale_money 之和','base','retail_detail','sale_money','SUM',NULL,'[]',true,false,'元'),
-  ('sale_profit','销售毛利','零售毛利合计','各门店 profit 之和（成本敏感）','base','retail_detail','profit','SUM',NULL,'[]',true,true,'元'),
-  ('delivery_amount','出库金额','配送调出金额合计','out_money 之和','base','delivery_detail','out_money','SUM',NULL,'[]',true,false,'元'),
-  ('delivery_profit','出库毛利','配送毛利合计','profit_money 之和（成本敏感）','base','delivery_detail','profit_money','SUM',NULL,'[]',true,true,'元'),
-  ('wholesale_amount','批发金额','批发销售金额合计','wholesale_money 之和','base','wholesale_detail','wholesale_money','SUM',NULL,'[]',true,false,'元'),
-  ('wholesale_profit','批发毛利','批发毛利合计','wholesale_profit 之和（成本敏感）','base','wholesale_detail','wholesale_profit','SUM',NULL,'[]',true,true,'元'),
-  ('outbound_amount','总出库金额','配送+批发出库金额','delivery_amount + wholesale_amount','derived',NULL,NULL,NULL,'delivery_amount + wholesale_amount','["delivery_amount","wholesale_amount"]',true,false,'元'),
-  ('outbound_profit','总出库毛利','配送+批发出库毛利','delivery_profit + wholesale_profit','derived',NULL,NULL,NULL,'delivery_profit + wholesale_profit','["delivery_profit","wholesale_profit"]',true,true,'元'),
-  ('margin','毛利率','毛利占金额比','profit / amount（不可直接 SUM，须重算）','derived',NULL,NULL,NULL,'profit / amount','["sale_profit","sale_amount"]',false,true,'%')
+INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, fact_table, value_column, agg, depends_on, additive, cost_sensitive, unit) VALUES
+  ('sale_amount','销售金额','所有门店零售金额合计，不含批发','各门店 sale_money 之和','base','retail_detail','sale_money','SUM','[]'::jsonb,true,false,'元'),
+  ('sale_profit','销售毛利','零售毛利合计','各门店 profit 之和（成本敏感）','base','retail_detail','profit','SUM','[]'::jsonb,true,true,'元'),
+  ('delivery_amount','出库金额','配送调出金额合计','out_money 之和','base','delivery_detail','out_money','SUM','[]'::jsonb,true,false,'元'),
+  ('delivery_profit','出库毛利','配送毛利合计','profit_money 之和（成本敏感）','base','delivery_detail','profit_money','SUM','[]'::jsonb,true,true,'元'),
+  ('wholesale_amount','批发金额','批发销售金额合计','wholesale_money 之和','base','wholesale_detail','wholesale_money','SUM','[]'::jsonb,true,false,'元'),
+  ('wholesale_profit','批发毛利','批发毛利合计','wholesale_profit 之和（成本敏感）','base','wholesale_detail','wholesale_profit','SUM','[]'::jsonb,true,true,'元'),
+  ('outbound_amount','总出库金额','配送+批发出库金额','delivery_amount + wholesale_amount','derived',NULL,NULL,NULL,'["delivery_amount","wholesale_amount"]'::jsonb,true,false,'元'),
+  ('outbound_profit','总出库毛利','配送+批发出库毛利','delivery_profit + wholesale_profit','derived',NULL,NULL,NULL,'["delivery_profit","wholesale_profit"]'::jsonb,true,true,'元'),
+  ('margin','毛利率','毛利占金额比','profit / amount（不可直接 SUM，须重算）','derived',NULL,NULL,NULL,'["sale_profit","sale_amount"]'::jsonb,false,true,'%')
 ON CONFLICT (metric_code) DO UPDATE SET
   name=EXCLUDED.name, description=EXCLUDED.description, business_formula=EXCLUDED.business_formula,
   measure_type=EXCLUDED.measure_type, fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column,
