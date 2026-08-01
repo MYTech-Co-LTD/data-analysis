@@ -18,13 +18,13 @@ export async function GET() {
   return NextResponse.json({ data: totals });
 }
 
-// POST: 建总目标（多指标，branch_num=ALL）
+// POST: 建总目标（仅名称+周期，函数内硬编码品牌3120+门店ALL）
 export async function POST(req: NextRequest) {
   const b = await req.json();
-  if (!b?.metrics?.length || !b.name || !b.start_date || !b.end_date) return NextResponse.json({ ok: false, error: '缺字段' }, { status: 400 });
+  if (!b.name || !b.start_date || !b.end_date) return NextResponse.json({ ok: false, error: '缺字段' }, { status: 400 });
   const r = await fetch(`${POSTGREST_URL}/rpc/upsert_target_total`, {
     method: 'POST', headers,
-    body: JSON.stringify({ p_id: b.id ?? null, p_name: b.name, p_sbc: b.system_book_code || '3120', p_start: b.start_date, p_end: b.end_date, p_metrics: b.metrics, p_target_type: b.target_type || 'store', p_by: b.created_by || 'admin' }),
+    body: JSON.stringify({ p_id: b.id ?? null, p_name: b.name, p_start: b.start_date, p_end: b.end_date, p_by: b.created_by || 'admin' }),
   });
   const d = await r.json().catch(() => ({ ok: false }));
   return NextResponse.json(d, { status: d?.ok ? 200 : 400 });
