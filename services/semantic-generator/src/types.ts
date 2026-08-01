@@ -16,7 +16,6 @@ export interface Metric {
   fact_table: string | null;
   value_column: string | null;
   agg: Agg;
-  formula: string | null;        // 人读/过渡（1.4 后生成器读 formula_ast）
   formula_ast: Ast | null;       // 结构化口径（生成器读此列用 astToSql 翻译）
   depends_on: string[];
   additive: boolean;
