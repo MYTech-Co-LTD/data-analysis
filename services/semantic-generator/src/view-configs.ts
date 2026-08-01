@@ -33,6 +33,29 @@ export const brandMetricView: ViewConfig = {
 };
 
 /**
+ * 类别汇总视图配置（Task 6：目标管理改造）
+ * 生成 report_category_summary_gen 视图，供目标管理模块使用
+ *
+ * 口径说明：
+ * - 类别分解目标：targets 表按 category breakdown 分解的子目标
+ * - 实际值：report_daily_delivery + report_daily_wholesale 按 category_group 聚合
+ * - scope: active total target 日期窗口（不限制考核战区）
+ */
+export const categorySummaryView: ViewConfig = {
+  view_name: 'report_category_summary_gen',
+  metrics: [
+    'outbound_amount',      // 出库金额（配送 + 批发）
+    'outbound_profit',      // 出库毛利（成本敏感）
+  ],
+  dim_code: 'category',
+  levels: ['category'],
+  target_metric_codes: [],
+  scope: { target_window: true },
+  total_row: true,
+  target_breakdown: 'category',
+};
+
+/**
  * 门店下钻视图配置（对应 report_region_breakdown_v 120）
  * 三级层级：region(战区) → sub_region(二级区域) → store(门店)
  *
