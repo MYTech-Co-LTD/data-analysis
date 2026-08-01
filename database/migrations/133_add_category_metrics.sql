@@ -6,10 +6,10 @@
 -- delivery_amount/delivery_profit 已存在，仅更新名称（从"配送-熊喵门店金额"改为"配送金额"，品牌无关）
 -- wholesale_amount/wholesale_profit 新增 base 指标
 INSERT INTO metric_registry (metric_code, name, description, measure_type, fact_table, value_column, agg, depends_on, additive, unit, data_ready, enabled) VALUES
-('delivery_amount', '配送金额', 'report_daily_delivery.out_money 配送金额', 'base', 'report_daily_delivery', 'out_money', 'SUM', NULL, '[]'::jsonb, true, '元', true, true),
-('delivery_profit', '配送毛利', 'report_daily_delivery.profit_money 配送毛利', 'base', 'report_daily_delivery', 'profit_money', 'SUM', NULL, '[]'::jsonb, true, '元', true, true),
-('wholesale_amount', '批发金额', 'report_daily_wholesale.wholesale_money 批发金额', 'base', 'report_daily_wholesale', 'wholesale_money', 'SUM', NULL, '[]'::jsonb, true, '元', true, true),
-('wholesale_profit', '批发毛利', 'report_daily_wholesale.wholesale_profit 批发毛利', 'base', 'report_daily_wholesale', 'wholesale_profit', 'SUM', NULL, '[]'::jsonb, true, '元', true, true)
+('delivery_amount', '配送金额', 'report_daily_delivery.out_money 配送金额', 'base', 'report_daily_delivery', 'out_money', 'SUM', '[]'::jsonb, true, '元', true, true),
+('delivery_profit', '配送毛利', 'report_daily_delivery.profit_money 配送毛利', 'base', 'report_daily_delivery', 'profit_money', 'SUM', '[]'::jsonb, true, '元', true, true),
+('wholesale_amount', '批发金额', 'report_daily_wholesale.wholesale_money 批发金额', 'base', 'report_daily_wholesale', 'wholesale_money', 'SUM', '[]'::jsonb, true, '元', true, true),
+('wholesale_profit', '批发毛利', 'report_daily_wholesale.wholesale_profit 批发毛利', 'base', 'report_daily_wholesale', 'wholesale_profit', 'SUM', '[]'::jsonb, true, '元', true, true)
 ON CONFLICT (metric_code) DO UPDATE SET
   name=EXCLUDED.name, description=EXCLUDED.description, measure_type=EXCLUDED.measure_type,
   fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column, agg=EXCLUDED.agg,
