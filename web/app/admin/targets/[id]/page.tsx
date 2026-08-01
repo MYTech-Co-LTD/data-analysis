@@ -221,37 +221,37 @@ export default function BreakdownPage() {
 
       <div className="rounded-lg border border-slate-200 bg-white p-4 mb-6 max-w-2xl">
         <h2 className="font-bold mb-2">总部板块·品类分解 <span className="text-xs text-slate-500 font-normal">（总仓出库金额/毛利，不拆门店）</span></h2>
-        {/* 下限提示：总出库目标 ≥ 门店配送汇总 */}
-        <div className={`text-xs mb-2 px-2 py-1.5 rounded-md tabular-nums ${hqTotalNum('outbound_amt') > 0 && hqTotalNum('outbound_amt') < deliverySum() ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-slate-50 text-slate-600 border border-slate-200'}`}>
-          门店配送汇总（下限）：<b>{deliverySum().toLocaleString()}</b> 元 —— 总出库目标不得小于该值（批发 = 门店配送 + 外部客户）
-          {hqTotalNum('outbound_amt') > 0 && hqTotalNum('outbound_amt') < deliverySum() && <span className="ml-2 font-medium">⚠ 当前总出库目标低于下限</span>}
-        </div>
         <table className="text-sm border-collapse tabular-nums w-full">
           <thead><tr className="bg-slate-50">
             <th className="border border-slate-200 p-2 text-left">品类</th>
             {HQ_METRICS.map(m => <th key={m} className="border border-slate-200 p-2 text-left">{METRIC_NAME[m]}(元)</th>)}
           </tr></thead>
           <tbody>
-            {/* 总出库目标行（手动输入） */}
-            <tr className="bg-primary/5 font-medium">
-              <td className="border border-slate-200 p-2">总出库目标</td>
-              {HQ_METRICS.map(m => (
-                <td key={m} className="border border-slate-200 p-2">
-                  <input type="number" value={hqTotal[m] ?? ''} onChange={e => setHqTotalCell(m, e.target.value)} placeholder="输入总目标" className="border border-primary/40 rounded-md px-2 py-1 w-full text-sm text-right tabular-nums bg-white" />
-                </td>
-              ))}
-            </tr>
             {HQ_CATEGORIES.map(cat => (
               <tr key={cat}>
                 <td className="border border-slate-200 p-2">{cat}</td>
                 {HQ_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={hqGrid[cat]?.[m] ?? ''} onChange={e => setHq(cat, m, e.target.value)} className="border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums" /></td>)}
               </tr>
             ))}
-            <tr className="bg-slate-50/60 font-medium">
-              <td className="border border-slate-200 p-2">品类合计</td>
+            {/* 总目标行：手动输入 + 子和/下限提示（批发=门店配送+外部客户，总出库≥配送汇总） */}
+            <tr className="bg-primary/5 font-medium">
+              <td className="border border-slate-200 p-2">总目标</td>
               {HQ_METRICS.map(m => {
                 const sum = hqSum(m); const total = hqTotalNum(m); const diff = sum - total;
-                return <td key={m} className={`border border-slate-200 p-2 text-right tabular-nums ${!total || diff === 0 ? 'text-green-600' : 'text-red-600'}`}>{sum.toLocaleString()}{total > 0 && diff !== 0 && <span className="text-xs ml-1">({diff > 0 ? '+' : ''}{diff.toLocaleString()})</span>}</td>;
+                const belowMin = m === 'outbound_amt' && total > 0 && total < deliverySum();
+                return (
+                  <td key={m} className="border border-slate-200 p-2">
+                    <input type="number" value={hqTotal[m] ?? ''} onChange={e => setHqTotalCell(m, e.target.value)} placeholder="输入总目标" className={`border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums bg-white ${belowMin ? 'border-red-400' : 'border-primary/40'}`} />
+                    <div className={`text-xs mt-1 font-normal tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      子和 {sum.toLocaleString()}{total > 0 && diff !== 0 && ` (${diff > 0 ? '+' : ''}${diff.toLocaleString()})`}
+                    </div>
+                    {m === 'outbound_amt' && (
+                      <div className={`text-xs mt-0.5 font-normal tabular-nums ${belowMin ? 'text-red-600' : 'text-slate-500'}`}>
+                        {belowMin ? '⚠ ' : ''}下限：门店配送汇总 {deliverySum().toLocaleString()}
+                      </div>
+                    )}
+                  </td>
+                );
               })}
             </tr>
           </tbody>
