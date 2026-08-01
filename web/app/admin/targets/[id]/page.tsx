@@ -107,9 +107,23 @@ export default function BreakdownPage() {
     });
     return diffs;
   };
+  // 类别分解校验：总出库目标 ≥ 门店配送汇总（否则暗示配送目标分配不合理）
+  function validateHqBreakdown() {
+    const deliverySum = branchRows.reduce((s, r) => s + (Number(r.metrics?.delivery) || 0), 0);
+    const outboundTotal = hqSum('outbound_amt');
+    if (outboundTotal < deliverySum) {
+      return { valid: false, message: `总出库目标 ${outboundTotal.toLocaleString()} 小于门店配送汇总 ${deliverySum.toLocaleString()}` };
+    }
+    return { valid: true };
+  }
   const saveAll = async () => {
     const diffs = collectDiffs();
     if (diffs.length && !confirm(`有 ${diffs.length} 处子和校验差额：\n${diffs.slice(0, 6).join('\n')}${diffs.length > 6 ? '\n...' : ''}\n确认保存？`)) return;
+
+    // 类别分解校验：总出库目标 ≥ 门店配送汇总
+    const hqValidation = validateHqBreakdown();
+    if (!hqValidation.valid && !confirm(`⚠️ 类别分解警告：\n${hqValidation.message}\n\n这可能意味着配送目标分配不合理。\n确认继续保存？`)) return;
+
     setSaving(true);
     try {
       const r1 = await fetch('/api/admin/targets/breakdown', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent_id: Number(id), rows: buildHqPayload() }) });
