@@ -31,9 +31,11 @@ export async function POST(req: NextRequest) {
   const isCategory = !!b.rows[0].category;
   const url = isCategory ? `${POSTGREST_URL}/rpc/upsert_hq_category_breakdown` : `${POSTGREST_URL}/rpc/upsert_target_breakdown`;
   const body = isCategory
-    ? JSON.stringify({ p_parent_id: Number(b.parent_id), p_rows: b.rows, p_by: 'admin' })
+    ? JSON.stringify({ p_parent_id: Number(b.parent_id), p_rows: b.rows, p_by: 'admin', p_total_metrics: b.total_metrics ?? null })
     : JSON.stringify({ p_parent_id: Number(b.parent_id), p_sbc: b.sbc || 'ALL', p_rows: b.rows, p_by: 'admin' });
   const r = await fetch(url, { method: 'POST', headers, body });
   const d = await r.json().catch(() => ({ ok: false }));
+  // PostgREST 对 RAISE EXCEPTION 返回 400 + {message}，透出给前端
+  if (!r.ok && d?.message) return NextResponse.json({ ok: false, error: d.message }, { status: 400 });
   return NextResponse.json(d);
 }

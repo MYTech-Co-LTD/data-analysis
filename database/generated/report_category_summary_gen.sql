@@ -11,13 +11,16 @@ WITH target_base AS (
   FROM targets t
   WHERE t.status = 'active' AND t.target_level = 'total' AND t.category IS NULL
 ),
-outbound_amt_targets AS (
-  SELECT tmv.target_id, tmv.target_value AS sale_target
-  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_amount'
-),
-outbound_profit_targets AS (
-  SELECT tmv.target_id, tmv.target_value AS profit_target
-  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_profit'
+outbound_targets AS (
+  SELECT
+    t.parent_target_id AS target_id,
+    t.category,
+    MAX(tmv.target_value) FILTER (WHERE metric_code='outbound_amt') AS sale_target,
+    MAX(tmv.target_value) FILTER (WHERE metric_code='outbound_profit') AS profit_target
+  FROM targets t
+  JOIN target_metric_values tmv ON tmv.target_id = t.id
+  WHERE t.target_type = 'hq' AND t.parent_target_id IS NOT NULL AND t.category IS NOT NULL
+  GROUP BY t.parent_target_id, t.category
 ),
 delivery_actuals AS (
   SELECT
@@ -61,26 +64,25 @@ category_actuals AS (
 category_level AS (
   SELECT
     tb.target_id,
-    ca.category,
-    COALESCE(oat.sale_target, 0) AS sale_target,
+    cats.category,
+    ot.sale_target,
     ca.sale_actual,
-    CASE WHEN oat.sale_target > 0 THEN ROUND(ca.sale_actual / oat.sale_target, 4) ELSE NULL END AS sale_rate,
-    COALESCE(opt.profit_target, 0) AS profit_target,
+    CASE WHEN ot.sale_target > 0 THEN ROUND(ca.sale_actual / ot.sale_target, 4) ELSE NULL END AS sale_rate,
+    ot.profit_target,
     ca.profit_actual,
-    CASE WHEN opt.profit_target > 0 THEN ROUND(ca.profit_actual / opt.profit_target, 4) ELSE NULL END AS profit_rate,
+    CASE WHEN ot.profit_target > 0 THEN ROUND(ca.profit_actual / ot.profit_target, 4) ELSE NULL END AS profit_rate,
     CASE WHEN ca.sale_actual > 0 THEN ROUND(ca.profit_actual / ca.sale_actual, 4) ELSE NULL END AS profit_margin,
     ca.daily_amount,
     ca.daily_profit,
     CASE WHEN ca.daily_amount > 0 THEN ROUND(ca.daily_profit / ca.daily_amount, 4) ELSE NULL END AS daily_profit_margin,
     CASE
-      WHEN tb.days_elapsed < tb.total_days AND opt.profit_target > 0
-      THEN ROUND((opt.profit_target - ca.profit_actual) / (tb.total_days - tb.days_elapsed), 2)
+      WHEN tb.days_elapsed < tb.total_days AND ot.profit_target > 0
+      THEN ROUND((ot.profit_target - COALESCE(ca.profit_actual, 0)) / (tb.total_days - tb.days_elapsed), 2)
       ELSE 0
     END AS remaining_daily_profit_target
   FROM target_base tb
   CROSS JOIN (VALUES ('水果'), ('标品'), ('耗材')) AS cats(category)
-  LEFT JOIN outbound_amt_targets oat ON oat.target_id = tb.target_id
-  LEFT JOIN outbound_profit_targets opt ON opt.target_id = tb.target_id
+  LEFT JOIN outbound_targets ot ON ot.target_id = tb.target_id AND ot.category = cats.category
   LEFT JOIN category_actuals ca ON ca.target_id = tb.target_id AND ca.category = cats.category
 ),
 total_level AS (

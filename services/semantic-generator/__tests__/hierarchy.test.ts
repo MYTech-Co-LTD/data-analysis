@@ -673,14 +673,22 @@ describe('Category dimension view generator', () => {
       description: null, business_formula: null,
     };
 
+    const amtTargetSrc: MetricSource = {
+      metric_code: 'outbound_amount_target', source_table: 'target_metric_values',
+      source_column: 'target_value', source_filter: "metric_code='outbound_amt'", note: null,
+    };
+    const profitTargetSrc: MetricSource = {
+      metric_code: 'outbound_profit_target', source_table: 'target_metric_values',
+      source_column: 'target_value', source_filter: "metric_code='outbound_profit'", note: null,
+    };
+
     const sql = generateHierarchyView(config,
       [deliveryM, wholesaleM, outboundAmount, outboundProfit],
-      [deliverySrc, wholesaleSrc]);
+      [deliverySrc, wholesaleSrc, amtTargetSrc, profitTargetSrc]);
 
     // CTE structure
     expect(sql).toContain('target_base AS (');
-    expect(sql).toContain('outbound_amt_targets AS (');
-    expect(sql).toContain('outbound_profit_targets AS (');
+    expect(sql).toContain('outbound_targets AS (');
     expect(sql).toContain('delivery_actuals AS (');
     expect(sql).toContain('wholesale_actuals AS (');
     expect(sql).toContain('category_actuals AS (');
@@ -695,9 +703,14 @@ describe('Category dimension view generator', () => {
     expect(sql).toContain("category_group IN ('水果', '标品', '耗材')");
     expect(sql).toContain("CROSS JOIN (VALUES ('水果'), ('标品'), ('耗材')) AS cats(category)");
 
-    // Metric codes from config (反自由发挥验证)
-    expect(sql).toContain("metric_code = 'outbound_amount'");
-    expect(sql).toContain("metric_code = 'outbound_profit'");
+    // Target metric_codes from metric_sources source_filter (反自由发挥验证)
+    expect(sql).toContain("metric_code='outbound_amt'");
+    expect(sql).toContain("metric_code='outbound_profit'");
+
+    // Target 从 hq 类别子目标按 (parent_target_id, category) 读取（设计 §5）
+    expect(sql).toContain("t.target_type = 'hq'");
+    expect(sql).toContain('t.parent_target_id AS target_id');
+    expect(sql).toContain('ot.target_id = tb.target_id AND ot.category = cats.category');
 
     // Target joins
     expect(sql).toContain('target_metric_values');

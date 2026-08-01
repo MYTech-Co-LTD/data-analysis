@@ -18,6 +18,7 @@ const METRIC_NAME: Record<string, string> = { sale: '门店销售', delivery: '�
 export default function BreakdownPage() {
   const { id } = useParams<{ id: string }>();
   const [hqGrid, setHqGrid] = useState<Record<string, Record<string, string>>>({});
+  const [hqTotal, setHqTotal] = useState<Record<string, string>>({});  // 总出库目标（手动输入，≥门店配送汇总）
   const [warZoneRows, setWarZoneRows] = useState<any[]>([]);
   const [regionRows, setRegionRows] = useState<any[]>([]);
   const [branchRows, setBranchRows] = useState<any[]>([]);
@@ -35,6 +36,8 @@ export default function BreakdownPage() {
   const load = async () => {
     const r = await fetch(`/api/admin/targets/breakdown?parent_id=${id}`); const j = await r.json();
     setBalance(j.balance || {});
+    // 总出库目标：从 balance(总目标 target_metric_values) 回填输入框
+    setHqTotal(Object.fromEntries(HQ_METRICS.map(m => [m, j.balance?.[m]?.total != null ? String(j.balance[m].total) : ''])));
     const savedCat: Record<string, any> = Object.fromEntries((j.categoryRows || []).map((x: any) => [x.category, x.metrics]));
     setHqGrid(Object.fromEntries(HQ_CATEGORIES.map(c => [c, Object.fromEntries(HQ_METRICS.map(m => [m, savedCat[c]?.[m] ?? '']))])));
     const br = (j.branchRows || []) as any[];
@@ -63,7 +66,9 @@ export default function BreakdownPage() {
 
   // 品类
   const setHq = (cat: string, m: string, v: string) => setHqGrid(g => ({ ...g, [cat]: { ...g[cat], [m]: v } }));
+  const setHqTotalCell = (m: string, v: string) => setHqTotal(t => ({ ...t, [m]: v }));
   const hqSum = (m: string) => HQ_CATEGORIES.reduce((s, c) => s + (Number(hqGrid[c]?.[m]) || 0), 0);
+  const hqTotalNum = (m: string) => Number(hqTotal[m]) || 0;
   // 门店三级
   const setWzCell = (wz: string, m: string, v: string) => setWarZoneRows(rs => rs.map(r => r.war_zone === wz ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
   const setR2Cell = (wz: string, r2: string, m: string, v: string) => setRegionRows(rs => rs.map(r => r.war_zone === wz && r.region_l2 === r2 ? { ...r, metrics: { ...r.metrics, [m]: v } } : r));
@@ -101,18 +106,20 @@ export default function BreakdownPage() {
       });
     });
     HQ_METRICS.forEach(m => {
-      const total = Number(balance[m]?.total) || 0;
+      const total = hqTotalNum(m);
       const sum = hqSum(m);
-      if (total && total !== sum) diffs.push(`总部${METRIC_NAME[m]} 品类和${sum} vs 总目标 ${total}`);
+      if (total && total !== sum) diffs.push(`总部${METRIC_NAME[m]} 品类和${sum.toLocaleString()} vs 总目标 ${total.toLocaleString()}`);
     });
     return diffs;
   };
+  // 门店配送汇总（总出库目标的下限约束：批发=门店配送+外部客户）
+  const deliverySum = () => branchRows.reduce((s, r) => s + (Number(r.metrics?.delivery) || 0), 0);
   // 类别分解校验：总出库目标 ≥ 门店配送汇总（否则暗示配送目标分配不合理）
   function validateHqBreakdown() {
-    const deliverySum = branchRows.reduce((s, r) => s + (Number(r.metrics?.delivery) || 0), 0);
-    const outboundTotal = hqSum('outbound_amt');
-    if (outboundTotal < deliverySum) {
-      return { valid: false, message: `总出库目标 ${outboundTotal.toLocaleString()} 小于门店配送汇总 ${deliverySum.toLocaleString()}` };
+    const ds = deliverySum();
+    const outboundTotal = hqTotalNum('outbound_amt');
+    if (outboundTotal < ds) {
+      return { valid: false, message: `总出库目标 ${outboundTotal.toLocaleString()} 小于门店配送汇总 ${ds.toLocaleString()}` };
     }
     return { valid: true };
   }
@@ -126,7 +133,7 @@ export default function BreakdownPage() {
 
     setSaving(true);
     try {
-      const r1 = await fetch('/api/admin/targets/breakdown', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent_id: Number(id), rows: buildHqPayload() }) });
+      const r1 = await fetch('/api/admin/targets/breakdown', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent_id: Number(id), rows: buildHqPayload(), total_metrics: Object.fromEntries(HQ_METRICS.map(m => [m, hqTotalNum(m)])) }) });
       const j1 = await r1.json();
       if (!j1.ok) throw new Error(JSON.stringify(j1));
       const r2 = await fetch('/api/admin/targets/breakdown', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent_id: Number(id), sbc: 'ALL', rows: buildThreeLevelPayload() }) });
@@ -185,8 +192,8 @@ export default function BreakdownPage() {
           <h1 className="text-xl font-bold">目标分解</h1>
           <SumChip label="销售" sum={storeSum('sale')} total={Number(balance.sale?.total) || 0} />
           <SumChip label="配送" sum={storeSum('delivery')} total={Number(balance.delivery?.total) || 0} />
-          <SumChip label="总仓出库金额" sum={hqSum('outbound_amt')} total={Number(balance.outbound_amt?.total) || 0} />
-          <SumChip label="总仓出库毛利" sum={hqSum('outbound_profit')} total={Number(balance.outbound_profit?.total) || 0} />
+          <SumChip label="总仓出库金额" sum={hqSum('outbound_amt')} total={hqTotalNum('outbound_amt')} />
+          <SumChip label="总仓出库毛利" sum={hqSum('outbound_profit')} total={hqTotalNum('outbound_profit')} />
           <SumChip label="配销比" sum={storeSum('delivery')} total={storeSum('sale')} ratio />
           <span className="text-xs text-slate-500">未填门店 {unfilledCount} 家</span>
         </div>
@@ -214,12 +221,26 @@ export default function BreakdownPage() {
 
       <div className="rounded-lg border border-slate-200 bg-white p-4 mb-6 max-w-2xl">
         <h2 className="font-bold mb-2">总部板块·品类分解 <span className="text-xs text-slate-500 font-normal">（总仓出库金额/毛利，不拆门店）</span></h2>
+        {/* 下限提示：总出库目标 ≥ 门店配送汇总 */}
+        <div className={`text-xs mb-2 px-2 py-1.5 rounded-md tabular-nums ${hqTotalNum('outbound_amt') > 0 && hqTotalNum('outbound_amt') < deliverySum() ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-slate-50 text-slate-600 border border-slate-200'}`}>
+          门店配送汇总（下限）：<b>{deliverySum().toLocaleString()}</b> 元 —— 总出库目标不得小于该值（批发 = 门店配送 + 外部客户）
+          {hqTotalNum('outbound_amt') > 0 && hqTotalNum('outbound_amt') < deliverySum() && <span className="ml-2 font-medium">⚠ 当前总出库目标低于下限</span>}
+        </div>
         <table className="text-sm border-collapse tabular-nums w-full">
           <thead><tr className="bg-slate-50">
             <th className="border border-slate-200 p-2 text-left">品类</th>
             {HQ_METRICS.map(m => <th key={m} className="border border-slate-200 p-2 text-left">{METRIC_NAME[m]}(元)</th>)}
           </tr></thead>
           <tbody>
+            {/* 总出库目标行（手动输入） */}
+            <tr className="bg-primary/5 font-medium">
+              <td className="border border-slate-200 p-2">总出库目标</td>
+              {HQ_METRICS.map(m => (
+                <td key={m} className="border border-slate-200 p-2">
+                  <input type="number" value={hqTotal[m] ?? ''} onChange={e => setHqTotalCell(m, e.target.value)} placeholder="输入总目标" className="border border-primary/40 rounded-md px-2 py-1 w-full text-sm text-right tabular-nums bg-white" />
+                </td>
+              ))}
+            </tr>
             {HQ_CATEGORIES.map(cat => (
               <tr key={cat}>
                 <td className="border border-slate-200 p-2">{cat}</td>
@@ -227,10 +248,10 @@ export default function BreakdownPage() {
               </tr>
             ))}
             <tr className="bg-slate-50/60 font-medium">
-              <td className="border border-slate-200 p-2">合计</td>
+              <td className="border border-slate-200 p-2">品类合计</td>
               {HQ_METRICS.map(m => {
-                const sum = hqSum(m); const total = Number(balance[m]?.total || 0); const diff = sum - total;
-                return <td key={m} className={`border border-slate-200 p-2 text-right tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>{sum.toLocaleString()}{diff !== 0 && <span className="text-xs ml-1">({diff > 0 ? '+' : ''}{diff.toLocaleString()})</span>}</td>;
+                const sum = hqSum(m); const total = hqTotalNum(m); const diff = sum - total;
+                return <td key={m} className={`border border-slate-200 p-2 text-right tabular-nums ${!total || diff === 0 ? 'text-green-600' : 'text-red-600'}`}>{sum.toLocaleString()}{total > 0 && diff !== 0 && <span className="text-xs ml-1">({diff > 0 ? '+' : ''}{diff.toLocaleString()})</span>}</td>;
               })}
             </tr>
           </tbody>

@@ -420,6 +420,14 @@ function generateCategoryView(
   const amountMetric = config.metrics[0] ?? 'outbound_amount';
   const profitMetric = config.metrics[1] ?? 'outbound_profit';
 
+  // target 指标的存储 metric_code 从 metric_sources.source_filter 读取（反自由发挥）
+  // outbound_amount_target.source_filter = "metric_code='outbound_amt'"
+  const amtTargetSrc = sources.find(s => s.metric_code === `${amountMetric}_target`);
+  const profitTargetSrc = sources.find(s => s.metric_code === `${profitMetric}_target`);
+  if (!amtTargetSrc?.source_filter || !profitTargetSrc?.source_filter) {
+    throw new Error(`generateCategoryView: 缺少 ${amountMetric}_target 或 ${profitMetric}_target 的 metric_sources 映射`);
+  }
+
   const cteList: string[] = [];
 
   // 1. target_base CTE - date window + system_book_code (照 095 行 14-24)
@@ -435,16 +443,18 @@ function generateCategoryView(
   WHERE t.status = '${tgtStatus}' AND t.target_level = '${tgtLevel}' AND t.category IS NULL
 )`);
 
-  // 2. Target CTEs: outbound_amt_targets, outbound_profit_targets (照 095 行 25-32)
-  // 指标码从变量读取（反自由发挥）
-  cteList.push(`outbound_amt_targets AS (
-  SELECT tmv.target_id, tmv.target_value AS sale_target
-  FROM target_metric_values tmv WHERE tmv.metric_code = '${amountMetric}'
-)`);
-
-  cteList.push(`outbound_profit_targets AS (
-  SELECT tmv.target_id, tmv.target_value AS profit_target
-  FROM target_metric_values tmv WHERE tmv.metric_code = '${profitMetric}'
+  // 2. Target CTE：从 hq 类别分解子目标读取（设计 §5：parent_target_id + category 匹配，无分解→NULL 不 fallback）
+  //    source_filter 从 metric_sources 读取（如 metric_code='outbound_amt'），不硬编码
+  cteList.push(`outbound_targets AS (
+  SELECT
+    t.parent_target_id AS target_id,
+    t.category,
+    MAX(tmv.target_value) FILTER (WHERE ${amtTargetSrc.source_filter}) AS sale_target,
+    MAX(tmv.target_value) FILTER (WHERE ${profitTargetSrc.source_filter}) AS profit_target
+  FROM targets t
+  JOIN target_metric_values tmv ON tmv.target_id = t.id
+  WHERE t.target_type = 'hq' AND t.parent_target_id IS NOT NULL AND t.category IS NOT NULL
+  GROUP BY t.parent_target_id, t.category
 )`);
 
   // 3. Category actuals: delivery + wholesale (照 095 行 35-60)
@@ -494,29 +504,29 @@ function generateCategoryView(
 
   // 5. category_level CTE: individual categories (照 095 行 62-86)
   // 类别值从配置读取（反自由发挥）
+  // 目标值从 hq 类别子目标按 (target_id, category) 匹配；无类别分解 → NULL（设计 §5：不 fallback）
   cteList.push(`category_level AS (
   SELECT
     tb.target_id,
-    ca.category,
-    COALESCE(oat.sale_target, 0) AS sale_target,
+    cats.category,
+    ot.sale_target,
     ca.sale_actual,
-    CASE WHEN oat.sale_target > 0 THEN ROUND(ca.sale_actual / oat.sale_target, 4) ELSE NULL END AS sale_rate,
-    COALESCE(opt.profit_target, 0) AS profit_target,
+    CASE WHEN ot.sale_target > 0 THEN ROUND(ca.sale_actual / ot.sale_target, 4) ELSE NULL END AS sale_rate,
+    ot.profit_target,
     ca.profit_actual,
-    CASE WHEN opt.profit_target > 0 THEN ROUND(ca.profit_actual / opt.profit_target, 4) ELSE NULL END AS profit_rate,
+    CASE WHEN ot.profit_target > 0 THEN ROUND(ca.profit_actual / ot.profit_target, 4) ELSE NULL END AS profit_rate,
     CASE WHEN ca.sale_actual > 0 THEN ROUND(ca.profit_actual / ca.sale_actual, 4) ELSE NULL END AS profit_margin,
     ca.daily_amount,
     ca.daily_profit,
     CASE WHEN ca.daily_amount > 0 THEN ROUND(ca.daily_profit / ca.daily_amount, 4) ELSE NULL END AS daily_profit_margin,
     CASE
-      WHEN tb.days_elapsed < tb.total_days AND opt.profit_target > 0
-      THEN ROUND((opt.profit_target - ca.profit_actual) / (tb.total_days - tb.days_elapsed), 2)
+      WHEN tb.days_elapsed < tb.total_days AND ot.profit_target > 0
+      THEN ROUND((ot.profit_target - COALESCE(ca.profit_actual, 0)) / (tb.total_days - tb.days_elapsed), 2)
       ELSE 0
     END AS remaining_daily_profit_target
   FROM target_base tb
   CROSS JOIN (VALUES ${categoryList}) AS cats(category)
-  LEFT JOIN outbound_amt_targets oat ON oat.target_id = tb.target_id
-  LEFT JOIN outbound_profit_targets opt ON opt.target_id = tb.target_id
+  LEFT JOIN outbound_targets ot ON ot.target_id = tb.target_id AND ot.category = cats.category
   LEFT JOIN category_actuals ca ON ca.target_id = tb.target_id AND ca.category = cats.category
 )`);
 
