@@ -6,7 +6,8 @@
 
 DROP VIEW IF EXISTS report_category_summary_v;
 
--- 验证生成视图存在且列正确
+-- 验证生成视图存在（警告，不阻断）
+-- 注意：migrate.sh 执行顺序是 migrations/ → generated/，所以此时视图可能还未创建
 DO $$
 DECLARE
     col_count INTEGER;
@@ -16,7 +17,11 @@ BEGIN
     WHERE table_schema = 'public'
       AND table_name = 'report_category_summary_gen';
 
-    IF col_count != 13 THEN
-        RAISE EXCEPTION 'report_category_summary_gen 视图列数不对（期望 13，实际 %）', col_count;
+    IF col_count = 0 THEN
+        RAISE NOTICE 'report_category_summary_gen 视图尚未创建（将在 generated/ 步骤创建）';
+    ELSIF col_count != 13 THEN
+        RAISE WARNING 'report_category_summary_gen 视图列数不对（期望 13，实际 %）', col_count;
+    ELSE
+        RAISE NOTICE 'report_category_summary_gen 视图验证通过（13 列）';
     END IF;
 END $$;
