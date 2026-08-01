@@ -1030,11 +1030,18 @@ spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design
 - **部署**：migrate.sh 扫 `database/migrations/*.sql` + `database/generated/*.sql`；`scripts/deploy.sh` 迁移后 `docker compose restart postgrest` 刷 schema 缓存（视图变更生效）。
 - **迁移次序**：配销比 → 品牌表 → 下钻表 → KPI 卡 → 类别表（双轨 diff=0 才切前端、下线旧视图）。
 
-**类别汇总表生成（`hierarchy.ts`，2026-08-01）**：
+**类别汇总表生成（`hierarchy.ts`，2026-08-01 AST 化重构）**：
 - **产出视图**：`report_category_summary_gen`（品牌×类别×月聚合）
-- **指标来源**：`metric_registry` 中 `outbound_amt`/`outbound_profit`（迁移 124 已注册 AST）
-- **生成逻辑**：`src/hierarchy.ts` 读 registry AST → `astToSql` 翻译 → 聚合 SQL（按 `system_book_code` + `category` + 月）
-- **符合反自由发挥约束**：生成器只读 AST + config，不含业务字面量，指标定义全在 registry（见下节铁律）
+- **文件位置**：`src/generators/hierarchy.ts`（非 `src/hierarchy.ts`）
+- **AST 驱动实现**：
+  - 类别维度：`config.categories`（水果/标品/耗材），无硬编码字面量
+  - 指标来源：`config.metrics` × `metric_registry.formula_ast`（`outbound_amt`/`outbound_profit`，迁移 124 已注册 AST）
+  - 表名来源：`metric_sources`（delivery/wholesale），生成器从数据源元数据读取
+  - 生成逻辑：读 AST → `astToSql` 递归翻译 → 聚合 SQL（纯 config/registry 驱动）
+- **符合反自由发挥铁律**：
+  - ✅ 生成器代码不含业务字面量（无 `'3120'`/`'水果'` 等硬编码）
+  - ✅ 所有值从 config/registry 注入（`config.categories` / `config.metrics` / `metric_sources`）
+  - ✅ 新增类别 = 改 config；新增指标 = 改 registry AST（不动生成器代码）
 - **metric_definitions 定位调整**：保留作"目标存储 code 命名空间"（`target_metric_values.metric_code` 已存数据主键，不迁）；与 metric_registry 经 `metric_sources.source_filter` 里 `metric_code='xxx'` 链接。
 
 #### 生成器约束铁律（反自由发挥，2026-08-01 AST 化）
