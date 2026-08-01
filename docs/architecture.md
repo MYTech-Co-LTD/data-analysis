@@ -955,54 +955,69 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 | `/reports` | GET | 查询可用报表列表 |
 | `/compute` | POST | 执行报表计算（从配置读取） |
 
-### 10.8 目标与达成子系统（一个目标·双板块）
+### 10.8 目标与达成子系统（Bottom-Up 流程，2026-08-01 重构）
 
-**一个目标同时含两个板块**，复用 `targets` 的 total→breakdown（`parent_target_id`）机制，两类 children 共存（靠 `category` 列与 `branch_num` 列区分）：
+**创建流程（Bottom-Up）**：
 
-| 板块 | total 目标值 | 分解(breakdown) | 指标 |
-|------|--------------|-----------------|------|
-| 总部板块（不拆门店） | `outbound_amt`/`outbound_profit` | **品类**(category=水果/标品/耗材) | 出库金额、出库毛利 |
-| 门店板块（拆门店） | `sale`/`delivery` | **门店**(branch_num) | 销售、配送 |
+```
+新建目标（仅名称+时间）
+    ↓
+门店分解（手填→自动汇总到总目标）
+    ↓
+品类分解（校验：出库总 ≥ 门店配送汇总）
+    ↓
+完成（两类分解独立，无强依赖）
+```
 
-一个 total target 的 `target_metric_values` 存 4 个总值（出库金额/毛利=品类分项和，销售/配送=手填总）；品类 children 存 `outbound_*` 按 category，门店 children 存 `sale`/`delivery` 按 branch_num。`target_type` 列为历史字段，不再用于分派（breakdown route 按 rows 内容：有 category→品类 RPC，有 branch_num→门店 RPC）。
+**核心改动（相比旧版）**：
+- **新建目标简化**：只填名称+时间，不预填总目标值（Task 3）
+- **门店分解自动汇总**：各门店目标值自动 SUM→total，total 不可手填（现有逻辑）
+- **品类分解新增校验**：出库总目标 ≥ 门店配送汇总（Task 4），不满足报错提示
+- **类别子目标独立存储**：`targets` 表新增 `category` 列（三类：水果/标品/耗材），品类分解行单独存储
+
+**两类分解独立共存**：
+
+| 板块 | 分解维度 | 指标 | 校验 |
+|------|---------|------|------|
+| 门店板块 | `branch_num` | `sale`/`delivery` | 子目标 SUM = 总目标（现有） |
+| 总部板块 | `category` | `outbound_amt`/`outbound_profit` | 出库总 ≥ 门店配送汇总（Task 4） |
 
 **targets 表关键字段**：
-- `target_type TEXT NOT NULL DEFAULT 'store'` — 'hq'/'store'
-- `category TEXT` — hq 品类分解值（'水果'/'标品'/'耗材'），store 与 hq 总目标为 NULL
-- UNIQUE 改为 `(system_book_code, target_type, branch_num, category, start_date, end_date)`（同周期允许 hq 多品类行 + 区分 hq/store 总目标）
+- `id` — 主键
+- `name` — 目标名称（必填）
+- `start_date`/`end_date` — 时间范围（必填）
+- `system_book_code` — 品牌（默认 '3120'，从 dim_branch 继承）
+- `category` TEXT — 品类分解值（'水果'/'标品'/'耗材'），门店分解行与总目标行为 NULL
+- `branch_num` TEXT — 门店分解值，品类分解行与总目标行为 NULL
+- `target_type` TEXT NOT NULL DEFAULT 'store' — 'hq'/'store'（历史字段，保留兼容）
+- UNIQUE `(system_book_code, target_type, branch_num, category, start_date, end_date)`
 
-**指标口径**（`metric_definitions`，达成数据源留 Phase 2 接入）：
-| metric_code | 名称 | 口径 |
+**指标口径**（`metric_registry` AST 定义，迁移 124）：
+
+| metric_code | 名称 | 口径（formula_ast） |
 |---|---|---|
-| `sale` | 销售 | `report_daily_sales.total_sale`（按门店+日期段） |
-| `delivery` | 配送(门店调入) | `delivery_detail.out_money` 按 `response_branch_num` |
-| `outbound_amt` | 出库金额 | `delivery_detail.out_money` + `wholesale_detail.wholesale_money` |
-| `outbound_profit` | 出库毛利 | `delivery_detail.profit_money` + `wholesale_detail.wholesale_profit`（批发毛利=销售金额−销售成本） |
+| `sale` | 销售 | `SUM(report_daily_sales.total_sale)` |
+| `delivery` | 配送 | `SUM(report_daily_delivery.delivery_amount)` |
+| `outbound_amt` | 出库金额 | `SUM(delivery_amount) + SUM(wholesale_amount)` |
+| `outbound_profit` | 出库毛利 | `SUM(delivery_profit) + SUM(wholesale_profit)` |
 
-**品类分组**（总部目标分解用，3 类，映射 `dim_item.category_l1`，见 067_category_three_class.sql）：水果=生鲜；标品=标品+废弃档案+广西柳州；耗材=包装耗材+运费/仓储用耗材。
+**品类分组**：三类（水果=生鲜、标品=标品+废弃档案+广西柳州、耗材=包装耗材+运费/仓储），映射 `dim_item.category_l1`（见迁移 067）。
 
-**RPC**（SECURITY DEFINER，直连 PostgREST `/rpc`）：
-- `upsert_target_total(p_id,p_name,p_sbc,p_start,p_end,p_metrics,p_target_type,p_by)` — 建/改总目标（两类）
-- `upsert_target_breakdown(p_parent_id,p_sbc,p_rows,p_by)` — 门店分解（rows:[{branch_num,metrics}]，现状不变）
-- `upsert_hq_category_breakdown(p_parent_id,p_rows,p_by)` — 总部品类分解（rows:[{category,metrics}]）
+**RPC**（SECURITY DEFINER）：
+- `upsert_target_total(p_name,p_start,p_end,p_by)` — 新建目标（仅名称+时间，Task 3 简化）
+- `upsert_target_breakdown(p_parent_id,p_rows,p_by)` — 门店分解（rows:[{branch_num,metrics}]，自动 SUM→total）
+- `upsert_hq_category_breakdown(p_parent_id,p_rows,p_by)` — 品类分解（rows:[{category,metrics}]，校验 outbound ≥ delivery）
 - `check_breakdown_balance(p_parent_id)` — 校验子和=总（两类通用）
-- `get_breakdown(p_parent_id)`（门店轴）/ `get_hq_category_breakdown(p_parent_id)`（品类轴）
 
-**达成（actual）**：`report_achievement_v` 暴露 `target_type`/`category` 列；目前仅 `sale` 有 actual（`report_daily_sales` LATERAL），其余指标 `data_ready=false`→`actual=NULL,data_status='not_ready'`。hq 达成（delivery+wholesale 按品类聚合）留 Phase 2 报表中心。
+**类别汇总视图**（`report_category_summary_gen`，生成器产出，见 §10.10）：按品牌×类别×月聚合 `outbound_amt`/`outbound_profit`，由 `services/semantic-generator/src/hierarchy.ts` 生成，符合反自由发挥约束。
 
-**权威术语表**（UI 展示统一，metric_code/字段名不变）：
-- sale = 销售（门店维度：门店销售/月销售）
-- delivery = 配送（门店维度：门店配送/月配送）；**不再叫"出库"**
+**权威术语表**：
+- sale = 销售（门店维度）
+- delivery = 配送（门店维度）；**不再叫"出库"**
 - wholesale = 批发
 - outbound_amt = 出库金额（= 配送 + 批发，总部总仓全部出货）
 - outbound_profit = 出库毛利
-- 配销比 = 配送/销售；配销比达成率 = 实际配销比/目标配销比（前端派生不落库）
-
-**指标口径（088 语义层对齐，迁移 095/096 修复 2026-07-27）**：
-- `report_category_summary_v`（095）：出库额 = delivery + wholesale_pp(门店批发) + wholesale_ext(外部批发) **全口径**，按目标品牌过滤。原 074 硬编码 `system_book_code='64188'`（delivery 表无 64188 数据→空）+ wholesale 排除门店，致合计漏 74%（实测 400万→修复后 ~1366万）
-- `report_achievement_v` delivery LATERAL（096）：delivery actual = **仅 report_daily_delivery**（去 wholesale，原 070 `delivery UNION ALL wholesale` 含批发偏高）；outbound LATERAL 不变（delivery+wholesale 全口径）
-- `report_region_breakdown_v`（091 已修）：delivery/sales 按目标品牌过滤
-- 088 metric_registry 重构后业务视图需同步 patch；generator 生成的 `report_distribution_drill_v`/`report_outbound_drill_v`（口径对）为 Phase 2 下钻报表备用
+- 配销比 = 配送/销售
 
 ### 10.10 视图生成器（构建期，2026-07-31）
 
@@ -1014,6 +1029,12 @@ spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design
 - **三层校验**：L1 `validate_semantic_registry()`（静态，阻断部署）/ L2 生成时 EXPLAIN（阻断部署，失败不产文件）/ L3a rollup `_audit` 视图（运行期告警）/ L3b 双轨 SUM diff（阻断旧视图下线）。
 - **部署**：migrate.sh 扫 `database/migrations/*.sql` + `database/generated/*.sql`；`scripts/deploy.sh` 迁移后 `docker compose restart postgrest` 刷 schema 缓存（视图变更生效）。
 - **迁移次序**：配销比 → 品牌表 → 下钻表 → KPI 卡 → 类别表（双轨 diff=0 才切前端、下线旧视图）。
+
+**类别汇总表生成（`hierarchy.ts`，2026-08-01）**：
+- **产出视图**：`report_category_summary_gen`（品牌×类别×月聚合）
+- **指标来源**：`metric_registry` 中 `outbound_amt`/`outbound_profit`（迁移 124 已注册 AST）
+- **生成逻辑**：`src/hierarchy.ts` 读 registry AST → `astToSql` 翻译 → 聚合 SQL（按 `system_book_code` + `category` + 月）
+- **符合反自由发挥约束**：生成器只读 AST + config，不含业务字面量，指标定义全在 registry（见下节铁律）
 - **metric_definitions 定位调整**：保留作"目标存储 code 命名空间"（`target_metric_values.metric_code` 已存数据主键，不迁）；与 metric_registry 经 `metric_sources.source_filter` 里 `metric_code='xxx'` 链接。
 
 #### 生成器约束铁律（反自由发挥，2026-08-01 AST 化）
