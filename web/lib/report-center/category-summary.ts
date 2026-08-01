@@ -26,7 +26,7 @@ export async function getCategorySummary(
   const client = await getClient();
 
   const { data, error } = await client.database
-    .from("report_category_summary_v")
+    .from("report_category_summary_gen")
     .select("*")
     .eq("target_id", targetId);
 
