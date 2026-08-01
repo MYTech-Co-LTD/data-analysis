@@ -30,17 +30,17 @@ INSERT INTO metric_registry (metric_code, name, description, business_formula, m
   ('wholesale_ext_amount','批发-外部客户金额','总部→外部批发客户（非门店；sbc=3120，branch_num=99；SUM wholesale_money）','外部客户 wholesale_money 之和','base','wholesale_detail','wholesale_money','SUM',true,false,'元'),
   ('wholesale_ext_profit','批发-外部客户毛利','总部→外部客户批发毛利（sbc=3120，成本敏感）','外部客户 wholesale_profit 之和（成本敏感）','base','wholesale_detail','wholesale_profit','SUM',true,true,'元')
 ON CONFLICT (metric_code) DO UPDATE SET
-  name=EXCLUDED.name, description=EXCLUDED.description, business_formula=EXCLUDED.business_formula,
+  name=EXCLUDED.name, description=EXCLUDED.description, business_formula_ast =EXCLUDED.business_formula,
   measure_type=EXCLUDED.measure_type, fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column,
   agg=EXCLUDED.agg, additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 
 -- 4. 加 distribution（配送 = delivery + wholesale_pp，总部→两品牌门店）
-INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, formula, depends_on, additive, cost_sensitive, unit) VALUES
-  ('distribution_amount','配送金额','总部→两品牌门店（熊喵配送调拨 + 品品甜门店批发）','delivery_amount + wholesale_pp_amount','derived','delivery_amount + wholesale_pp_amount','["delivery_amount","wholesale_pp_amount"]',true,false,'元'),
-  ('distribution_profit','配送毛利','总部→两品牌门店配送毛利','delivery_profit + wholesale_pp_profit','derived','delivery_profit + wholesale_pp_profit','["delivery_profit","wholesale_pp_profit"]',true,true,'元')
+INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, depends_on, additive, cost_sensitive, unit) VALUES
+  ('distribution_amount','配送金额','总部→两品牌门店（熊喵配送调拨 + 品品甜门店批发）','delivery_amount + wholesale_pp_amount','derived','["delivery_amount","wholesale_pp_amount"]'::jsonb,true,false,'元'),
+  ('distribution_profit','配送毛利','总部→两品牌门店配送毛利','delivery_profit + wholesale_pp_profit','derived','["delivery_profit","wholesale_pp_profit"]'::jsonb,true,true,'元')
 ON CONFLICT (metric_code) DO UPDATE SET
   name=EXCLUDED.name, description=EXCLUDED.description, business_formula=EXCLUDED.business_formula,
-  measure_type=EXCLUDED.measure_type, formula=EXCLUDED.formula, depends_on=EXCLUDED.depends_on,
+  measure_type=EXCLUDED.measure_type, depends_on=EXCLUDED.depends_on,
   additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 
 -- 5. outbound 改「出库」（= delivery + wholesale_pp + wholesale_ext，总部→所有客户）
@@ -48,15 +48,13 @@ UPDATE metric_registry SET
   name = '出库金额',
   description = '总部→所有客户（熊喵配送 + 品品甜门店批发 + 外部客户批发）',
   business_formula = 'delivery_amount + wholesale_pp_amount + wholesale_ext_amount',
-  formula = 'delivery_amount + wholesale_pp_amount + wholesale_ext_amount',
-  depends_on = '["delivery_amount","wholesale_pp_amount","wholesale_ext_amount"]'
+  depends_on = '["delivery_amount","wholesale_pp_amount","wholesale_ext_amount"]'::jsonb
 WHERE metric_code = 'outbound_amount';
 UPDATE metric_registry SET
   name = '出库毛利',
   description = '总部→所有客户出库毛利',
   business_formula = 'delivery_profit + wholesale_pp_profit + wholesale_ext_profit',
-  formula = 'delivery_profit + wholesale_pp_profit + wholesale_ext_profit',
-  depends_on = '["delivery_profit","wholesale_pp_profit","wholesale_ext_profit"]'
+  depends_on = '["delivery_profit","wholesale_pp_profit","wholesale_ext_profit"]'::jsonb
 WHERE metric_code = 'outbound_profit';
 
 -- ===== metric_sources =====

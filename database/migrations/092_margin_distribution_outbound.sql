@@ -23,7 +23,7 @@ VALUES
 ON CONFLICT (metric_code) DO UPDATE SET
   name            = EXCLUDED.name,
   description     = EXCLUDED.description,
-  business_formula= EXCLUDED.business_formula,
+  business_formula_ast = EXCLUDED.business_formula,
   measure_type    = EXCLUDED.measure_type,
   formula         = EXCLUDED.formula,
   depends_on      = EXCLUDED.depends_on,

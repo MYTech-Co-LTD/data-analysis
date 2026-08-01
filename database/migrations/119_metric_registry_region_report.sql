@@ -14,5 +14,5 @@ INSERT INTO metric_registry (metric_code, name, description, measure_type, fact_
 ON CONFLICT (metric_code) DO UPDATE SET
   name=EXCLUDED.name, description=EXCLUDED.description, measure_type=EXCLUDED.measure_type,
   fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column, agg=EXCLUDED.agg,
-  formula=EXCLUDED.formula, depends_on=EXCLUDED.depends_on, unit=EXCLUDED.unit;
+  formula_ast =EXCLUDED.formula, depends_on=EXCLUDED.depends_on, unit=EXCLUDED.unit;
 DO $$ BEGIN RAISE NOTICE 'Migration 119: metric_registry 加 region 报表 8 派生指标'; END $$;
