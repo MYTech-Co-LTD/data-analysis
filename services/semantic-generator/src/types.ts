@@ -69,4 +69,5 @@ export interface ViewConfig {
   aliases?: Record<string, string>; // metric_code → 输出列名（如 distribution_amount→delivery_amount）
   hierarchy?: HierarchyLevel[]; // 维度层级（存在时走 generateHierarchyView，产多级 UNION ALL 视图）
   target_breakdown?: TargetBreakdown; // target CTE 的 breakdown_level（默认 'store'；hierarchy 用 leaf.target_breakdown）
+  categories?: string[];        // 类别值列表（category 维度专用），如 ['水果', '标品', '耗材']
 }

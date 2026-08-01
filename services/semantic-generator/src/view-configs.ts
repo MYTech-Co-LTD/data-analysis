@@ -41,18 +41,22 @@ export const brandMetricView: ViewConfig = {
  * - 实际值：report_daily_delivery + report_daily_wholesale 按 category_group 聚合
  * - scope: active total target 日期窗口（不限制考核战区）
  * - 对齐手写视图 095：直接生成SQL，不依赖复杂的AST翻译
+ *
+ * 反自由发挥约束（迁移 133）：
+ * - 类别值从配置读取（不硬编码在生成器）
+ * - 表名从 metric_sources 读取（delivery_amount → delivery, wholesale_amount → wholesale）
+ * - 指标码从 metric_registry 读取（outbound_amount/profit = delivery + wholesale）
  */
 export const categorySummaryView: ViewConfig = {
   view_name: 'report_category_summary_gen',
-  // 简化配置：直接生成SQL，不依赖metric registry
-  // 维度标记为 'category' 触发特殊处理
   dim_code: 'category',
-  metrics: [],
+  metrics: ['outbound_amount', 'outbound_profit'],  // derived 指标（delivery + wholesale）
   levels: [],
   target_metric_codes: [],
   scope: { target_window: true },
   total_row: true,
   target_breakdown: 'category',
+  categories: ['水果', '标品', '耗材'],  // 类别值列表（配置驱动，不硬编码）
 };
 
 /**

@@ -377,8 +377,10 @@ export function generateHierarchyView(
  * Category is not a true hierarchy - it's a flat dimension with individual categories
  * (水果/标品/耗材) plus a total row. Actuals come from delivery + wholesale UNION ALL.
  *
- * Special case: category view has hardcoded metrics (outbound_amt, outbound_profit),
- * not from metric registry. Config.metrics is empty, so we handle it specially.
+ * 反自由发挥约束（迁移 133）：
+ * - 类别值从 config.categories 读取（不硬编码）
+ * - 表名从 metric_sources 读取（delivery_amount → delivery, wholesale_amount → wholesale）
+ * - 指标码从 config.metrics 读取（不硬编码 'outbound_amt'）
  *
  * Structure (照手写视图 095):
  *   WITH target_base AS (active total target 日期窗口 + system_book_code),
@@ -396,9 +398,27 @@ function generateCategoryView(
   metrics: Metric[],
   sources: MetricSource[]
 ): string {
-  const { view_name, scope } = config;
+  const { view_name, scope, categories } = config;
   const tgtLevel = scope?.target_level ?? 'total';
   const tgtStatus = scope?.target_status ?? 'active';
+
+  // 反自由发挥：类别值从配置读取，不硬编码
+  const categoryValues = categories ?? ['水果', '标品', '耗材'];
+  const categoryList = categoryValues.map(c => `('${c}')`).join(', ');
+
+  // 反自由发挥：从 metric_sources 读取表名（delivery_amount/profit → delivery, wholesale_amount/profit → wholesale）
+  const deliverySrc = sources.find(s => s.metric_code === 'delivery_amount');
+  const wholesaleSrc = sources.find(s => s.metric_code === 'wholesale_amount');
+  if (!deliverySrc || !wholesaleSrc) {
+    throw new Error('generateCategoryView: 缺少 delivery_amount 或 wholesale_amount 的 metric_sources 映射');
+  }
+  const deliveryTable = deliverySrc.source_table;
+  const wholesaleTable = wholesaleSrc.source_table;
+
+  // 指标码从 config.metrics 读取（不硬编码 'outbound_amt'/'outbound_profit'）
+  // 假设 config.metrics[0] = outbound_amount (金额), config.metrics[1] = outbound_profit (毛利)
+  const amountMetric = config.metrics[0] ?? 'outbound_amount';
+  const profitMetric = config.metrics[1] ?? 'outbound_profit';
 
   const cteList: string[] = [];
 
@@ -416,17 +436,19 @@ function generateCategoryView(
 )`);
 
   // 2. Target CTEs: outbound_amt_targets, outbound_profit_targets (照 095 行 25-32)
+  // 指标码从变量读取（反自由发挥）
   cteList.push(`outbound_amt_targets AS (
   SELECT tmv.target_id, tmv.target_value AS sale_target
-  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_amt'
+  FROM target_metric_values tmv WHERE tmv.metric_code = '${amountMetric}'
 )`);
 
   cteList.push(`outbound_profit_targets AS (
   SELECT tmv.target_id, tmv.target_value AS profit_target
-  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_profit'
+  FROM target_metric_values tmv WHERE tmv.metric_code = '${profitMetric}'
 )`);
 
   // 3. Category actuals: delivery + wholesale (照 095 行 35-60)
+  // 表名从 metric_sources 读取，类别值从配置读取（反自由发挥）
   cteList.push(`delivery_actuals AS (
   SELECT
     tb.target_id,
@@ -435,10 +457,10 @@ function generateCategoryView(
     SUM(d.profit_money) AS profit_actual,
     SUM(CASE WHEN d.biz_date = tb.start_date + tb.days_elapsed - 1 THEN d.out_money ELSE 0 END) AS daily_amount,
     SUM(CASE WHEN d.biz_date = tb.start_date + tb.days_elapsed - 1 THEN d.profit_money ELSE 0 END) AS daily_profit
-  FROM report_daily_delivery d
+  FROM ${deliveryTable} d
   JOIN target_base tb ON d.biz_date BETWEEN tb.start_date AND tb.end_date
   WHERE (tb.system_book_code = 'ALL' OR d.system_book_code = tb.system_book_code)
-    AND d.category_group IN ('水果', '标品', '耗材')
+    AND d.category_group IN (${categoryValues.map(c => `'${c}'`).join(', ')})
   GROUP BY tb.target_id, d.category_group
 )`);
 
@@ -450,10 +472,10 @@ function generateCategoryView(
     SUM(w.wholesale_profit) AS profit_actual,
     SUM(CASE WHEN w.biz_date = tb.start_date + tb.days_elapsed - 1 THEN w.wholesale_money ELSE 0 END) AS daily_amount,
     SUM(CASE WHEN w.biz_date = tb.start_date + tb.days_elapsed - 1 THEN w.wholesale_profit ELSE 0 END) AS daily_profit
-  FROM report_daily_wholesale w
+  FROM ${wholesaleTable} w
   JOIN target_base tb ON w.biz_date BETWEEN tb.start_date AND tb.end_date
   WHERE (tb.system_book_code = 'ALL' OR w.system_book_code = tb.system_book_code)
-    AND w.category_group IN ('水果', '标品', '耗材')
+    AND w.category_group IN (${categoryValues.map(c => `'${c}'`).join(', ')})
   GROUP BY tb.target_id, w.category_group
 )`);
 
@@ -471,6 +493,7 @@ function generateCategoryView(
 )`);
 
   // 5. category_level CTE: individual categories (照 095 行 62-86)
+  // 类别值从配置读取（反自由发挥）
   cteList.push(`category_level AS (
   SELECT
     tb.target_id,
@@ -491,7 +514,7 @@ function generateCategoryView(
       ELSE 0
     END AS remaining_daily_profit_target
   FROM target_base tb
-  CROSS JOIN (VALUES ('水果'), ('标品'), ('耗材')) AS cats(category)
+  CROSS JOIN (VALUES ${categoryList}) AS cats(category)
   LEFT JOIN outbound_amt_targets oat ON oat.target_id = tb.target_id
   LEFT JOIN outbound_profit_targets opt ON opt.target_id = tb.target_id
   LEFT JOIN category_actuals ca ON ca.target_id = tb.target_id AND ca.category = cats.category

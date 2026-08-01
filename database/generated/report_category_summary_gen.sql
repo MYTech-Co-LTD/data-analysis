@@ -13,7 +13,7 @@ WITH target_base AS (
 ),
 outbound_amt_targets AS (
   SELECT tmv.target_id, tmv.target_value AS sale_target
-  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_amt'
+  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_amount'
 ),
 outbound_profit_targets AS (
   SELECT tmv.target_id, tmv.target_value AS profit_target
