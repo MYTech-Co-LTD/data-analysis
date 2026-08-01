@@ -30,10 +30,13 @@ export async function runGenerator(opts: GenOpts): Promise<GenResult> {
 
   for (const config of opts.viewConfigs) {
     try {
+      // Category dimension → special handling
       // hierarchy config → 多级 UNION ALL 视图（下钻表）；否则 Tier1 单级
-      const sql = config.hierarchy
+      const sql = config.dim_code === 'category'
         ? generateHierarchyView(config, metrics, sources)
-        : generateTier1View(config, metrics, sources);
+        : config.hierarchy
+          ? generateHierarchyView(config, metrics, sources)
+          : generateTier1View(config, metrics, sources);
 
       // L2 EXPLAIN：先建视图再 EXPLAIN SELECT
       try {

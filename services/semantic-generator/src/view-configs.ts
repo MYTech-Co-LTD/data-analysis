@@ -40,15 +40,15 @@ export const brandMetricView: ViewConfig = {
  * - 类别分解目标：targets 表按 category breakdown 分解的子目标
  * - 实际值：report_daily_delivery + report_daily_wholesale 按 category_group 聚合
  * - scope: active total target 日期窗口（不限制考核战区）
+ * - 对齐手写视图 095：直接生成SQL，不依赖复杂的AST翻译
  */
 export const categorySummaryView: ViewConfig = {
   view_name: 'report_category_summary_gen',
-  metrics: [
-    'outbound_amount',      // 出库金额（配送 + 批发）
-    'outbound_profit',      // 出库毛利（成本敏感）
-  ],
+  // 简化配置：直接生成SQL，不依赖metric registry
+  // 维度标记为 'category' 触发特殊处理
   dim_code: 'category',
-  levels: ['category'],
+  metrics: [],
+  levels: [],
   target_metric_codes: [],
   scope: { target_window: true },
   total_row: true,

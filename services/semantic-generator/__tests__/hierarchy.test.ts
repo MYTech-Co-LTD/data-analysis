@@ -624,3 +624,101 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
     expect(sql).toMatch(/NULLIF|greatest/i);
   });
 });
+
+// ── Category dimension view (pseudo-hierarchy: categories + total) ──
+describe('Category dimension view generator', () => {
+  const deliverySrc: MetricSource = {
+    metric_code: 'delivery_amount', source_table: 'report_daily_delivery',
+    source_column: 'out_money', source_filter: null, note: null,
+  };
+  const wholesaleSrc: MetricSource = {
+    metric_code: 'wholesale_pp_amount', source_table: 'report_daily_wholesale',
+    source_column: 'wholesale_money', source_filter: "system_book_code = '64188'", note: null,
+  };
+
+  it('category view: delivery + wholesale UNION ALL + targets + derived metrics', () => {
+    const config: ViewConfig = {
+      view_name: 'report_category_summary_gen',
+      metrics: ['outbound_amount', 'outbound_profit', 'outbound_amount_target', 'outbound_profit_target', 'sale_rate'],
+      dim_code: 'category',
+      levels: ['category'],
+      target_metric_codes: ['outbound_amount_target', 'outbound_profit_target'],
+      scope: { target_window: true },
+      total_row: true,
+      target_breakdown: 'category',
+      aliases: {
+        outbound_amount: 'sale_actual',
+        outbound_profit: 'profit_actual',
+        outbound_amount_target: 'sale_target',
+        outbound_profit_target: 'profit_target',
+      },
+    };
+
+    const deliveryM = baseMetric('delivery_amount', 'out_money');
+    const wholesaleM: Metric = {
+      ...baseMetric('wholesale_pp_amount', 'wholesale_money'),
+      fact_table: 'report_daily_wholesale_customer',
+    };
+    const outboundAmount: Metric = {
+      metric_code: 'outbound_amount', name: 'outbound_amount', measure_type: 'derived',
+      fact_table: null, value_column: null, agg: null,
+      formula: 'delivery_amount + wholesale_pp_amount',
+      formula_ast: A.op('+', A.ref('delivery_amount'), A.ref('wholesale_pp_amount')),
+      depends_on: ['delivery_amount', 'wholesale_pp_amount'], additive: true,
+      cost_sensitive: false, unit: '元', data_ready: true, enabled: true,
+      description: null, business_formula: null,
+    };
+    const saleTarget: Metric = { ...baseMetric('outbound_amount_target', 'target_value'), fact_table: null };
+    const profitTarget: Metric = { ...baseMetric('outbound_profit_target', 'target_value'), fact_table: null };
+    const saleRate: Metric = {
+      metric_code: 'sale_rate', name: 'sale_rate', measure_type: 'derived',
+      fact_table: null, value_column: null, agg: null,
+      formula: 'outbound_amount / outbound_amount_target',
+      formula_ast: A.op('/', A.ref('outbound_amount'), A.ref('outbound_amount_target')),
+      depends_on: ['outbound_amount', 'outbound_amount_target'], additive: false,
+      cost_sensitive: false, unit: '率', data_ready: true, enabled: true,
+      description: null, business_formula: null,
+    };
+
+    const sql = generateHierarchyView(config,
+      [deliveryM, wholesaleM, outboundAmount, saleTarget, profitTarget, saleRate],
+      [deliverySrc, wholesaleSrc, {
+        metric_code: 'outbound_amount_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='outbound_amt'", note: null,
+      }, {
+        metric_code: 'outbound_profit_target', source_table: 'target_metric_values',
+        source_column: 'target_value', source_filter: "metric_code='outbound_profit'", note: null,
+      }]);
+
+    // CTE structure
+    expect(sql).toContain('tgt AS (');
+    expect(sql).toContain('outbound_amount_target AS (');
+    expect(sql).toContain('outbound_profit_target AS (');
+    expect(sql).toContain('delivery_actuals AS (');
+    expect(sql).toContain('wholesale_actuals AS (');
+    expect(sql).toContain('merged_actuals AS (');
+    expect(sql).toContain('category_level AS (');
+    expect(sql).toContain('total_level AS (');
+
+    // Delivery + wholesale UNION ALL structure
+    expect(sql).toContain('report_daily_delivery');
+    expect(sql).toContain('report_daily_wholesale');
+    expect(sql).toContain('category_group IN');
+    expect(sql).toContain('FULL OUTER JOIN');
+
+    // Target joins
+    expect(sql).toContain("metric_code='outbound_amt'");
+    expect(sql).toContain("metric_code='outbound_profit'");
+
+    // Final UNION ALL
+    expect(sql).toContain('UNION ALL');
+    expect(sql).toContain(`'合计' AS category_group`);
+
+    // Derived metric (rate) calculation
+    expect(sql).toMatch(/outbound_amount.*outbound_amount_target/);
+
+    // DROP + CREATE VIEW
+    expect(sql).toContain('DROP VIEW IF EXISTS report_category_summary_gen');
+    expect(sql).toContain('CREATE VIEW report_category_summary_gen AS');
+  });
+});
