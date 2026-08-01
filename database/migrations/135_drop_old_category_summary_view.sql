@@ -14,8 +14,7 @@ BEGIN
     SELECT COUNT(*) INTO col_count
     FROM information_schema.columns
     WHERE table_schema = 'public'
-      AND table_name = 'report_category_summary_gen'
-      AND table_type = 'VIEW';
+      AND table_name = 'report_category_summary_gen';
 
     IF col_count != 13 THEN
         RAISE EXCEPTION 'report_category_summary_gen 视图列数不对（期望 13，实际 %）', col_count;
