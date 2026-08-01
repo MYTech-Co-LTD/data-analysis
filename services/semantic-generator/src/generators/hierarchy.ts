@@ -377,237 +377,154 @@ export function generateHierarchyView(
  * Category is not a true hierarchy - it's a flat dimension with individual categories
  * (水果/标品/耗材) plus a total row. Actuals come from delivery + wholesale UNION ALL.
  *
+ * Special case: category view has hardcoded metrics (outbound_amt, outbound_profit),
+ * not from metric registry. Config.metrics is empty, so we handle it specially.
+ *
  * Structure (照手写视图 095):
- *   WITH tgt AS (active total target 日期窗口 + 窗口列),
+ *   WITH target_base AS (active total target 日期窗口 + system_book_code),
  *        outbound_amt_targets AS (target_metric_values WHERE metric_code='outbound_amt'),
  *        outbound_profit_targets AS (target_metric_values WHERE metric_code='outbound_profit'),
- *        category_actuals AS (delivery UNION ALL wholesale 按 category_group 聚合),
+ *        delivery_actuals AS (delivery 按 category_group 聚合),
+ *        wholesale_actuals AS (wholesale 按 category_group 聚合),
+ *        category_actuals AS (delivery UNION ALL wholesale),
  *        category_level AS (categories CROSS JOIN targets LEFT JOIN actuals/targets),
  *        total_level AS (SUM rollup + 重算 derived)
- *   SELECT * FROM category_level UNION ALL SELECT * FROM total_level
+ *   SELECT 14 columns FROM category_level UNION ALL SELECT 14 columns FROM total_level
  */
 function generateCategoryView(
   config: ViewConfig,
   metrics: Metric[],
   sources: MetricSource[]
 ): string {
-  const { view_name, metrics: metricCodes, scope } = config;
+  const { view_name, scope } = config;
   const tgtLevel = scope?.target_level ?? 'total';
   const tgtStatus = scope?.target_status ?? 'active';
 
-  const leaves = collectLeaves(metricCodes, metrics);
-
-  // Identify daily metrics (derived with FILTER)
-  const dailyBases = new Map<string, string[]>();   // dailyCode → 依赖的叶 baseCode 列表
-  for (const code of metricCodes) {
-    const m = metrics.find(x => x.metric_code === code);
-    if (!m || m.measure_type !== 'derived' || !m.formula_ast) continue;
-    if (m.formula_ast.t !== 'filter') continue;
-    const exprAst = m.formula_ast.expr;
-    let bases: string[] = [];
-    if (exprAst.t === 'ref') {
-      const targetMetric = metrics.find(x => x.metric_code === exprAst.code);
-      if (targetMetric) {
-        bases = targetMetric.measure_type === 'base'
-          ? [exprAst.code]
-          : collectLeaves([exprAst.code], metrics).map(x => x.metric_code);
-      }
-    }
-    dailyBases.set(code, bases);
-  }
-
-  // Separate base actuals from targets
-  const actualLeaves: Metric[] = [];
-  const targetLeaves: Metric[] = [];
-  for (const lf of leaves) {
-    const src = sources.find(s => s.metric_code === lf.metric_code);
-    if (!src) continue;
-    if (src.source_table === 'target_metric_values') {
-      targetLeaves.push(lf);
-    } else {
-      actualLeaves.push(lf);
-    }
-  }
-
   const cteList: string[] = [];
 
-  // 1. tgt CTE - date window
-  cteList.push(`tgt AS (
-  SELECT id AS target_id, start_date, end_date,
-    (end_date - start_date + 1) AS total_days,
-    GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
-    LEAST(current_date, end_date) AS latest_day
-  FROM targets WHERE target_level='${tgtLevel}' AND status='${tgtStatus}'
+  // 1. target_base CTE - date window + system_book_code (照 095 行 14-24)
+  cteList.push(`target_base AS (
+  SELECT
+    t.id AS target_id,
+    t.system_book_code,
+    t.start_date,
+    t.end_date,
+    (t.end_date - t.start_date + 1) AS total_days,
+    GREATEST(LEAST(current_date, t.end_date) - t.start_date + 1, 0) AS days_elapsed
+  FROM targets t
+  WHERE t.status = '${tgtStatus}' AND t.target_level = '${tgtLevel}' AND t.category IS NULL
 )`);
 
-  // 2. Target CTEs: separate CTE per target metric (照 095 outbound_amt_targets/outbound_profit_targets)
-  for (const tl of targetLeaves) {
-    const src = sources.find(s => s.metric_code === tl.metric_code)!;
-    const filter = src.source_filter ?? 'true';
-    cteList.push(`${tl.metric_code} AS (
-  SELECT tmv.target_id, tmv.target_value
-  FROM target_metric_values tmv
-  WHERE ${filter}
+  // 2. Target CTEs: outbound_amt_targets, outbound_profit_targets (照 095 行 25-32)
+  cteList.push(`outbound_amt_targets AS (
+  SELECT tmv.target_id, tmv.target_value AS sale_target
+  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_amt'
 )`);
-  }
 
-  // 3. Category actuals: delivery + wholesale UNION ALL (照 095)
-  //    对齐手写视图 095：直接用 report_daily_delivery + report_daily_wholesale
-  //    delivery: out_money, profit_money
-  //    wholesale: wholesale_money, wholesale_profit
-  //    不按 metric_source 逐个匹配，直接按表结构聚合（delivery/wholesale 两表）
-  const deliveryCols: string[] = [];
-  const wholesaleCols: string[] = [];
+  cteList.push(`outbound_profit_targets AS (
+  SELECT tmv.target_id, tmv.target_value AS profit_target
+  FROM target_metric_values tmv WHERE tmv.metric_code = 'outbound_profit'
+)`);
 
-  // Base columns (照 095 行 38-40 delivery, 51-53 wholesale)
-  deliveryCols.push('SUM(s.out_money) AS sale_actual');
-  deliveryCols.push('SUM(s.profit_money) AS profit_actual');
-  // Daily columns (照 095 行 40-41 delivery, 54-55 wholesale)
-  deliveryCols.push('SUM(s.out_money) FILTER (WHERE s.biz_date = tgt.latest_day) AS daily_sale');
-  deliveryCols.push('SUM(s.profit_money) FILTER (WHERE s.biz_date = tgt.latest_day) AS daily_profit');
-
-  wholesaleCols.push('SUM(s.wholesale_money) AS sale_actual');
-  wholesaleCols.push('SUM(s.wholesale_profit) AS profit_actual');
-  wholesaleCols.push('SUM(s.wholesale_money) FILTER (WHERE s.biz_date = tgt.latest_day) AS daily_sale');
-  wholesaleCols.push('SUM(s.wholesale_profit) FILTER (WHERE s.biz_date = tgt.latest_day) AS daily_profit');
-
-  // Build delivery CTE (照 095 行 34-46)
+  // 3. Category actuals: delivery + wholesale (照 095 行 35-60)
   cteList.push(`delivery_actuals AS (
-  SELECT tgt.target_id, s.category_group,
-    ${deliveryCols.join(',\n    ')}
-  FROM report_daily_delivery s
-  JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
-  WHERE s.category_group IN ('水果', '标品', '耗材')
-  GROUP BY tgt.target_id, s.category_group
+  SELECT
+    tb.target_id,
+    d.category_group AS category,
+    SUM(d.out_money) AS sale_actual,
+    SUM(d.profit_money) AS profit_actual,
+    SUM(CASE WHEN d.biz_date = tb.start_date + tb.days_elapsed - 1 THEN d.out_money ELSE 0 END) AS daily_amount,
+    SUM(CASE WHEN d.biz_date = tb.start_date + tb.days_elapsed - 1 THEN d.profit_money ELSE 0 END) AS daily_profit
+  FROM report_daily_delivery d
+  JOIN target_base tb ON d.biz_date BETWEEN tb.start_date AND tb.end_date
+  WHERE (tb.system_book_code = 'ALL' OR d.system_book_code = tb.system_book_code)
+    AND d.category_group IN ('水果', '标品', '耗材')
+  GROUP BY tb.target_id, d.category_group
 )`);
 
-  // Build wholesale CTE (照 095 行 48-60)
   cteList.push(`wholesale_actuals AS (
-  SELECT tgt.target_id, s.category_group,
-    ${wholesaleCols.join(',\n    ')}
-  FROM report_daily_wholesale s
-  JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
-  WHERE s.category_group IN ('水果', '标品', '耗材')
-  GROUP BY tgt.target_id, s.category_group
+  SELECT
+    tb.target_id,
+    w.category_group AS category,
+    SUM(w.wholesale_money) AS sale_actual,
+    SUM(w.wholesale_profit) AS profit_actual,
+    SUM(CASE WHEN w.biz_date = tb.start_date + tb.days_elapsed - 1 THEN w.wholesale_money ELSE 0 END) AS daily_amount,
+    SUM(CASE WHEN w.biz_date = tb.start_date + tb.days_elapsed - 1 THEN w.wholesale_profit ELSE 0 END) AS daily_profit
+  FROM report_daily_wholesale w
+  JOIN target_base tb ON w.biz_date BETWEEN tb.start_date AND tb.end_date
+  WHERE (tb.system_book_code = 'ALL' OR w.system_book_code = tb.system_book_code)
+    AND w.category_group IN ('水果', '标品', '耗材')
+  GROUP BY tb.target_id, w.category_group
 )`);
 
-  // 4. Merge delivery + wholesale with FULL OUTER JOIN (照 095 行 62-66)
-  const mergedCols: string[] = [
-    `COALESCE(d.target_id, w.target_id) AS target_id`,
-    `COALESCE(d.category_group, w.category_group) AS category_group`,
-    `COALESCE(d.sale_actual, 0) + COALESCE(w.sale_actual, 0) AS sale_actual`,
-    `CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(d.profit_actual, 0) + COALESCE(w.profit_actual, 0) END AS profit_actual`,
-    `COALESCE(d.daily_sale, 0) + COALESCE(w.daily_sale, 0) AS daily_sale`,
-    `CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(d.daily_profit, 0) + COALESCE(w.daily_profit, 0) END AS daily_profit`,
-  ];
-
-  cteList.push(`merged_actuals AS (
-  SELECT ${mergedCols.join(',\n    ')}
+  // 4. Merge delivery + wholesale (照 095 行 33-61)
+  cteList.push(`category_actuals AS (
+  SELECT
+    COALESCE(d.target_id, w.target_id) AS target_id,
+    COALESCE(d.category, w.category) AS category,
+    COALESCE(d.sale_actual, 0) + COALESCE(w.sale_actual, 0) AS sale_actual,
+    CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(d.profit_actual, 0) + COALESCE(w.profit_actual, 0) END AS profit_actual,
+    COALESCE(d.daily_amount, 0) + COALESCE(w.daily_amount, 0) AS daily_amount,
+    CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(d.daily_profit, 0) + COALESCE(w.daily_profit, 0) END AS daily_profit
   FROM delivery_actuals d
-  FULL OUTER JOIN wholesale_actuals w ON w.target_id = d.target_id AND w.category_group = d.category_group
+  FULL OUTER JOIN wholesale_actuals w ON w.target_id = d.target_id AND w.category = d.category
 )`);
 
   // 5. category_level CTE: individual categories (照 095 行 62-86)
-  //    Build cteOf map for derived metric translation
-  const cteOf = new Map<string, string>();
-  for (const tl of targetLeaves) cteOf.set(tl.metric_code, tl.metric_code);
-  cteOf.set('sale_actual', 'ma');
-  cteOf.set('profit_actual', 'ma');
-  cteOf.set('daily_sale', 'ma');
-  cteOf.set('daily_profit', 'ma');
-  cteOf.set('total_days', 'tgt');
-  cteOf.set('days_elapsed', 'tgt');
-  cteOf.set('latest_day', 'tgt');
-
-  const ctx: AstCtx = {
-    cteOf,
-    useTargetWindow: false,
-    derivedAst: (code) => metrics.find(m => m.metric_code === code)?.formula_ast ?? undefined,
-    coalesceRefs: true,
-  };
-
-  const categorySelects: string[] = [];
-  categorySelects.push('tgt.target_id');
-  categorySelects.push('c.category AS category_group');
-
-  // Add target columns
-  for (const tl of targetLeaves) {
-    categorySelects.push(`COALESCE(${tl.metric_code}.target_value, 0) AS ${tl.metric_code}`);
-  }
-
-  // Add actual columns
-  categorySelects.push('COALESCE(ma.sale_actual, 0) AS sale_actual');
-  categorySelects.push('CASE WHEN COALESCE(current_setting(\'request.jwt.claims.can_see_cost\', true)::boolean, false) THEN COALESCE(ma.profit_actual, 0) END AS profit_actual');
-  categorySelects.push('COALESCE(ma.daily_sale, 0) AS daily_sale');
-  categorySelects.push('CASE WHEN COALESCE(current_setting(\'request.jwt.claims.can_see_cost\', true)::boolean, false) THEN COALESCE(ma.daily_profit, 0) END AS daily_profit');
-
-  // Add window columns
-  categorySelects.push('tgt.total_days');
-  categorySelects.push('tgt.days_elapsed');
-
-  // Calculate derived metrics (rates, margins, remaining)
-  // sale_rate = sale_actual / sale_target
-  // profit_rate = profit_actual / profit_target
-  // profit_margin = profit_actual / sale_actual
-  // daily_profit_margin = daily_profit / daily_sale
-  // remaining_daily_profit_target = (profit_target - profit_actual) / greatest(total_days - days_elapsed, 1)
-  for (const code of metricCodes) {
-    const m = metrics.find(x => x.metric_code === code);
-    if (!m || m.measure_type !== 'derived' || !m.formula_ast) continue;
-    const expr = derivedExpr(m.formula_ast, ctx);
-    const masked = maskCost(expr, m);
-    categorySelects.push(`${masked} AS ${code}`);
-  }
-
-  const targetJoins = targetLeaves.map(tl =>
-    `LEFT JOIN ${tl.metric_code} ON ${tl.metric_code}.target_id = tgt.target_id`
-  ).join('\n  ');
-
   cteList.push(`category_level AS (
-  SELECT ${categorySelects.join(',\n    ')}
-  FROM tgt
-  CROSS JOIN (VALUES ('水果'), ('标品'), ('耗材')) AS c(category)
-  LEFT JOIN merged_actuals ma ON ma.target_id = tgt.target_id AND ma.category_group = c.category
-  ${targetJoins}
+  SELECT
+    tb.target_id,
+    ca.category,
+    COALESCE(oat.sale_target, 0) AS sale_target,
+    ca.sale_actual,
+    CASE WHEN oat.sale_target > 0 THEN ROUND(ca.sale_actual / oat.sale_target, 4) ELSE NULL END AS sale_rate,
+    COALESCE(opt.profit_target, 0) AS profit_target,
+    ca.profit_actual,
+    CASE WHEN opt.profit_target > 0 THEN ROUND(ca.profit_actual / opt.profit_target, 4) ELSE NULL END AS profit_rate,
+    CASE WHEN ca.sale_actual > 0 THEN ROUND(ca.profit_actual / ca.sale_actual, 4) ELSE NULL END AS profit_margin,
+    ca.daily_amount,
+    ca.daily_profit,
+    CASE WHEN ca.daily_amount > 0 THEN ROUND(ca.daily_profit / ca.daily_amount, 4) ELSE NULL END AS daily_profit_margin,
+    CASE
+      WHEN tb.days_elapsed < tb.total_days AND opt.profit_target > 0
+      THEN ROUND((opt.profit_target - ca.profit_actual) / (tb.total_days - tb.days_elapsed), 2)
+      ELSE 0
+    END AS remaining_daily_profit_target
+  FROM target_base tb
+  CROSS JOIN (VALUES ('水果'), ('标品'), ('耗材')) AS cats(category)
+  LEFT JOIN outbound_amt_targets oat ON oat.target_id = tb.target_id
+  LEFT JOIN outbound_profit_targets opt ON opt.target_id = tb.target_id
+  LEFT JOIN category_actuals ca ON ca.target_id = tb.target_id AND ca.category = cats.category
 )`);
 
-  // 6. total_level CTE: aggregate of categories
-  const totalSelects: string[] = [];
-  totalSelects.push('target_id');
-  totalSelects.push(`'合计' AS category_group`);
-
-  // Sum base metrics
-  for (const m of leaves) {
-    if (m.measure_type === 'base') {
-      totalSelects.push(`SUM(${m.metric_code}) AS ${m.metric_code}`);
-    }
-  }
-
-  // Add window columns
-  totalSelects.push('MAX(total_days) AS total_days');
-  totalSelects.push('MAX(days_elapsed) AS days_elapsed');
-
-  // Recalculate derived metrics for total (use same ctx)
-  for (const code of metricCodes) {
-    const m = metrics.find(x => x.metric_code === code);
-    if (!m || m.measure_type !== 'derived' || !m.formula_ast) continue;
-    const expr = derivedExpr(m.formula_ast, ctx);
-    const masked = maskCost(expr, m);
-    totalSelects.push(`${masked} AS ${code}`);
-  }
-
+  // 6. total_level CTE: aggregate (照 095 行 87-104)
   cteList.push(`total_level AS (
-  SELECT ${totalSelects.join(',\n    ')}
+  SELECT
+    target_id,
+    '合计' AS category,
+    SUM(sale_target) AS sale_target,
+    SUM(sale_actual) AS sale_actual,
+    CASE WHEN SUM(sale_target) > 0 THEN ROUND(SUM(sale_actual) / SUM(sale_target), 4) ELSE NULL END AS sale_rate,
+    SUM(profit_target) AS profit_target,
+    SUM(profit_actual) AS profit_actual,
+    CASE WHEN SUM(profit_target) > 0 THEN ROUND(SUM(profit_actual) / SUM(profit_target), 4) ELSE NULL END AS profit_rate,
+    CASE WHEN SUM(sale_actual) > 0 THEN ROUND(SUM(profit_actual) / SUM(sale_actual), 4) ELSE NULL END AS profit_margin,
+    SUM(daily_amount) AS daily_amount,
+    SUM(daily_profit) AS daily_profit,
+    CASE WHEN SUM(daily_amount) > 0 THEN ROUND(SUM(daily_profit) / SUM(daily_amount), 4) ELSE NULL END AS daily_profit_margin,
+    SUM(remaining_daily_profit_target) AS remaining_daily_profit_target
   FROM category_level
   GROUP BY target_id
 )`);
 
   // 7. Final SELECT: UNION ALL category + total
-  const finalCols = ['target_id', 'category_group'];
-  for (const code of metricCodes) {
-    const alias = config.aliases?.[code] ?? code;
-    finalCols.push(alias);
-  }
+  const finalCols = [
+    'target_id', 'category',
+    'sale_target', 'sale_actual', 'sale_rate',
+    'profit_target', 'profit_actual', 'profit_rate', 'profit_margin',
+    'daily_amount', 'daily_profit', 'daily_profit_margin',
+    'remaining_daily_profit_target'
+  ];
 
   return `DROP VIEW IF EXISTS ${view_name};
 CREATE VIEW ${view_name} AS
