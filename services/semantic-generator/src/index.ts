@@ -71,8 +71,8 @@ async function main() {
   try {
     const client = await pool.connect();
     try {
-      const { brandMetricView, regionBreakdownView } = await import('./view-configs.js');
-      const r = await runGenerator({ client, viewConfigs: [brandMetricView, regionBreakdownView], outDir: '../../database/generated' });
+      const { brandMetricView, categorySummaryView, regionBreakdownView } = await import('./view-configs.js');
+      const r = await runGenerator({ client, viewConfigs: [brandMetricView, categorySummaryView, regionBreakdownView], outDir: '../../database/generated' });
       console.log(`✅ 生成器完成：产出 ${r.produced.length} 个视图，EXPLAIN 失败 ${r.explainFailures.length} 个`);
       if (r.produced.length) console.log('  产出:', r.produced.join(', '));
       if (r.explainFailures.length) {

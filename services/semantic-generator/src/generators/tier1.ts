@@ -64,13 +64,17 @@ export function generateTier1View(
     scope, total_row, dim_table, aliases,
   } = config;
 
-  const dimKey = dim_code === 'brand' ? 'system_book_code' : 'branch_num';
+  const dimKey = dim_code === 'brand' ? 'system_book_code' : dim_code === 'category' ? 'category_group' : 'branch_num';
   const useTargetWindow = scope?.target_window ?? false;
   const useAssessed = scope?.assessed_war_zone ?? false;
   const tgtLevel = scope?.target_level ?? 'total';
   const tgtStatus = scope?.target_status ?? 'active';
 
   const leaves = collectLeaves(metricCodes, metrics);
+
+  // category 维度：多表 UNION ALL 标志（delivery + wholesale）
+  const isCategoryUnion = dim_code === 'category' &&
+    new Set(leaves.map(l => sources.find(s => s.metric_code === l.metric_code)?.source_table)).size > 1;
 
   // 识别 daily 指标：formula_ast.t === 'filter' -> 在其 expr.ref 所属 base 的 actual CTE 产 FILTER 列
   const dailyMap = new Map<string, string>();   // baseMetricCode -> dailyMetricCode
@@ -116,48 +120,155 @@ export function generateTier1View(
 
   // actual base CTE
   let cteIdx = 0;
-  for (const g of actualGroups.values()) {
-    const cteName = `cte${cteIdx++}`;
-    const cols = g.metrics.map(m => {
-      const src = sources.find(s => s.metric_code === m.metric_code)!;
-      return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
-    });
-    // daily FILTER 列：仅 useTargetWindow 时（无窗口无 tgt.latest_day）
-    if (useTargetWindow) {
-      for (const m of g.metrics) {
-        const dailyCode = dailyMap.get(m.metric_code);
-        if (!dailyCode) continue;
+
+  // category 维度 UNION ALL 特殊处理
+  if (isCategoryUnion) {
+    // 收集所有表的列：UNION ALL 需要对齐列结构
+    const allBaseMetrics = [...actualGroups.values()].flatMap(g => g.metrics);
+
+    // 生成每个表的单独 CTE
+    const unionCteNames: string[] = [];
+    for (const g of actualGroups.values()) {
+      const cteName = `union${cteIdx++}`;
+      unionCteNames.push(cteName);
+
+      const joins: string[] = [];
+      const where: string[] = [];
+      if (g.filter) where.push(g.filter);
+      if (useTargetWindow) {
+        joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`);
+      }
+      if (useAssessed) {
+        joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
+        where.push(`is_assessed_war_zone(db.first_level_region)`);
+      }
+      const whereClause = where.length ? `\n  WHERE ${where.join(' AND ')}` : '';
+      const selectDims = useTargetWindow ? `tgt.target_id, s.${dimKey}` : `s.${dimKey}`;
+      const groupDims = useTargetWindow ? `tgt.target_id, s.${dimKey}` : `s.${dimKey}`;
+
+      // 该表的列（不需要对齐，各自 SUM）
+      const tableCols = g.metrics.map(m => {
         const src = sources.find(s => s.metric_code === m.metric_code)!;
-        cols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
+        return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
+      });
+      // daily 列
+      if (useTargetWindow) {
+        for (const m of g.metrics) {
+          const dailyCode = dailyMap.get(m.metric_code);
+          if (!dailyCode) continue;
+          const src = sources.find(s => s.metric_code === m.metric_code)!;
+          tableCols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
+        }
+      }
+
+      cteList.push(`${cteName} AS (
+  SELECT ${selectDims},
+    ${tableCols.join(',\n    ')}
+  FROM ${g.table} s${joins.length ? '\n  ' + joins.join('\n  ') : ''}${whereClause}
+  GROUP BY ${groupDims}
+)`);
+      // 注册该表包含的 metric
+      for (const m of g.metrics) {
+        cteOf.set(m.metric_code, cteName);
+        const dailyCode = dailyMap.get(m.metric_code);
+        if (dailyCode) cteOf.set(dailyCode, cteName);
       }
     }
-    const colsStr = cols.join(',\n    ');
 
-    const joins: string[] = [];
-    let selectDims = `s.${dimKey}`;
-    let groupDims = `s.${dimKey}`;
-    const where: string[] = [];
-    if (g.filter) where.push(g.filter);
-    if (useTargetWindow) {
-      joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`);
-      selectDims = `tgt.target_id, s.${dimKey}`;
-      groupDims = `tgt.target_id, s.${dimKey}`;
+    // 若有多个表，创建合并 CTE（UNION ALL + COALESCE 汇总）
+    if (unionCteNames.length > 1) {
+      const mergedCteName = `cte${cteIdx++}`;
+      const selectParts: string[] = [];
+
+      // SELECT 列表：维度 + 所有指标
+      const dimSelect = useTargetWindow
+        ? `${unionCteNames[0]}.target_id, ${unionCteNames[0]}.${dimKey}`
+        : `${unionCteNames[0]}.${dimKey}`;
+
+      const metricCols = allBaseMetrics.map(m => {
+        const cteName = cteOf.get(m.metric_code);
+        if (!cteName) return `NULL AS ${m.metric_code}`;
+        return `${cteName}.${m.metric_code}`;
+      });
+      // daily 列
+      if (useTargetWindow) {
+        for (const m of allBaseMetrics) {
+          const dailyCode = dailyMap.get(m.metric_code);
+          if (!dailyCode) continue;
+          const cteName = cteOf.get(m.metric_code);
+          if (!cteName) {
+            metricCols.push(`NULL AS ${dailyCode}`);
+          } else {
+            metricCols.push(`${cteName}.${dailyCode}`);
+          }
+        }
+      }
+
+      // FULL JOIN 多个 CTE
+      const fromParts = [unionCteNames[0]];
+      for (const cn of unionCteNames.slice(1)) {
+        const on = useTargetWindow
+          ? `${cn}.target_id = ${unionCteNames[0]}.target_id AND ${cn}.${dimKey} = ${unionCteNames[0]}.${dimKey}`
+          : `${cn}.${dimKey} = ${unionCteNames[0]}.${dimKey}`;
+        fromParts.push(`FULL OUTER JOIN ${cn} ON ${on}`);
+      }
+
+      cteList.push(`${mergedCteName} AS (
+  SELECT ${dimSelect}, ${metricCols.join(', ')}
+  FROM ${fromParts.join('\n  ')}
+)`);
+      // 更新 cteOf 指向合并 CTE
+      for (const m of allBaseMetrics) {
+        cteOf.set(m.metric_code, mergedCteName);
+        const dailyCode = dailyMap.get(m.metric_code);
+        if (dailyCode) cteOf.set(dailyCode, mergedCteName);
+      }
     }
-    if (useAssessed) {
-      joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
-      where.push(`is_assessed_war_zone(db.first_level_region)`);
-    }
-    const whereClause = where.length ? `\n  WHERE ${where.join(' AND ')}` : '';
-    cteList.push(`${cteName} AS (
+  } else {
+    // 原有逻辑：单表单 CTE
+    for (const g of actualGroups.values()) {
+      const cteName = `cte${cteIdx++}`;
+      const cols = g.metrics.map(m => {
+        const src = sources.find(s => s.metric_code === m.metric_code)!;
+        return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
+      });
+      // daily FILTER 列：仅 useTargetWindow 时（无窗口无 tgt.latest_day）
+      if (useTargetWindow) {
+        for (const m of g.metrics) {
+          const dailyCode = dailyMap.get(m.metric_code);
+          if (!dailyCode) continue;
+          const src = sources.find(s => s.metric_code === m.metric_code)!;
+          cols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
+        }
+      }
+      const colsStr = cols.join(',\n    ');
+
+      const joins: string[] = [];
+      let selectDims = `s.${dimKey}`;
+      let groupDims = `s.${dimKey}`;
+      const where: string[] = [];
+      if (g.filter) where.push(g.filter);
+      if (useTargetWindow) {
+        joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`);
+        selectDims = `tgt.target_id, s.${dimKey}`;
+        groupDims = `tgt.target_id, s.${dimKey}`;
+      }
+      if (useAssessed) {
+        joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
+        where.push(`is_assessed_war_zone(db.first_level_region)`);
+      }
+      const whereClause = where.length ? `\n  WHERE ${where.join(' AND ')}` : '';
+      cteList.push(`${cteName} AS (
   SELECT ${selectDims},
     ${colsStr}
   FROM ${g.table} s${joins.length ? '\n  ' + joins.join('\n  ') : ''}${whereClause}
   GROUP BY ${groupDims}
 )`);
-    for (const m of g.metrics) {
-      cteOf.set(m.metric_code, cteName);
-      const dailyCode = dailyMap.get(m.metric_code);
-      if (dailyCode) cteOf.set(dailyCode, cteName);
+      for (const m of g.metrics) {
+        cteOf.set(m.metric_code, cteName);
+        const dailyCode = dailyMap.get(m.metric_code);
+        if (dailyCode) cteOf.set(dailyCode, cteName);
+      }
     }
   }
 
@@ -188,11 +299,21 @@ export function generateTier1View(
   const sel: string[] = [];
 
   // 维度列
-  if (useTargetWindow) sel.push(`tgt.target_id`);
+  if (useTargetWindow) {
+    // category 维度（UNION ALL）从合并 CTE 选，其他从 tgt 选
+    if (isCategoryUnion) {
+      const mergedCte = [...new Set(cteOf.values())][0];
+      sel.push(`${mergedCte}.target_id`);
+    } else {
+      sel.push(`tgt.target_id`);
+    }
+  }
   if (dim_table) {
     sel.push(`b.${dimKey} AS ${dimKey}`);
   } else if (useTargetWindow) {
-    sel.push(`cte0.${dimKey} AS ${dimKey}`);
+    // category 维度（UNION ALL）直接从 CTE 选，不经过 dim_table
+    const firstCte = [...new Set(cteOf.values())][0];
+    sel.push(`${firstCte}.${dimKey} AS ${dimKey}`);
   } else {
     sel.push(`${dimKey} AS ${dimKey}`);
   }
@@ -221,7 +342,8 @@ export function generateTier1View(
   if (dim_table) {
     fromParts.push(`${dim_table} b`);
     if (useTargetWindow) fromParts.push(`CROSS JOIN tgt`);
-  } else if (useTargetWindow) {
+  } else if (useTargetWindow && !isCategoryUnion) {
+    // category 维度（UNION ALL）已经在 CTE 内部 join tgt，外部不再需要
     fromParts.push(`tgt`);
   }
 
