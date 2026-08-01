@@ -576,4 +576,46 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
     const sql = generateHierarchyView(config, [saleM], [saleSrc]);
     expect(sql).toContain('AS sale_actual');
   });
+
+  // ── 反自由发挥契约：抓 hierarchy 正则解析失败静默返 NULL ──
+  // 覆盖 rate/remaining/daily/additive 全 derived 类型，用 129 规范化后的 formula 格式。
+  // hierarchy.metricExpr 正则不匹配时返 'NULL' -> 生成 `NULL AS <alias>`。
+  // 此测试断言每个 selected metric 都产出真实表达式，不降级为 NULL。
+  it('契约：所有 selected metric 产出非 NULL 表达式（正则失败会暴露）', () => {
+    const m = (c: string, col: string): Metric => baseMetric(c, col);
+    const metrics: Metric[] = [
+      m('sale_amount', 'total_sale'),
+      { ...m('sale_target', 'target_value'), fact_table: 'target_metric_values' },
+      m('delivery_amount', 'out_money'),
+      { ...m('wholesale_pp_amount', 'wholesale_amount'), fact_table: 'report_daily_wholesale_customer' },
+      { ...m('sale_rate', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+        formula: 'sale_amount / sale_target', depends_on: ['sale_amount', 'sale_target'], additive: false, unit: '率' },
+      { ...m('daily_sale', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+        formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'], additive: true },
+      { ...m('remaining_daily_sale', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+        formula: '(sale_target - sale_amount) / greatest(total_days - days_elapsed, 1)', depends_on: ['sale_target', 'sale_amount'], additive: true },
+      { ...m('distribution_amount', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
+        formula: 'delivery_amount + wholesale_pp_amount', depends_on: ['delivery_amount', 'wholesale_pp_amount'], additive: true },
+    ];
+    const sources: MetricSource[] = [
+      saleSrc,
+      { metric_code: 'sale_target', source_table: 'target_metric_values', source_column: 'target_value', source_filter: "metric_code='sale'", note: null },
+      { metric_code: 'delivery_amount', source_table: 'report_daily_delivery', source_column: 'out_money', source_filter: null, note: null },
+      { metric_code: 'wholesale_pp_amount', source_table: 'report_daily_wholesale_customer', source_column: 'wholesale_amount', source_filter: "system_book_code = '64188'", note: null },
+    ];
+    const config: ViewConfig = {
+      ...baseConfig(metrics, sources, ['sale_amount', 'sale_target', 'sale_rate', 'daily_sale', 'remaining_daily_sale', 'distribution_amount']),
+      aliases: { sale_amount: 'sale_actual', distribution_amount: 'delivery_actual', remaining_daily_sale: 'remaining_daily_sale_target' },
+    };
+    const sql = generateHierarchyView(config, metrics, sources);
+    // 契约：每个指标 alias 都不能是裸 NULL 表达式（正则失败会产出 `NULL AS xxx`）
+    expect(sql).not.toMatch(/NULL AS sale_actual/);
+    expect(sql).not.toMatch(/NULL AS sale_target/);
+    expect(sql).not.toMatch(/NULL AS sale_rate/);
+    expect(sql).not.toMatch(/NULL AS daily_sale/);
+    expect(sql).not.toMatch(/NULL AS remaining_daily_sale_target/);
+    expect(sql).not.toMatch(/NULL AS delivery_actual/);
+    // 正向：rate/remaining 含 NULLIF 或 greatest（确认走了解析分支而非降级）
+    expect(sql).toMatch(/NULLIF|greatest/i);
+  });
 });
