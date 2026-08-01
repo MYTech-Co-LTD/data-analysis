@@ -13,6 +13,7 @@ export function parseMetric(row: Record<string, unknown>): Metric {
     value_column: row.value_column == null ? null : String(row.value_column),
     agg: row.agg == null ? null : (row.agg as Metric['agg']),
     formula: row.formula == null ? null : String(row.formula),
+    formula_ast: (row.formula_ast ?? null) as Metric['formula_ast'],  // JSONB -> Ast 对象
     depends_on: Array.isArray(row.depends_on)
       ? row.depends_on.map(String)
       : JSON.parse(String(row.depends_on ?? '[]')),

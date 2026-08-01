@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { generateTier1View } from '../src/generators/tier1';
+import { A } from '../src/ast';
 import { Metric, MetricSource, ViewConfig } from '../src/types';
 
 // 按真实 metric_registry（076/088/119/122/123）构造 fixture
@@ -97,6 +98,7 @@ const mockMetrics: Metric[] = [
     value_column: null,
     agg: null,
     formula: 'delivery_amount + wholesale_pp_amount',
+    formula_ast: A.op('+', A.ref('delivery_amount'), A.ref('wholesale_pp_amount')),
     depends_on: ['delivery_amount', 'wholesale_pp_amount'],
     additive: true,
     cost_sensitive: false,
@@ -114,6 +116,7 @@ const mockMetrics: Metric[] = [
     value_column: null,
     agg: null,
     formula: 'delivery_profit + wholesale_pp_profit',
+    formula_ast: A.op('+', A.ref('delivery_profit'), A.ref('wholesale_pp_profit')),
     depends_on: ['delivery_profit', 'wholesale_pp_profit'],
     additive: true,
     cost_sensitive: true,
@@ -131,6 +134,7 @@ const mockMetrics: Metric[] = [
     value_column: null,
     agg: null,
     formula: 'distribution_amount / sale_amount',
+    formula_ast: A.op('/', A.ref('distribution_amount'), A.ref('sale_amount')),
     depends_on: ['distribution_amount', 'sale_amount'],
     additive: false,
     cost_sensitive: false,

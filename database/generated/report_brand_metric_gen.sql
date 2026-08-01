@@ -49,10 +49,10 @@ SELECT tgt.target_id,
   b.brand_name,
   cte0.sale_amount AS sale_amount,
   cte3.sale_target AS sale_target,
-  COALESCE((cte0.sale_amount), 0) / NULLIF(COALESCE((cte3.sale_target), 0), 0) AS sale_rate,
-  COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0) AS delivery_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(cte1.delivery_profit, 0) + COALESCE(cte2.wholesale_pp_profit, 0) END AS delivery_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE((COALESCE(cte1.delivery_profit, 0) + COALESCE(cte2.wholesale_pp_profit, 0)), 0) / NULLIF(COALESCE((COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0)), 0), 0) END AS delivery_margin
+  round((COALESCE(cte0.sale_amount, 0) / NULLIF(COALESCE(cte3.sale_target, 0), 0)), 4) AS sale_rate,
+  COALESCE((COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0)), 0) AS delivery_amount,
+  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE((COALESCE(cte1.delivery_profit, 0) + COALESCE(cte2.wholesale_pp_profit, 0)), 0) END AS delivery_profit,
+  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((((COALESCE(cte1.delivery_profit, 0) + COALESCE(cte2.wholesale_pp_profit, 0))) / NULLIF(((COALESCE(cte1.delivery_amount, 0) + COALESCE(cte2.wholesale_pp_amount, 0))), 0)), 4) END AS delivery_margin
 FROM dim_brand b
 CROSS JOIN tgt
 LEFT JOIN cte0 ON cte0.target_id = tgt.target_id AND cte0.system_book_code = b.system_book_code
@@ -62,6 +62,6 @@ LEFT JOIN cte3 ON cte3.target_id = tgt.target_id AND cte3.system_book_code = b.s
 )
 SELECT * FROM brand_rows
 UNION ALL
-SELECT tgt.target_id, '合计' AS system_book_code, NULL AS brand_name, SUM(brand_rows.sale_amount) AS sale_amount, SUM(brand_rows.sale_target) AS sale_target, COALESCE(SUM(brand_rows.sale_amount), 0) / NULLIF(COALESCE(SUM(brand_rows.sale_target), 0), 0) AS sale_rate, SUM(brand_rows.delivery_amount) AS delivery_amount, SUM(brand_rows.delivery_profit) AS delivery_profit, CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(SUM(brand_rows.delivery_profit), 0) / NULLIF(COALESCE(SUM(brand_rows.delivery_amount), 0), 0) END AS delivery_margin
+SELECT tgt.target_id, '合计' AS system_book_code, NULL AS brand_name, SUM(brand_rows.sale_amount) AS sale_amount, SUM(brand_rows.sale_target) AS sale_target, round(COALESCE(SUM(brand_rows.sale_amount), 0) / NULLIF(COALESCE(SUM(brand_rows.sale_target), 0), 0), 4) AS sale_rate, SUM(brand_rows.delivery_amount) AS delivery_amount, CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN SUM(brand_rows.delivery_profit) END AS delivery_profit, CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round(COALESCE(SUM(brand_rows.delivery_profit), 0) / NULLIF(COALESCE(SUM(brand_rows.delivery_amount), 0), 0), 4) END AS delivery_margin
 FROM brand_rows JOIN tgt ON tgt.target_id = brand_rows.target_id
 GROUP BY tgt.target_id;

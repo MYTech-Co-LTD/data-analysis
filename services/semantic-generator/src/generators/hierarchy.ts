@@ -1,4 +1,5 @@
 import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../types';
+import { astToSql, derivedExpr, classifyAst, type Ast, type AstCtx } from '../ast';
 
 /**
  * 层级视图生成器（T6：final SELECT + 各级 UNION ALL）
@@ -78,15 +79,17 @@ export function generateHierarchyView(
   const dailyFeeds = new Map<string, string[]>();   // dailyCode → 实际产 FILTER 列的 CTE 名列表（leaf_act_N）
   for (const code of metricCodes) {
     const m = metrics.find(x => x.metric_code === code);
-    if (!m || m.measure_type !== 'derived') continue;
-    if (!/FILTER\s*\(\s*biz_date\s*=\s*latest_day\s*\)/i.test(m.formula ?? '')) continue;
-    const target = m.depends_on[0];
-    const targetMetric = metrics.find(x => x.metric_code === target);
+    if (!m || m.measure_type !== 'derived' || !m.formula_ast) continue;
+    if (m.formula_ast.t !== 'filter') continue;
+    const exprAst = m.formula_ast.expr;
     let bases: string[] = [];
-    if (targetMetric) {
-      bases = targetMetric.measure_type === 'base'
-        ? [target]
-        : collectLeaves([target], metrics).map(x => x.metric_code);
+    if (exprAst.t === 'ref') {
+      const targetMetric = metrics.find(x => x.metric_code === exprAst.code);
+      if (targetMetric) {
+        bases = targetMetric.measure_type === 'base'
+          ? [exprAst.code]
+          : collectLeaves([exprAst.code], metrics).map(x => x.metric_code);
+      }
     }
     dailyBases.set(code, bases);
     dailyFeeds.set(code, []);
@@ -363,15 +366,6 @@ export function generateHierarchyView(
 
 // ──────────── T6 辅助：final SELECT + 各级 UNION ALL ────────────
 
-/** derived metric 子类分类（daily/rate/remaining/additive） */
-function classifyDerived(m: Metric): 'daily' | 'rate' | 'remaining' | 'additive' {
-  const f = m.formula ?? '';
-  if (/FILTER\s*\(\s*biz_date\s*=\s*latest_day\s*\)/i.test(f)) return 'daily';
-  if (/\b(total_days|days_elapsed)\b/.test(f)) return 'remaining';
-  if (f.includes('/')) return 'rate';
-  return 'additive';
-}
-
 /** cost 脱敏（与 tier1 一致；下钻表当前无 cost_sensitive 指标，保留调用点） */
 function maskCost(expr: string, m: Metric): string {
   if (!m.cost_sensitive) return expr;
@@ -402,73 +396,10 @@ function buildFinalSelect(
   // base/daily metric 在某级 SELECT 中的引用（不含 COALESCE/alias）
   //   target 指标：叶级 leaf_rows 已合并 → a.<code>；父级需 LEFT JOIN tgt → t.<code>；无 tgt → 字面量 0
   //   actual base / daily：act CTE 含 → a.<code>
-  const baseRef = (m: Metric, isLeaf: boolean, hasTgt: boolean): string => {
-    if (targetLeafCodes.has(m.metric_code)) {
-      if (isLeaf) return `a.${m.metric_code}`;
-      return hasTgt ? `t.${m.metric_code}` : `0`;
-    }
-    return `a.${m.metric_code}`;
-  };
+  // daily 指标（AST filter）+ 叶 base（derived 引用的 base 也要进 cteOf 供 astToSql 解析）
+  const dailyCodes = new Set(metrics.filter(m => m.measure_type === 'derived' && m.formula_ast?.t === 'filter').map(m => m.metric_code));
+  const leaves = collectLeaves(config.metrics, metrics);
 
-  // 操作数引用：base → baseRef；derived → 递归 metricExpr 展开（如 rate 的分子 distribution_amount）
-  const operandRef = (code: string, isLeaf: boolean, hasTgt: boolean): string => {
-    const m = metrics.find(x => x.metric_code === code);
-    if (!m) return code;
-    if (m.measure_type === 'base') return `COALESCE(${baseRef(m, isLeaf, hasTgt)}, 0)`;
-    return `(${metricExpr(m, isLeaf, hasTgt)})`;
-  };
-
-  // 单个 metric 在某级 SELECT 的 SQL 表达式（不含 cost 脱敏、不含 alias）
-  const metricExpr = (m: Metric, isLeaf: boolean, hasTgt: boolean): string => {
-    if (m.measure_type === 'base') {
-      return `COALESCE(${baseRef(m, isLeaf, hasTgt)}, 0)`;
-    }
-    const cls = classifyDerived(m);
-    if (cls === 'daily') return `COALESCE(a.${m.metric_code}, 0)`;
-    if (cls === 'rate') {
-      // formula: A/B（A、B 为 metric_code，可能本身是 derived 如 distribution_amount）
-      const parts = (m.formula ?? '').split('/').map(s => s.trim());
-      if (parts.length === 2) {
-        const aRef = operandRef(parts[0], isLeaf, hasTgt);
-        const bRef = operandRef(parts[1], isLeaf, hasTgt);
-        return `round(${aRef} / NULLIF(${bRef}, 0), 4)`;
-      }
-      return 'NULL';
-    }
-    if (cls === 'remaining') {
-      // formula 形如 (T-A)/(total_days-days_elapsed)、(T-A)/nullif(total_days-days_elapsed, 0)
-      //   或 (T-A)/greatest(total_days-days_elapsed, 1)
-      //   nullif 分母：NULLIF 防除零——与 120 CASE WHEN total_days>days_elapsed 等价
-      //   greatest 分母：剩余天数下限 1，月末最后一天显示剩余缺口全额（129 口径）
-      const f = (m.formula ?? '').replace(/\s/g, '');
-      const match = f.match(/^\(([^()]+)\)\/(?:(nullif|greatest)\(([^()]+)\)|\(([^()]+)\))$/);
-      if (!match) return 'NULL';
-      const [, numPart, wrapper, denWrappedPart, denParenPart] = match;
-      const denPart = denWrappedPart ?? denParenPart;
-      // 包装形态分母含 ",0"/",1" 尾巴（如 total_days-days_elapsed,0）→ 取逗号前
-      const denCore = denPart.split(',')[0];
-      const numTokens = numPart.split('-');
-      const denTokens = denCore.split('-');
-      if (numTokens.length === 2 && denTokens.length === 2) {
-        const tRef = operandRef(numTokens[0], isLeaf, hasTgt);
-        const aRef = operandRef(numTokens[1], isLeaf, hasTgt);
-        const tdRef = `a.${denTokens[0]}`;
-        const deRef = `a.${denTokens[1]}`;
-        const diff = `COALESCE(${tdRef}, 0) - COALESCE(${deRef}, 0)`;
-        const den = wrapper === 'greatest' ? `GREATEST(${diff}, 1)` : `NULLIF(${diff}, 0)`;
-        return `round((${tRef} - ${aRef}) / ${den}, 2)`;
-      }
-      return 'NULL';
-    }
-    // additive derived：展开公式（替换依赖为 COALESCE(baseRef,0)）
-    let expr = m.formula ?? '';
-    for (const dep of m.depends_on) {
-      const depM = metrics.find(x => x.metric_code === dep);
-      if (!depM) continue;
-      expr = expr.replace(new RegExp(`\\b${dep}\\b`, 'g'), `COALESCE(${baseRef(depM, isLeaf, hasTgt)}, 0)`);
-    }
-    return expr;
-  };
 
   // 对每级生成一个 SELECT 子查询
   const levelSelects: string[] = [];
@@ -480,6 +411,22 @@ function buildFinalSelect(
     const isLeaf = lvl.is_leaf;
     const hasTgt = !!info.tgt;
     const cols: string[] = [];
+
+    // per-level ctx：base actual/daily -> 'a'（act CTE 别名）；target -> isLeaf?'a':(hasTgt?'t':不设)
+    const cteOf = new Map<string, string>();
+    for (const lf of leaves) {
+      if (targetLeafCodes.has(lf.metric_code)) {
+        if (isLeaf) cteOf.set(lf.metric_code, 'a');
+        else if (hasTgt) cteOf.set(lf.metric_code, 't');
+      } else {
+        cteOf.set(lf.metric_code, 'a');
+      }
+    }
+    for (const dc of dailyCodes) cteOf.set(dc, 'a');
+    // 窗口列（total_days/days_elapsed）在 act CTE 也有（leaf_rows 暴露 / 父级 MAX）-> 引 a. 非 tgt.
+    cteOf.set('total_days', 'a');
+    cteOf.set('days_elapsed', 'a');
+    const ctx: AstCtx = { cteOf, useTargetWindow: true, derivedAst: (code) => metrics.find(m => m.metric_code === code)?.formula_ast ?? undefined, coalesceRefs: true };
 
     // target_id, level, parent_code
     cols.push('a.target_id');
@@ -510,7 +457,18 @@ function buildFinalSelect(
       const m = metrics.find(x => x.metric_code === code);
       if (!m) continue;
       const outName = config.aliases?.[code] ?? code;
-      const expr = metricExpr(m, isLeaf, hasTgt);
+      let expr: string;
+      if (m.measure_type === 'base') {
+        // base（含 target）：无 tgt 的 target -> 0
+        const ref = cteOf.get(code);
+        expr = ref ? `COALESCE(${ref}.${code}, 0)` : '0';
+      } else if (dailyCodes.has(code)) {
+        expr = `COALESCE(a.${code}, 0)`;  // daily 已在 act CTE 聚合
+      } else if (m.formula_ast) {
+        expr = derivedExpr(m.formula_ast, ctx);  // rate/remaining/additive -> AST 翻译
+      } else {
+        expr = 'NULL';
+      }
       cols.push(`${maskCost(expr, m)} AS ${outName}`);
     }
 

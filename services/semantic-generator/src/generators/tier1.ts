@@ -1,66 +1,22 @@
 import { Metric, MetricSource, ViewConfig } from '../types';
+import { astToSql, derivedExpr, classifyAst, type Ast, type AstCtx } from '../ast';
 
 /**
- * Tier1 生成器
+ * Tier1 生成器（AST 化版）
  *
- * 能力：base 聚合 + additive derived 展开 + 率重算 + cost脱敏
+ * 能力：base 聚合 + derived（AST 翻译）+ cost脱敏
  *      + scope（目标日期窗口 + 考核战区）+ target 值 join + 合计行 + 维表 cross-join + 列别名
  *
- * 结构（scoped + total_row 时，对应 report_brand_metric_gen）：
- *   WITH tgt AS (active total target 日期窗口),
- *        cte_actualN AS (base 表按 tgt 窗口 + assessed 过滤聚合),
- *        cte_targetN AS (target_metric_values 按分解级聚合),
- *        brand_rows AS (dim_brand ⊥ tgt LEFT JOIN 各 cte + derived + cost mask)
- *   SELECT * FROM brand_rows
- *   UNION ALL 合计行
+ * 反自由发挥：derived 口径从 metric_registry.formula_ast 读，用 astToSql 递归翻译。
+ *            生成器无字符串解析/无正则。round/COALESCE 格式在 derivedExpr（口径/格式分离）。
  */
 
-type Ctx = { metrics: Metric[]; sources: MetricSource[]; cteOf: Map<string, string>; useTargetWindow?: boolean };
-
-/** tgt 窗口列集合：formula 里这些 token 在 useTargetWindow 时需写成 tgt.<col> */
-const WINDOW_COLS = ['total_days', 'days_elapsed', 'latest_day'];
+type Ctx = AstCtx & { metrics: Metric[]; sources: MetricSource[] };
 
 function baseRef(metric: Metric, ctx: Ctx): string {
   const cte = ctx.cteOf.get(metric.metric_code);
   if (!cte) throw new Error(`base metric ${metric.metric_code} 缺 CTE 映射`);
   return `${cte}.${metric.metric_code}`;
-}
-
-function expandAdditive(metric: Metric, ctx: Ctx): string {
-  let expr = metric.formula ?? '';
-  for (const dep of metric.depends_on) {
-    const depMetric = ctx.metrics.find(m => m.metric_code === dep);
-    if (!depMetric) continue;
-    const depExpr = metricRef(depMetric, ctx);
-    expr = expr.replace(new RegExp(`\\b${dep}\\b`, 'g'), `COALESCE(${depExpr}, 0)`);
-  }
-  // 窗口列（total_days/days_elapsed/latest_day）在 tgt CTE 里 → 仅 useTargetWindow 时前缀 tgt.
-  // 其它非 metric_code token（nullif/数字/current_date 等）原样保留
-  if (ctx.useTargetWindow) {
-    expr = expr.replace(new RegExp(`\\b(${WINDOW_COLS.join('|')})\\b`, 'g'), 'tgt.$1');
-  }
-  return expr;
-}
-
-function expandRate(metric: Metric, ctx: Ctx): string {
-  const formula = metric.formula ?? '';
-  const parts = formula.split('/');
-  if (parts.length !== 2) throw new Error(`rate metric ${metric.metric_code} 公式非 A/B 结构: ${formula}`);
-  const num = expandToken(parts[0].trim(), ctx);
-  const den = expandToken(parts[1].trim(), ctx);
-  return `COALESCE(${num}, 0) / NULLIF(COALESCE(${den}, 0), 0)`;
-}
-
-function expandToken(token: string, ctx: Ctx): string {
-  const m = ctx.metrics.find(x => x.metric_code === token);
-  if (!m) return token;
-  return `(${metricRef(m, ctx)})`;
-}
-
-function metricRef(metric: Metric, ctx: Ctx): string {
-  if (metric.measure_type === 'base') return baseRef(metric, ctx);
-  if (metric.additive) return expandAdditive(metric, ctx);
-  return expandRate(metric, ctx);
 }
 
 function maskCost(expr: string, metric: Metric): string {
@@ -91,6 +47,13 @@ function collectLeaves(metricCodes: string[], metrics: Metric[]): Metric[] {
   return leaves;
 }
 
+/** rate/remaining AST 取分子分母 ref code（合计行重算用） */
+function rateOperands(ast: Ast): { num: string; den: Ast } | null {
+  if (ast.t !== 'op' || ast.op !== '/') return null;
+  if (ast.l.t !== 'ref') return null;
+  return { num: ast.l.code, den: ast.r };
+}
+
 export function generateTier1View(
   config: ViewConfig,
   metrics: Metric[],
@@ -102,30 +65,25 @@ export function generateTier1View(
   } = config;
 
   const dimKey = dim_code === 'brand' ? 'system_book_code' : 'branch_num';
-  const scoped = scope?.target_window || scope?.assessed_war_zone;
   const useTargetWindow = scope?.target_window ?? false;
   const useAssessed = scope?.assessed_war_zone ?? false;
 
   const leaves = collectLeaves(metricCodes, metrics);
 
-  // 识别 daily 指标：selected derived，formula 含 FILTER(biz_date=latest_day)
-  // → 在 depends_on[0] 所属 base 的 actual CTE 里额外产 FILTER(latest_day) 聚合列
-  // dailyMap: baseMetricCode → dailyMetricCode；dailyCodes 用于 SELECT 阶段按 base 引用
-  const dailyMap = new Map<string, string>();
+  // 识别 daily 指标：formula_ast.t === 'filter' -> 在其 expr.ref 所属 base 的 actual CTE 产 FILTER 列
+  const dailyMap = new Map<string, string>();   // baseMetricCode -> dailyMetricCode
   const dailyCodes = new Set<string>();
   for (const code of metricCodes) {
     const m = metrics.find(x => x.metric_code === code);
-    if (!m || m.measure_type !== 'derived') continue;
-    const formula = m.formula ?? '';
-    if (!/FILTER\s*\(\s*biz_date\s*=\s*latest_day\s*\)/i.test(formula)) continue;
-    const baseCode = m.depends_on[0];
-    if (!baseCode) continue;
+    if (!m || m.measure_type !== 'derived' || !m.formula_ast) continue;
+    if (m.formula_ast.t !== 'filter') continue;
+    if (m.formula_ast.expr.t !== 'ref') continue;
+    const baseCode = m.formula_ast.expr.code;
     dailyMap.set(baseCode, m.metric_code);
     dailyCodes.add(m.metric_code);
   }
 
-  // base 叶子按 (source_table, source_filter) 分组
-  // target_metric_values 单独走 target CTE，不进 actual CTE
+  // base 叶子按 (source_table, source_filter) 分组；target_metric_values 单独走 target CTE
   const actualGroups = new Map<string, { table: string; filter: string | null; metrics: Metric[] }>();
   const targetLeaves: Metric[] = [];
   for (const leaf of leaves) {
@@ -143,7 +101,7 @@ export function generateTier1View(
   const cteList: string[] = [];
   const cteOf = new Map<string, string>();
 
-  // tgt CTE（目标窗口 + 窗口列 total_days/days_elapsed/latest_day，照手写视图 120 口径）
+  // tgt CTE（目标窗口 + 窗口列，照手写视图 120 口径）
   if (useTargetWindow) {
     cteList.push(`tgt AS (
   SELECT id AS target_id, start_date, end_date,
@@ -162,7 +120,7 @@ export function generateTier1View(
       const src = sources.find(s => s.metric_code === m.metric_code)!;
       return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
     });
-    // daily FILTER 列：仅 useTargetWindow 时（无窗口则无 tgt.latest_day，跳过避免无效 SQL）
+    // daily FILTER 列：仅 useTargetWindow 时（无窗口无 tgt.latest_day）
     if (useTargetWindow) {
       for (const m of g.metrics) {
         const dailyCode = dailyMap.get(m.metric_code);
@@ -176,10 +134,8 @@ export function generateTier1View(
     const joins: string[] = [];
     let selectDims = `s.${dimKey}`;
     let groupDims = `s.${dimKey}`;
-    let where: string[] = [];
-
-    if (g.filter) where.push(g.filter.replace(/\bs\./g, 's.'));
-
+    const where: string[] = [];
+    if (g.filter) where.push(g.filter);
     if (useTargetWindow) {
       joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`);
       selectDims = `tgt.target_id, s.${dimKey}`;
@@ -189,7 +145,6 @@ export function generateTier1View(
       joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
       where.push(`is_assessed_war_zone(db.first_level_region)`);
     }
-
     const whereClause = where.length ? `\n  WHERE ${where.join(' AND ')}` : '';
     cteList.push(`${cteName} AS (
   SELECT ${selectDims},
@@ -208,7 +163,6 @@ export function generateTier1View(
   for (const tleaf of targetLeaves) {
     const cteName = `cte${cteIdx++}`;
     const src = sources.find(s => s.metric_code === tleaf.metric_code)!;
-    // source_filter 形如 metric_code='sale'
     const metricFilter = src.source_filter ?? '';
     const assessedCond = useAssessed
       ? ` AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code=t.system_book_code AND db.branch_num=t.branch_num AND is_assessed_war_zone(db.first_level_region))`
@@ -224,7 +178,11 @@ export function generateTier1View(
   }
 
   // 组装 main SELECT
-  const ctx: Ctx = { metrics, sources, cteOf, useTargetWindow };
+  const ctx: Ctx = {
+    metrics, sources, cteOf, useTargetWindow,
+    derivedAst: (code) => metrics.find(m => m.metric_code === code)?.formula_ast ?? undefined,
+    coalesceRefs: true,
+  };
   const sel: string[] = [];
 
   // 维度列
@@ -242,14 +200,18 @@ export function generateTier1View(
   for (const code of metricCodes) {
     const m = metrics.find(x => x.metric_code === code);
     if (!m) continue;
-    // daily 指标已在 actual CTE 聚合，SELECT 阶段像 base 一样直接引用 cte 列
-    const treatAsBase = m.measure_type === 'base' || dailyCodes.has(code);
-    const expr = treatAsBase ? baseRef(m, ctx) : metricRef(m, ctx);
-    const masked = treatAsBase ? expr : maskCost(expr, m);
-    // base 的 cost 脱敏
-    const finalExpr = treatAsBase && m.cost_sensitive ? maskCost(expr, m) : masked;
     const outName = aliases?.[code] ?? code;
-    sel.push(`${finalExpr} AS ${outName}`);
+    // daily 已在 actual CTE 聚合 -> SELECT 像 base 引用 cte 列
+    const treatAsBase = m.measure_type === 'base' || dailyCodes.has(code);
+    let expr: string;
+    if (treatAsBase) {
+      expr = baseRef(m, ctx);
+    } else if (m.formula_ast) {
+      expr = derivedExpr(m.formula_ast, ctx);
+    } else {
+      throw new Error(`derived metric ${code} 缺 formula_ast`);
+    }
+    sel.push(`${maskCost(expr, m)} AS ${outName}`);
   }
 
   // FROM + JOIN
@@ -292,32 +254,39 @@ FROM ${fromParts.join('\n')}
 SELECT * FROM brand_rows
 UNION ALL
 SELECT tgt.target_id, '合计' AS ${dimKey}${dim_code === 'brand' && dim_table ? ', NULL AS brand_name' : ''}`;
-    // 合计行指标列：SUM 各 base，rate 重算
+    // 合计行：按 AST 分类重算
     for (const code of metricCodes) {
       const m = metrics.find(x => x.metric_code === code)!;
       const outName = aliases?.[code] ?? code;
+      let sumExpr: string;
       if (m.measure_type === 'base') {
-        const sumExpr = m.cost_sensitive
-          ? `CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN SUM(brand_rows.${outName}) END`
-          : `SUM(brand_rows.${outName})`;
-        sql += `, ${sumExpr} AS ${outName}`;
-      } else if (m.additive) {
-        // additive derived：合计 = SUM(各加项) 运算 → 直接对展开式 SUM
-        // 简化：用 brand_rows 已算列做 SUM 后重算
-        sql += `, SUM(brand_rows.${outName}) AS ${outName}`;
+        sumExpr = `SUM(brand_rows.${outName})`;
+      } else if (!m.formula_ast) {
+        sumExpr = `NULL`;
       } else {
-        // rate：合计行重算
-        const formula = m.formula ?? '';
-        const parts = formula.split('/').map(s => s.trim());
-        if (parts.length === 2) {
-          const numCode = aliases?.[parts[0]] ?? parts[0];
-          const denCode = aliases?.[parts[1]] ?? parts[1];
-          const rateExpr = `COALESCE(SUM(brand_rows.${numCode}), 0) / NULLIF(COALESCE(SUM(brand_rows.${denCode}), 0), 0)`;
-          sql += `, ${maskCost(rateExpr, m)} AS ${outName}`;
+        const cls = classifyAst(m.formula_ast);
+        if (cls === 'rate' || cls === 'remaining') {
+          // rate/remaining 合计行重算：分子分母分别 SUM
+          const operands = rateOperands(m.formula_ast);
+          if (operands) {
+            const numOut = aliases?.[operands.num] ?? operands.num;
+            const numSum = `COALESCE(SUM(brand_rows.${numOut}), 0)`;
+            const denExpr = cls === 'remaining'
+              // remaining 分母是 greatest/nullif(total_days-days_elapsed,...)：合计行用 MAX(窗口列)
+              ? astToSql(operands.den, { cteOf: new Map([['total_days', 'brand_rows'], ['days_elapsed', 'brand_rows']]), useTargetWindow: false })
+              : `NULLIF(COALESCE(SUM(brand_rows.${aliases?.[rateDenRef(operands.den)] ?? rateDenRef(operands.den)}), 0), 0)`;
+            sumExpr = cls === 'remaining'
+              ? `round((${numSum} - 0) / ${denExpr}, 2)`  // remaining 分子是 (T-A)，需拆
+              : `round(${numSum} / ${denExpr}, 4)`;
+          } else {
+            sumExpr = `NULL`;
+          }
         } else {
-          sql += `, NULL AS ${outName}`;
+          // additive/daily：可 SUM
+          sumExpr = `SUM(brand_rows.${outName})`;
         }
       }
+      sql += `, ${maskCost(sumExpr, m)} AS ${outName}`;
     }
     sql += `\nFROM brand_rows${useTargetWindow ? ' JOIN tgt ON tgt.target_id = brand_rows.target_id' : ''}`;
     if (useTargetWindow) sql += `\nGROUP BY tgt.target_id`;
@@ -328,4 +297,9 @@ FROM ${fromParts.join('\n')};`;
   }
 
   return sql;
+}
+
+/** rate 分母若是 ref，取其 code（合计行 SUM 分母用） */
+function rateDenRef(den: Ast): string {
+  return den.t === 'ref' ? den.code : '';
 }

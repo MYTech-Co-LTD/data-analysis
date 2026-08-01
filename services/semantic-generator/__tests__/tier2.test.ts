@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { generateTier1View } from '../src/generators/tier1';
+import { A } from '../src/ast';
 import { Metric, MetricSource, ViewConfig } from '../src/types';
 
 const baseMetric = (code: string, col: string): Metric => ({
   metric_code: code, name: code, measure_type: 'base', fact_table: 'report_daily_sales',
-  value_column: col, agg: 'SUM', formula: null, depends_on: [], additive: true,
+  value_column: col, agg: 'SUM', formula: null, formula_ast: null, depends_on: [], additive: true,
   cost_sensitive: false, unit: '元', data_ready: true, enabled: true,
   description: null, business_formula: null,
 });
@@ -28,7 +29,7 @@ describe('Tier2 window context', () => {
     const dailyMetric: Metric = {
       ...baseMetric('daily_sale', 'total_sale'),
       measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-      formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'],
+      formula: 'sale_amount FILTER(biz_date=latest_day)', formula_ast: A.filter(A.ref('sale_amount'), 'biz_date', A.ref('latest_day')), depends_on: ['sale_amount'],
       additive: true,
     };
     const config: ViewConfig = {
@@ -56,6 +57,7 @@ describe('Tier2 window context', () => {
       ...baseMetric('remaining_daily_sale', ''),
       measure_type: 'derived', fact_table: null, value_column: null, agg: null,
       formula: '(sale_target - sale_amount) / nullif(total_days - days_elapsed, 0)',
+      formula_ast: A.op('/', A.op('-', A.ref('sale_target'), A.ref('sale_amount')), A.call('nullif', A.op('-', A.ref('total_days'), A.ref('days_elapsed')), A.lit(0))),
       depends_on: ['sale_target', 'sale_amount'], additive: true,
     };
     const config: ViewConfig = {
@@ -90,6 +92,7 @@ describe('Tier2 window context', () => {
       ...baseMetric('remaining_daily_sale', ''),
       measure_type: 'derived', fact_table: null, value_column: null, agg: null,
       formula: '(sale_target - sale_amount) / nullif(total_days - days_elapsed, 0)',
+      formula_ast: A.op('/', A.op('-', A.ref('sale_target'), A.ref('sale_amount')), A.call('nullif', A.op('-', A.ref('total_days'), A.ref('days_elapsed')), A.lit(0))),
       depends_on: ['sale_target', 'sale_amount'], additive: true,
     };
     const config: ViewConfig = {
@@ -112,7 +115,7 @@ describe('Tier2 window context', () => {
     const dailyMetric: Metric = {
       ...baseMetric('daily_sale', 'total_sale'),
       measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-      formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'],
+      formula: 'sale_amount FILTER(biz_date=latest_day)', formula_ast: A.filter(A.ref('sale_amount'), 'biz_date', A.ref('latest_day')), depends_on: ['sale_amount'],
       additive: true,
     };
     const config: ViewConfig = {

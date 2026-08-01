@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { generateHierarchyView } from '../src/generators/hierarchy';
+import { A, type Ast } from '../src/ast';
 import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../src/types';
 
 const baseMetric = (code: string, col: string): Metric => ({
   metric_code: code, name: code, measure_type: 'base', fact_table: 'report_daily_sales',
-  value_column: col, agg: 'SUM', formula: null, depends_on: [], additive: true,
+  value_column: col, agg: 'SUM', formula: null, formula_ast: null, depends_on: [], additive: true,
   cost_sensitive: false, unit: '元', data_ready: true, enabled: true,
   description: null, business_formula: null,
 });
@@ -57,7 +58,7 @@ describe('Hierarchy Generator (T4 leaf level)', () => {
     const dailyMetric: Metric = {
       ...baseMetric('daily_sale', 'total_sale'),
       measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-      formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'],
+      formula: 'sale_amount FILTER(biz_date=latest_day)', formula_ast: A.filter(A.ref('sale_amount'), 'biz_date', A.ref('latest_day')), depends_on: ['sale_amount'],
       additive: true,
     };
     const config: ViewConfig = {
@@ -274,7 +275,7 @@ describe('Hierarchy Generator (T5 parent rollup + parent target)', () => {
     const dailyMetric: Metric = {
       ...baseMetric('daily_sale', 'total_sale'),
       measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-      formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'],
+      formula: 'sale_amount FILTER(biz_date=latest_day)', formula_ast: A.filter(A.ref('sale_amount'), 'biz_date', A.ref('latest_day')), depends_on: ['sale_amount'],
       additive: true,
     };
     const config: ViewConfig = {
@@ -368,22 +369,25 @@ const threeLevelHierarchy: HierarchyLevel[] = [
   },
 ];
 
-// derived metric 构造辅助
-const derivedMetric = (code: string, formula: string, depends_on: string[], additive = false): Metric => ({
+// derived metric 构造辅助（formula 字符串仅人读；formulaAst 是生成器实际读的）
+const derivedMetric = (code: string, formula: string, depends_on: string[], additive = false, formulaAst?: Ast): Metric => ({
   metric_code: code, name: code, measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-  formula, depends_on, additive, cost_sensitive: false, unit: '元', data_ready: true, enabled: true,
+  formula, formula_ast: formulaAst ?? null, depends_on, additive, cost_sensitive: false, unit: '元', data_ready: true, enabled: true,
   description: null, business_formula: null,
 });
 
 describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
   const saleM = baseMetric('sale_amount', 'total_sale');
   const saleTargetM: Metric = { ...baseMetric('sale_target', 'target_value'), fact_table: null };
-  const saleRateM = derivedMetric('sale_rate', 'sale_amount/sale_target', ['sale_amount', 'sale_target']);
-  const dailySaleM = derivedMetric('daily_sale', 'sale_amount FILTER(biz_date=latest_day)', ['sale_amount'], true);
+  const saleRateM = derivedMetric('sale_rate', 'sale_amount/sale_target', ['sale_amount', 'sale_target'], false,
+    A.op('/', A.ref('sale_amount'), A.ref('sale_target')));
+  const dailySaleM = derivedMetric('daily_sale', 'sale_amount FILTER(biz_date=latest_day)', ['sale_amount'], true,
+    A.filter(A.ref('sale_amount'), 'biz_date', A.ref('latest_day')));
   const remainingSaleM = derivedMetric(
     'remaining_daily_sale_target',
     '(sale_target - sale_amount) / greatest(total_days - days_elapsed, 1)',
-    ['sale_target', 'sale_amount'],
+    ['sale_target', 'sale_amount'], true,
+    A.op('/', A.op('-', A.ref('sale_target'), A.ref('sale_amount')), A.call('greatest', A.op('-', A.ref('total_days'), A.ref('days_elapsed')), A.lit(1))),
   );
 
   const baseConfig = (metrics: Metric[], sources: MetricSource[], metricCodes: string[]): ViewConfig => ({
@@ -525,7 +529,7 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
     // 输出列名
     expect(sql).toContain('AS remaining_daily_sale_target');
     // greatest 分母 → GREATEST(diff, 1)，月末剩余 0 天不再 NULL
-    expect(sql).toMatch(/GREATEST\(COALESCE\(a\.total_days, 0\) - COALESCE\(a\.days_elapsed, 0\), 1\)/);
+    expect(sql).toMatch(/greatest\(\(a\.total_days - a\.days_elapsed\),\s*1\)/i);
     // round(...,2) 对齐 120 行 138-139
     expect(sql).toMatch(/round\([\s\S]*,\s*2\)/);
   });
@@ -534,7 +538,8 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
     const legacyRemainingM = derivedMetric(
       'remaining_daily_sale_target',
       '(sale_target - sale_amount) / nullif(total_days - days_elapsed, 0)',
-      ['sale_target', 'sale_amount'],
+      ['sale_target', 'sale_amount'], true,
+      A.op('/', A.op('-', A.ref('sale_target'), A.ref('sale_amount')), A.call('nullif', A.op('-', A.ref('total_days'), A.ref('days_elapsed')), A.lit(0))),
     );
     const config = baseConfig(
       [saleM, saleTargetM, legacyRemainingM], [saleSrc, {
@@ -548,7 +553,7 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
         metric_code: 'sale_target', source_table: 'target_metric_values',
         source_column: 'target_value', source_filter: "metric_code='sale'", note: null,
       }]);
-    expect(sql).toMatch(/NULLIF\(COALESCE\(a\.total_days, 0\) - COALESCE\(a\.days_elapsed, 0\), 0\)/);
+    expect(sql).toMatch(/nullif\(\(a\.total_days - a\.days_elapsed\),\s*0\)/i);
     expect(sql).toContain('AS remaining_daily_sale_target');
   });
 
@@ -589,13 +594,13 @@ describe('Hierarchy Generator (T6 final SELECT + UNION ALL)', () => {
       m('delivery_amount', 'out_money'),
       { ...m('wholesale_pp_amount', 'wholesale_amount'), fact_table: 'report_daily_wholesale_customer' },
       { ...m('sale_rate', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-        formula: 'sale_amount / sale_target', depends_on: ['sale_amount', 'sale_target'], additive: false, unit: '率' },
+        formula: 'sale_amount / sale_target', formula_ast: A.op('/', A.ref('sale_amount'), A.ref('sale_target')), depends_on: ['sale_amount', 'sale_target'], additive: false, unit: '率' },
       { ...m('daily_sale', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-        formula: 'sale_amount FILTER(biz_date=latest_day)', depends_on: ['sale_amount'], additive: true },
+        formula: 'sale_amount FILTER(biz_date=latest_day)', formula_ast: A.filter(A.ref('sale_amount'), 'biz_date', A.ref('latest_day')), depends_on: ['sale_amount'], additive: true },
       { ...m('remaining_daily_sale', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-        formula: '(sale_target - sale_amount) / greatest(total_days - days_elapsed, 1)', depends_on: ['sale_target', 'sale_amount'], additive: true },
+        formula: '(sale_target - sale_amount) / greatest(total_days - days_elapsed, 1)', formula_ast: A.op('/', A.op('-', A.ref('sale_target'), A.ref('sale_amount')), A.call('greatest', A.op('-', A.ref('total_days'), A.ref('days_elapsed')), A.lit(1))), depends_on: ['sale_target', 'sale_amount'], additive: true },
       { ...m('distribution_amount', ''), measure_type: 'derived', fact_table: null, value_column: null, agg: null,
-        formula: 'delivery_amount + wholesale_pp_amount', depends_on: ['delivery_amount', 'wholesale_pp_amount'], additive: true },
+        formula: 'delivery_amount + wholesale_pp_amount', formula_ast: A.op('+', A.ref('delivery_amount'), A.ref('wholesale_pp_amount')), depends_on: ['delivery_amount', 'wholesale_pp_amount'], additive: true },
     ];
     const sources: MetricSource[] = [
       saleSrc,

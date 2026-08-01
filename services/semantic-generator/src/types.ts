@@ -1,5 +1,7 @@
 // 语义层类型：从 metric_registry / metric_sources 读出的 typed 视图
 
+import type { Ast } from './ast.js';
+
 export type MeasureType = 'base' | 'derived';
 export type Agg = 'SUM' | 'COUNT_DISTINCT' | 'AVG' | 'MAX' | 'MIN' | null;
 
@@ -12,7 +14,8 @@ export interface Metric {
   fact_table: string | null;
   value_column: string | null;
   agg: Agg;
-  formula: string | null;
+  formula: string | null;        // 人读/过渡（1.4 后生成器读 formula_ast）
+  formula_ast: Ast | null;       // 结构化口径（生成器读此列用 astToSql 翻译）
   depends_on: string[];
   additive: boolean;
   cost_sensitive: boolean;

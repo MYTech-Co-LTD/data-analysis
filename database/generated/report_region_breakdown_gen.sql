@@ -131,14 +131,14 @@ SELECT
   NULL::text AS region_l2,
   COALESCE(a.sale_amount, 0) AS sale_actual,
   COALESCE(t.sale_target, 0) AS sale_target,
-  round(COALESCE(a.sale_amount, 0) / NULLIF(COALESCE(t.sale_target, 0), 0), 4) AS sale_rate,
+  round((COALESCE(a.sale_amount, 0) / NULLIF(COALESCE(t.sale_target, 0), 0)), 4) AS sale_rate,
   COALESCE(a.daily_sale, 0) AS daily_sale,
-  COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0) AS delivery_actual,
+  COALESCE((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)), 0) AS delivery_actual,
   COALESCE(t.delivery_target, 0) AS delivery_target,
-  round((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)) / NULLIF(COALESCE(t.delivery_target, 0), 0), 4) AS delivery_rate,
+  round((((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))) / NULLIF(COALESCE(t.delivery_target, 0), 0)), 4) AS delivery_rate,
   COALESCE(a.daily_delivery, 0) AS daily_delivery,
-  round((COALESCE(t.sale_target, 0) - COALESCE(a.sale_amount, 0)) / GREATEST(COALESCE(a.total_days, 0) - COALESCE(a.days_elapsed, 0), 1), 2) AS remaining_daily_sale_target,
-  round((COALESCE(t.delivery_target, 0) - (COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))) / GREATEST(COALESCE(a.total_days, 0) - COALESCE(a.days_elapsed, 0), 1), 2) AS remaining_daily_delivery_target
+  round(((COALESCE(t.sale_target, 0) - COALESCE(a.sale_amount, 0)) / greatest((a.total_days - a.days_elapsed), 1)), 2) AS remaining_daily_sale_target,
+  round(((COALESCE(t.delivery_target, 0) - ((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)))) / greatest((a.total_days - a.days_elapsed), 1)), 2) AS remaining_daily_delivery_target
 FROM region_act a LEFT JOIN region_tgt t ON t.target_id = a.target_id AND t.war_zone = a.war_zone
 UNION ALL
 SELECT
@@ -155,14 +155,14 @@ SELECT
   NULL::text AS region_l2,
   COALESCE(a.sale_amount, 0) AS sale_actual,
   COALESCE(t.sale_target, 0) AS sale_target,
-  round(COALESCE(a.sale_amount, 0) / NULLIF(COALESCE(t.sale_target, 0), 0), 4) AS sale_rate,
+  round((COALESCE(a.sale_amount, 0) / NULLIF(COALESCE(t.sale_target, 0), 0)), 4) AS sale_rate,
   COALESCE(a.daily_sale, 0) AS daily_sale,
-  COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0) AS delivery_actual,
+  COALESCE((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)), 0) AS delivery_actual,
   COALESCE(t.delivery_target, 0) AS delivery_target,
-  round((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)) / NULLIF(COALESCE(t.delivery_target, 0), 0), 4) AS delivery_rate,
+  round((((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))) / NULLIF(COALESCE(t.delivery_target, 0), 0)), 4) AS delivery_rate,
   COALESCE(a.daily_delivery, 0) AS daily_delivery,
-  round((COALESCE(t.sale_target, 0) - COALESCE(a.sale_amount, 0)) / GREATEST(COALESCE(a.total_days, 0) - COALESCE(a.days_elapsed, 0), 1), 2) AS remaining_daily_sale_target,
-  round((COALESCE(t.delivery_target, 0) - (COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))) / GREATEST(COALESCE(a.total_days, 0) - COALESCE(a.days_elapsed, 0), 1), 2) AS remaining_daily_delivery_target
+  round(((COALESCE(t.sale_target, 0) - COALESCE(a.sale_amount, 0)) / greatest((a.total_days - a.days_elapsed), 1)), 2) AS remaining_daily_sale_target,
+  round(((COALESCE(t.delivery_target, 0) - ((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)))) / greatest((a.total_days - a.days_elapsed), 1)), 2) AS remaining_daily_delivery_target
 FROM sub_region_act a LEFT JOIN sub_region_tgt t ON t.target_id = a.target_id AND t.war_zone = a.war_zone AND t.region_l2 = a.region_l2
 UNION ALL
 SELECT
@@ -179,12 +179,12 @@ SELECT
   a.region_l2 AS region_l2,
   COALESCE(a.sale_amount, 0) AS sale_actual,
   COALESCE(a.sale_target, 0) AS sale_target,
-  round(COALESCE(a.sale_amount, 0) / NULLIF(COALESCE(a.sale_target, 0), 0), 4) AS sale_rate,
+  round((COALESCE(a.sale_amount, 0) / NULLIF(COALESCE(a.sale_target, 0), 0)), 4) AS sale_rate,
   COALESCE(a.daily_sale, 0) AS daily_sale,
-  COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0) AS delivery_actual,
+  COALESCE((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)), 0) AS delivery_actual,
   COALESCE(a.delivery_target, 0) AS delivery_target,
-  round((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)) / NULLIF(COALESCE(a.delivery_target, 0), 0), 4) AS delivery_rate,
+  round((((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))) / NULLIF(COALESCE(a.delivery_target, 0), 0)), 4) AS delivery_rate,
   COALESCE(a.daily_delivery, 0) AS daily_delivery,
-  round((COALESCE(a.sale_target, 0) - COALESCE(a.sale_amount, 0)) / GREATEST(COALESCE(a.total_days, 0) - COALESCE(a.days_elapsed, 0), 1), 2) AS remaining_daily_sale_target,
-  round((COALESCE(a.delivery_target, 0) - (COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))) / GREATEST(COALESCE(a.total_days, 0) - COALESCE(a.days_elapsed, 0), 1), 2) AS remaining_daily_delivery_target
+  round(((COALESCE(a.sale_target, 0) - COALESCE(a.sale_amount, 0)) / greatest((a.total_days - a.days_elapsed), 1)), 2) AS remaining_daily_sale_target,
+  round(((COALESCE(a.delivery_target, 0) - ((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)))) / greatest((a.total_days - a.days_elapsed), 1)), 2) AS remaining_daily_delivery_target
 FROM leaf_rows a;
