@@ -44,7 +44,7 @@ INSERT INTO metric_registry (metric_code, name, description, business_formula, m
 ON CONFLICT (metric_code) DO UPDATE SET
   name=EXCLUDED.name, description=EXCLUDED.description, business_formula=EXCLUDED.business_formula,
   measure_type=EXCLUDED.measure_type, fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column,
-  agg=EXCLUDED.agg, formula=EXCLUDED.formula, depends_on=EXCLUDED.depends_on,
+  agg=EXCLUDED.agg, depends_on=EXCLUDED.depends_on,
   additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 
 GRANT SELECT ON metric_registry TO authenticated, anon;
