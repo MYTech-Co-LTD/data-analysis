@@ -6,25 +6,25 @@
 BEGIN;
 
 -- ===== 1. 2 个 outbound target 度量（base，target_metric_values）=====
-INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, fact_table, value_column, agg, formula, depends_on, additive, cost_sensitive, unit, data_ready, enabled) VALUES
-  ('outbound_amount_target','出库金额目标','target_metric_values(target_value) metric_code=outbound_amt 按分解级','SUM(target_value) WHERE metric_code=outbound_amt','base','target_metric_values','target_value','SUM',NULL,'[]'::jsonb,true,false,'元',true,true),
-  ('outbound_profit_target','出库毛利目标','target_metric_values(target_value) metric_code=outbound_profit 按分解级','SUM(target_value) WHERE metric_code=outbound_profit','base','target_metric_values','target_value','SUM',NULL,'[]'::jsonb,true,false,'元',true,true)
+INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, fact_table, value_column, agg, depends_on, additive, cost_sensitive, unit, data_ready, enabled) VALUES
+  ('outbound_amount_target','出库金额目标','target_metric_values(target_value) metric_code=outbound_amt 按分解级','SUM(target_value) WHERE metric_code=outbound_amt','base','target_metric_values','target_value','SUM','[]'::jsonb,true,false,'元',true,true),
+  ('outbound_profit_target','出库毛利目标','target_metric_values(target_value) metric_code=outbound_profit 按分解级','SUM(target_value) WHERE metric_code=outbound_profit','base','target_metric_values','target_value','SUM','[]'::jsonb,true,false,'元',true,true)
 ON CONFLICT (metric_code) DO UPDATE SET
-  name=EXCLUDED.name, description=EXCLUDED.description, business_formula =EXCLUDED.business_formula,
+  name=EXCLUDED.name, description=EXCLUDED.description, business_formula=EXCLUDED.business_formula,
   measure_type=EXCLUDED.measure_type, fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column,
   agg=EXCLUDED.agg, additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 
 -- ===== 2. 6 个孤儿指标（derived）=====
-INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, formula, depends_on, additive, cost_sensitive, unit, data_ready, enabled) VALUES
-  ('delivery_margin','配送毛利率','配送毛利/配送金额','delivery_profit / delivery_amount','derived','profit / amount','["delivery_profit","delivery_amount"]'::jsonb,false,true,'%',true,true),
-  ('profit_rate','利润完成率','出库毛利/出库毛利目标','outbound_profit / outbound_profit_target','derived','actual / target','["outbound_profit","outbound_profit_target"]'::jsonb,false,false,'率',true,true),
-  ('daily_amount','当日出库金额','outbound_amount 当天(biz_date=latest_day)','outbound_amount FILTER(biz_date=latest_day)','derived','amount FILTER(latest_day)','["outbound_amount"]'::jsonb,true,false,'元',true,true),
-  ('daily_profit','当日出库毛利','outbound_profit 当天','outbound_profit FILTER(biz_date=latest_day)','derived','amount FILTER(latest_day)','["outbound_profit"]'::jsonb,true,true,'元',true,true),
-  ('daily_profit_margin','当日出库毛利率','daily_profit / daily_amount','daily_profit / daily_amount','derived','profit / amount','["daily_profit","daily_amount"]'::jsonb,false,true,'%',true,true),
-  ('remaining_daily_profit_target','剩余日均利润目标','(outbound_profit_target - outbound_profit) / nullif(remaining_days,0)','(target - actual) / nullif(remaining_days, 0)','derived','(target - actual) / remaining','["outbound_profit","outbound_profit_target"]'::jsonb,true,false,'元',true,true)
+INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, depends_on, additive, cost_sensitive, unit, data_ready, enabled) VALUES
+  ('delivery_margin','配送毛利率','配送毛利/配送金额','delivery_profit / delivery_amount','derived','["delivery_profit","delivery_amount"]'::jsonb,false,true,'%',true,true),
+  ('profit_rate','利润完成率','出库毛利/出库毛利目标','outbound_profit / outbound_profit_target','derived','["outbound_profit","outbound_profit_target"]'::jsonb,false,false,'率',true,true),
+  ('daily_amount','当日出库金额','outbound_amount 当天(biz_date=latest_day)','outbound_amount FILTER(biz_date=latest_day)','derived','["outbound_amount"]'::jsonb,true,false,'元',true,true),
+  ('daily_profit','当日出库毛利','outbound_profit 当天','outbound_profit FILTER(biz_date=latest_day)','derived','["outbound_profit"]'::jsonb,true,true,'元',true,true),
+  ('daily_profit_margin','当日出库毛利率','daily_profit / daily_amount','daily_profit / daily_amount','derived','["daily_profit","daily_amount"]'::jsonb,false,true,'%',true,true),
+  ('remaining_daily_profit_target','剩余日均利润目标','(outbound_profit_target - outbound_profit) / nullif(remaining_days,0)','(target - actual) / nullif(remaining_days, 0)','derived','["outbound_profit","outbound_profit_target"]'::jsonb,true,false,'元',true,true)
 ON CONFLICT (metric_code) DO UPDATE SET
-  name=EXCLUDED.name, description=EXCLUDED.description, business_formula =EXCLUDED.business_formula,
-  measure_type=EXCLUDED.measure_type, formula_ast =EXCLUDED.formula, depends_on=EXCLUDED.depends_on,
+  name=EXCLUDED.name, description=EXCLUDED.description, business_formula=EXCLUDED.business_formula,
+  measure_type=EXCLUDED.measure_type, depends_on=EXCLUDED.depends_on,
   additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 
 -- ===== 3. metric_sources：结构化 target 度量 source_filter =====

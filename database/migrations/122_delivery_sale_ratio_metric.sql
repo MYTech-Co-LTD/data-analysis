@@ -4,7 +4,7 @@
 --   销售口径 = sale_amount（门店零售）。
 --   派生率值，不落库，不随维度简单相加（additive=false）。
 -- 幂等：ON CONFLICT DO UPDATE。
-INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, fact_table, value_column, agg, formula, depends_on, additive, cost_sensitive, unit, data_ready, enabled) VALUES
+INSERT INTO metric_registry (metric_code, name, description, business_formula, measure_type, fact_table, value_column, agg, depends_on, additive, cost_sensitive, unit, data_ready, enabled) VALUES
 ('delivery_sale_ratio', '配销比', '配送金额 / 销售金额', '配送金额 ÷ 销售金额（配送=调拨+品品甜批发，与销售同门店口径）', 'derived', NULL, NULL, NULL, 'distribution_amount / sale_amount', '["distribution_amount","sale_amount"]'::jsonb, false, false, '率', true, true)
 ON CONFLICT (metric_code) DO UPDATE SET
   name=EXCLUDED.name, description=EXCLUDED.description, business_formula =EXCLUDED.business_formula,
