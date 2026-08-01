@@ -51,6 +51,8 @@ export interface HierarchyLevel {
 export interface ViewScope {
   target_window: boolean;       // true: base 数据按 active total target 的日期窗口过滤
   assessed_war_zone: boolean;   // true: base 数据按 is_assessed_war_zone 过滤（dim_branch join）
+  target_level?: string;        // tgt CTE 取 targets.target_level（默认 'total'）
+  target_status?: string;       // tgt CTE 取 targets.status（默认 'active'）
 }
 
 export interface ViewConfig {
@@ -64,4 +66,5 @@ export interface ViewConfig {
   dim_table?: string | null;    // 维度维表（如 dim_brand）cross-join 保证空品牌也出现
   aliases?: Record<string, string>; // metric_code → 输出列名（如 distribution_amount→delivery_amount）
   hierarchy?: HierarchyLevel[]; // 维度层级（存在时走 generateHierarchyView，产多级 UNION ALL 视图）
+  target_breakdown?: string;    // target CTE 的 breakdown_level（默认 'store'；hierarchy 用 leaf.target_breakdown）
 }

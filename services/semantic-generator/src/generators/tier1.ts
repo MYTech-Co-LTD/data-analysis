@@ -67,6 +67,8 @@ export function generateTier1View(
   const dimKey = dim_code === 'brand' ? 'system_book_code' : 'branch_num';
   const useTargetWindow = scope?.target_window ?? false;
   const useAssessed = scope?.assessed_war_zone ?? false;
+  const tgtLevel = scope?.target_level ?? 'total';
+  const tgtStatus = scope?.target_status ?? 'active';
 
   const leaves = collectLeaves(metricCodes, metrics);
 
@@ -108,7 +110,7 @@ export function generateTier1View(
     (end_date - start_date + 1) AS total_days,
     GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
     LEAST(current_date, end_date) AS latest_day
-  FROM targets WHERE target_level='total' AND status='active'
+  FROM targets WHERE target_level='${tgtLevel}' AND status='${tgtStatus}'
 )`);
   }
 
@@ -171,7 +173,7 @@ export function generateTier1View(
   SELECT t.parent_target_id AS target_id, t.system_book_code,
     SUM(tmv.target_value) AS ${tleaf.metric_code}
   FROM targets t JOIN target_metric_values tmv ON tmv.target_id=t.id
-  WHERE t.breakdown_level='store' AND ${metricFilter || 'true'}${assessedCond}
+  WHERE t.breakdown_level='${config.target_breakdown ?? 'store'}' AND ${metricFilter || 'true'}${assessedCond}
   GROUP BY t.parent_target_id, t.system_book_code
 )`);
     cteOf.set(tleaf.metric_code, cteName);

@@ -59,6 +59,8 @@ export function generateHierarchyView(
 ): string {
   const { view_name, metrics: metricCodes, scope, hierarchy } = config;
   const useAssessed = scope?.assessed_war_zone ?? false;
+  const tgtLevel = scope?.target_level ?? 'total';
+  const tgtStatus = scope?.target_status ?? 'active';
 
   const leaf = hierarchy?.find(h => h.is_leaf);
   if (!leaf) {
@@ -120,7 +122,7 @@ export function generateHierarchyView(
     (end_date - start_date + 1) AS total_days,
     GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
     LEAST(current_date, end_date) AS latest_day
-  FROM targets WHERE target_level='total' AND status='active'
+  FROM targets WHERE target_level='${tgtLevel}' AND status='${tgtStatus}'
 )`);
 
   // 2. 叶级 actual CTE：按 grain 聚合 base + daily FILTER，scope 日期窗口 + assessed
