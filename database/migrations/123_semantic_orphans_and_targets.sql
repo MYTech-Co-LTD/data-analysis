@@ -10,7 +10,7 @@ INSERT INTO metric_registry (metric_code, name, description, business_formula, m
   ('outbound_amount_target','出库金额目标','target_metric_values(target_value) metric_code=outbound_amt 按分解级','SUM(target_value) WHERE metric_code=outbound_amt','base','target_metric_values','target_value','SUM',NULL,'[]'::jsonb,true,false,'元',true,true),
   ('outbound_profit_target','出库毛利目标','target_metric_values(target_value) metric_code=outbound_profit 按分解级','SUM(target_value) WHERE metric_code=outbound_profit','base','target_metric_values','target_value','SUM',NULL,'[]'::jsonb,true,false,'元',true,true)
 ON CONFLICT (metric_code) DO UPDATE SET
-  name=EXCLUDED.name, description=EXCLUDED.description, business_formula_ast =EXCLUDED.business_formula,
+  name=EXCLUDED.name, description=EXCLUDED.description, business_formula =EXCLUDED.business_formula,
   measure_type=EXCLUDED.measure_type, fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column,
   agg=EXCLUDED.agg, additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 
@@ -23,7 +23,7 @@ INSERT INTO metric_registry (metric_code, name, description, business_formula, m
   ('daily_profit_margin','当日出库毛利率','daily_profit / daily_amount','daily_profit / daily_amount','derived','profit / amount','["daily_profit","daily_amount"]'::jsonb,false,true,'%',true,true),
   ('remaining_daily_profit_target','剩余日均利润目标','(outbound_profit_target - outbound_profit) / nullif(remaining_days,0)','(target - actual) / nullif(remaining_days, 0)','derived','(target - actual) / remaining','["outbound_profit","outbound_profit_target"]'::jsonb,true,false,'元',true,true)
 ON CONFLICT (metric_code) DO UPDATE SET
-  name=EXCLUDED.name, description=EXCLUDED.description, business_formula_ast =EXCLUDED.business_formula,
+  name=EXCLUDED.name, description=EXCLUDED.description, business_formula =EXCLUDED.business_formula,
   measure_type=EXCLUDED.measure_type, formula_ast =EXCLUDED.formula, depends_on=EXCLUDED.depends_on,
   additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 

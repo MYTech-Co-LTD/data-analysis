@@ -30,7 +30,7 @@ INSERT INTO metric_registry (metric_code, name, description, business_formula, m
   ('wholesale_ext_amount','批发-外部客户金额','总部→外部批发客户（非门店；sbc=3120，branch_num=99；SUM wholesale_money）','外部客户 wholesale_money 之和','base','wholesale_detail','wholesale_money','SUM',true,false,'元'),
   ('wholesale_ext_profit','批发-外部客户毛利','总部→外部客户批发毛利（sbc=3120，成本敏感）','外部客户 wholesale_profit 之和（成本敏感）','base','wholesale_detail','wholesale_profit','SUM',true,true,'元')
 ON CONFLICT (metric_code) DO UPDATE SET
-  name=EXCLUDED.name, description=EXCLUDED.description, business_formula_ast =EXCLUDED.business_formula,
+  name=EXCLUDED.name, description=EXCLUDED.description, business_formula=EXCLUDED.business_formula,
   measure_type=EXCLUDED.measure_type, fact_table=EXCLUDED.fact_table, value_column=EXCLUDED.value_column,
   agg=EXCLUDED.agg, additive=EXCLUDED.additive, cost_sensitive=EXCLUDED.cost_sensitive, unit=EXCLUDED.unit;
 
