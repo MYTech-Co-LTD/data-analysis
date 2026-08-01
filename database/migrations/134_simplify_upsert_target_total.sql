@@ -3,10 +3,8 @@
 -- 目标值在分解阶段写入
 -- 删除 p_sbc、p_metrics、p_target_type 参数，使用默认值
 
--- 删除旧函数（参数签名变更，必须先 DROP）
-DROP FUNCTION IF EXISTS public.upsert_target_total(bigint, text, text, date, date, jsonb, text, text);
-
-CREATE FUNCTION public.upsert_target_total(
+-- 使用 OR REPLACE 避免签名冲突（如果旧签名已不存在）
+CREATE OR REPLACE FUNCTION public.upsert_target_total(
   p_id BIGINT,
   p_name TEXT,
   p_start DATE,
