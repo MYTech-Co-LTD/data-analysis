@@ -19,6 +19,7 @@
 - 存储方案变更
 - 接口设计变更
 - 鉴权方案变更
+- **生成器改动**（`services/semantic-generator/`）：改生成器代码属架构变更。生成器已 AST 化（derived 口径从 `metric_registry.formula_ast` 读，`astToSql` 递归翻译）。**新增指标 = 改 registry AST；新增视图 = 改 view-configs**，不改生成器。在生成器加「指标特殊处理/口径解析」= 违规（详见 architecture.md §10.10 生成器约束铁律）
 
 在讨论架构时，应给出完整的方案对比和推荐理由，等用户确认后再实施。
 

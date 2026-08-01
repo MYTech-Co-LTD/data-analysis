@@ -1016,6 +1016,18 @@ spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design
 - **迁移次序**：配销比 → 品牌表 → 下钻表 → KPI 卡 → 类别表（双轨 diff=0 才切前端、下线旧视图）。
 - **metric_definitions 定位调整**：保留作"目标存储 code 命名空间"（`target_metric_values.metric_code` 已存数据主键，不迁）；与 metric_registry 经 `metric_sources.source_filter` 里 `metric_code='xxx'` 链接。
 
+#### 生成器约束铁律（反自由发挥，2026-08-01 AST 化）
+
+生成器（`services/semantic-generator/`）已 AST 化：derived 口径从 `metric_registry.formula_ast`（JSONB AST）读，用 `astToSql` 递归翻译（纯 switch，无字符串解析/无正则）。**为防 AI 自由发挥塞口径，改生成器须守铁律**：
+
+1. **生成器只读 AST + config，禁写指标口径**。`src/generators/*.ts` 不含 formula 解析/模式匹配/指标特殊处理分支（已删 expandAdditive/classifyDerived 等）。round/COALESCE 等格式在 `derivedExpr`（口径/格式分离）。
+2. **新增指标 = 改 `metric_registry.formula_ast`（AST 数据）；新增视图 = 改 `view-configs.ts`**。**不改生成器代码**。改生成器 = 架构变更，须先确认 AST/config 能否覆盖。
+3. **生成器代码禁业务字面量**（`report_daily_*`/`system_book_code`/`'3120'`/`'64188'`/`is_assessed` 等）--须在 config/registry 声明（L2 lint 强制）。
+4. **改生成器前自问**：此改动是否对应一个 AST/config 新能力？若是在生成器加「某指标特殊处理」= 违规，应改 registry AST。
+5. **校验兜底**：`validate_semantic_registry()` 校验 formula_ast 的 ref 闭环（metric_code 在 registry 或窗口列集合）；契约测试抓静默 NULL；生成器 `resolveRef` 遇未知 ref throw。
+
+**反自由发挥全景**：L3（AST 化，生成器无解析逻辑）✅ + L1（validate AST ref 闭环）✅ + 契约测试 ✅；L2（config 化硬编码 + lint 禁字面量）待做。spec：`docs/superpowers/plans/2026-08-01-semantic-layer-anti-freelance.md`。
+
 ### 10.9 商品/客户级聚合层（Phase 2 数据层，2026-07-29）
 
 spec：`docs/superpowers/specs/2026-07-29-report-phase2-data-layer-design.md`。在 §10.5 门店/品类级聚合之上补三层细粒度表，解锁品牌×指标表（品品甜配送）、商品 TOP20、出库下钻、批发客户等 Phase 2 报表板块。商品/客户级数据只在原始明细 parquet 有，**不能从现有 report_daily_* 派生**，必须新聚合。迁移 107（表）+ 108（report_definitions 3 项）。
