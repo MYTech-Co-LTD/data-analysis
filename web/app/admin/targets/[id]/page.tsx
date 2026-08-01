@@ -247,7 +247,9 @@ export default function BreakdownPage() {
                     </div>
                     {m === 'outbound_amt' && (
                       <div className={`text-xs mt-0.5 font-normal tabular-nums ${belowMin ? 'text-red-600' : 'text-slate-500'}`}>
-                        {belowMin ? '⚠ ' : ''}下限：门店配送汇总 {deliverySum().toLocaleString()}
+                        {deliverySum() > 0
+                          ? <>{belowMin ? '⚠ ' : ''}下限：门店配送汇总 {deliverySum().toLocaleString()}</>
+                          : '下限：门店配送汇总 —（先在下方完成门店分解）'}
                       </div>
                     )}
                   </td>
