@@ -7,7 +7,8 @@
   "scripts": {
     "gen-views": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lint:generator": "node ../../scripts/lint-generator.mjs"
   },
   "dependencies": {
     "pg": "^8.13.0",
