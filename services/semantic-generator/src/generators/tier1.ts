@@ -80,8 +80,10 @@ export function generateTier1View(
   const useAssessed = scope?.assessed_war_zone ?? false;
   const tgtLevel = scope?.target_level ?? 'total';
   const tgtStatusClause = statusInClause(scope?.target_status);
-  // date grain 语义=时间序列罗列至当日（非全周期累计），join 上限用 latest_day；其它维度保持 end_date
-  const dateUpper = dim_code === 'date' ? 'tgt.latest_day' : 'tgt.end_date';
+  // date grain 语义=时间序列罗列至当日（非全周期累计），join 上限用 latest_day；
+  // extra_grain 含 biz_date（双 grain 时间序列，如客户×日期下钻）同此口径；其它维度保持 end_date
+  const dateUpper = (dim_code === 'date' || extraGrainCols.includes('s.biz_date'))
+    ? 'tgt.latest_day' : 'tgt.end_date';
 
   const leaves = collectLeaves(metricCodes, metrics);
 

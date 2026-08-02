@@ -1027,7 +1027,7 @@ spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design
 - **不做运行时动态引擎**（07-22 已 YAGNI，理由：RLS/security_invoker 兼容、可审计、避免外部重型服务）。
 - **两档能力**：Tier1（base 聚合 + additive derived + 率重算 + cost脱敏 + target join + date grain 时间序列）；Tier2（窗口派生：daily/remaining/profit_rate）。
 - **date grain（2026-08-02 架构扩展）**：`dim_code='date'` 支持 biz_date 时间序列 grain（行=日期）。date 维度无 dim_table（biz_date 是 fact 表列），target_window join 用 `BETWEEN start_date AND latest_day`（罗列至当日，非全周期 end_date）-- 用于外部批发客户出库日报等时间序列看板。属生成器能力扩展（新 dim_code），非某指标特殊处理，符合铁律第2条。
-- **extra_grain（2026-08-02 架构扩展）**：`ViewConfig.extra_grain?: string[]` 支持 actual CTE 加额外 GROUP BY 列（如 `['s.biz_date']`），实现双 grain（如 日期 × 客户）。用于外部批发日报·日期下钻客户明细（`report_wholesale_daily_customer_gen`，dim_code='customer' + extra_grain biz_date，每行=该天该客户）。属通用能力扩展（非指标特殊处理），符合铁律第2条。避免手写 RPC drill-down（口径统一在 metric_registry）。
+- **extra_grain（2026-08-02 架构扩展）**：`ViewConfig.extra_grain?: string[]` 支持 actual CTE 加额外 GROUP BY 列（如 `['s.biz_date']`），实现双 grain（如 日期 × 客户）。用于外部批发日报·日期下钻客户明细（`report_wholesale_daily_customer_gen`，dim_code='customer' + extra_grain biz_date，每行=该天该客户）。属通用能力扩展（非指标特殊处理），符合铁律第2条。避免手写 RPC drill-down（口径统一在 metric_registry）。**dateUpper 规则**：extra_grain 含 biz_date（时间序列双 grain，如客户×日期下钻）时，dateUpper 同 dim_code='date' 用 `tgt.latest_day` 上限（至当日，非全周期 end_date）--与主视图口径一致，避免下钻 SUM 与主视图因未来日期批发单提前录入而漂移。
 - **三层校验**：L1 `validate_semantic_registry()`（静态，阻断部署）/ L2 生成时 EXPLAIN（阻断部署，失败不产文件）/ L3a rollup `_audit` 视图（运行期告警）/ L3b 双轨 SUM diff（阻断旧视图下线）。
 - **部署**：migrate.sh 扫 `database/migrations/*.sql` + `database/generated/*.sql`；`scripts/deploy.sh` 迁移后 `docker compose restart postgrest` 刷 schema 缓存（视图变更生效）。
 - **迁移次序**：配销比 → 品牌表 → 下钻表 → KPI 卡 → 类别表（双轨 diff=0 才切前端、下线旧视图）。

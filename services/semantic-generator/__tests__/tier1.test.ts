@@ -418,4 +418,23 @@ describe('Tier1 extra_grain', () => {
     expect(sql).toMatch(/cte\d+\.item_code AS item_code/);
     expect(sql).toMatch(/cte\d+\.biz_date AS biz_date/);
   });
+
+  it('extra_grain biz_date 用 latest_day 上限（同 dim_code=date，至当日非全周期）', () => {
+    // 双 grain：customer(client_code) × date(biz_date) 时间序列
+    // dim_code='customer' 但 extra_grain 含 biz_date -> dateUpper 应走 tgt.latest_day（同 dim_code='date'）
+    const config: ViewConfig = {
+      view_name: 'test_extra_grain_date',
+      metrics: ['wholesale_pp_amount'],
+      dim_code: 'customer',
+      levels: ['customer'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      extra_grain: ['s.biz_date'],
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // join 上限用 latest_day（至当日，与主视图口径一致）
+    expect(sql).toContain('BETWEEN tgt.start_date AND tgt.latest_day');
+    // 不用 end_date 作 join 上限（end_date 是全周期含未来，下钻会与主视图漂移）
+    expect(sql).not.toMatch(/BETWEEN tgt\.start_date AND tgt\.end_date/);
+  });
 });
