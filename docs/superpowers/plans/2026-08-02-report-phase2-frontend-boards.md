@@ -22,8 +22,8 @@
 ## File Structure
 
 **生成器（services/semantic-generator/）**：
-- `src/types.ts` — ViewConfig 加 `dim_grain?`/`extra_join?` 字段
-- `src/generators/tier1.ts` — actual CTE 支持 dim_grain join（grain 变换）；final SELECT 支持 extra_join LEFT JOIN 补列
+- `src/types.ts` — ViewConfig 加 `dim_grain?`/`carry_cols?`/`extra_join?` 字段
+- `src/generators/tier1.ts` — actual CTE 支持 dim_grain join（grain 变换）+ carry_cols（MAX 源列带出）；final SELECT 支持 extra_join 标量子查询补列；dimKey 映射扩 customer/item
 - `src/view-configs.ts` — 加 `itemBreakdownView` + `wholesaleCustomerView` 2 配置
 - `__tests__/tier1.test.ts` — 加 dim_grain + extra_join 用例
 - `database/generated/report_item_breakdown_gen.sql` — 生成器产出（不手写）
@@ -254,7 +254,9 @@ git commit -m "feat(generator): dim_grain 能力——actual CTE grain 变换 vi
 
 ---
 
-### Task 2: 生成器加 `extra_join` 能力（LEFT JOIN 补列）
+### Task 2: 生成器客户视图支持（dimKey 映射扩展 + carry_cols + extra_join 标量子查询）
+
+> **修订（2026-08-02，用户确认 Option A）：** 原 plan 的 extra_join（outer SELECT LEFT JOIN，ON 引用 `s.*`）有 3 个 bug——① tier1 `dimKey` 没映射 `'customer'`（落到 `branch_num`，wholesale_customer 表客户粒度是 `client_code`）；② extra_join `ON` 引用 `s.client_name` 但 `s` 只在 actual CTE 内、不在 final SELECT FROM 作用域（只有 cte0 等别名）；③ `LEFT JOIN dim_branch ON branch_name=client_name` 若 branch_name 非唯一会翻倍致 SUM 膨胀。本 task 用 3 个**通用**能力修复，无品牌字面量、不违铁律。
 
 **Files:**
 - Modify: `services/semantic-generator/src/types.ts`
@@ -262,44 +264,70 @@ git commit -m "feat(generator): dim_grain 能力——actual CTE grain 变换 vi
 - Test: `services/semantic-generator/__tests__/tier1.test.ts`
 
 **Interfaces:**
-- Produces: `ViewConfig.extra_join?: { table: string; on: string; cols: { out: string; expr: string }[] }`。tier1 final SELECT 加 `LEFT JOIN ${extra_join.table} ON ${extra_join.on}`，输出 cols（`{expr} AS {out}`）。不变换 grain。
+- Consumes: Task 1 dim_grain（已合并）
+- Produces:
+  - `dimKey` 映射扩展：`customer`→`client_code`、`item`→`item_num`（types.ts 已声明这两个 dim_code，生成器补齐映射）
+  - `ViewConfig.carry_cols?: string[]`：源表列，actual CTE 里 `MAX(s.${col}) AS ${col}` 带出，final SELECT 从 firstCte 选（client_name/system_book_code）
+  - `ViewConfig.extra_join?: { table: string; on: { left: string; right: string }; cols: { out: string; expr: string }[] }`：final SELECT 标量子查询 `(SELECT ${expr} FROM ${table} WHERE ${alias}.${on.right} = ${firstCte}.${on.left} LIMIT 1) AS ${out}`，避翻倍
 
-**Why:** customer 视图要补 `client_brand_code`（join dim_branch 取 system_book_code，数据驱动识别品品甜，无品牌字面量）。client_code 已在 wholesale_customer 表（grain 一致），不需 dim_grain，只需 LEFT JOIN 补列。
+**Why:** 批发客户视图按 client_code 聚合，需带出 client_name/system_book_code 源列 + 补 client_brand_code。三能力皆通用（dim 映射补齐 + 源列带出 + 标量补列），非业务口径分支。
 
-- [ ] **Step 1: types.ts 加 extra_join 类型**
+- [ ] **Step 1: types.ts 加 carry_cols + extra_join 类型**
 
 ```typescript
 // 在 ViewConfig interface dim_grain 后加：
+  carry_cols?: string[];  // 源表列，actual CTE 里 MAX(s.${col}) AS ${col} 带出（client_name/system_book_code）
   extra_join?: {
-    table: string;        // 'dim_branch db'
-    on: string;           // 'db.branch_name=w.client_name'
-    cols: { out: string; expr: string }[];  // [{ out: 'client_brand_code', expr: 'db.system_book_code' }]
+    table: string;  // 'dim_branch db'（表名+别名）
+    on: { left: string; right: string };  // left=外层 CTE 列, right=join 表列：{left:'client_name', right:'branch_name'}
+    cols: { out: string; expr: string }[];  // [{out:'client_brand_code', expr:'db.system_book_code'}]
   };
 ```
 
-- [ ] **Step 2: tier1.test.ts 写 extra_join 失败测试**
+- [ ] **Step 2: tier1.test.ts 写失败测试（dimKey + carry_cols + extra_join）**
 
 ```typescript
-describe('Tier1 extra_join', () => {
-  it('final SELECT LEFT JOIN 补列不变换 grain', () => {
+describe('Tier1 customer-view support', () => {
+  it('dimKey 映射 customer→client_code', () => {
     const config: ViewConfig = {
-      view_name: 'test_customer_gen',
-      metrics: ['wholesale_amount'],
-      dim_code: 'customer',
-      levels: ['customer'],
-      target_metric_codes: [],
+      view_name: 't_cust_dimkey', metrics: ['wholesale_amount'],
+      dim_code: 'customer', levels: ['customer'], target_metric_codes: [],
       scope: { target_window: true },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('GROUP BY tgt.target_id, s.client_code');
+    expect(sql).not.toMatch(/GROUP BY tgt\.target_id, s\.branch_num/);
+  });
+
+  it('carry_cols 带 MAX(s.col) 进 actual CTE', () => {
+    const config: ViewConfig = {
+      view_name: 't_cust_carry', metrics: ['wholesale_amount'],
+      dim_code: 'customer', levels: ['customer'], target_metric_codes: [],
+      scope: { target_window: true },
+      carry_cols: ['client_name', 'system_book_code'],
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('MAX(s.client_name) AS client_name');
+    expect(sql).toContain('MAX(s.system_book_code) AS system_book_code');
+  });
+
+  it('extra_join 标量子查询（避翻倍），WHERE 引用 firstCte 列', () => {
+    const config: ViewConfig = {
+      view_name: 't_cust_join', metrics: ['wholesale_amount'],
+      dim_code: 'customer', levels: ['customer'], target_metric_codes: [],
+      scope: { target_window: true },
+      carry_cols: ['client_name'],
       extra_join: {
         table: 'dim_branch db',
-        on: 'db.branch_name=w.client_name',
+        on: { left: 'client_name', right: 'branch_name' },
         cols: [{ out: 'client_brand_code', expr: 'db.system_book_code' }],
       },
     };
-    const sql = generateTier1View(config, metrics, sources);
-    expect(sql).toContain('LEFT JOIN dim_branch db ON db.branch_name=w.client_name');
-    expect(sql).toContain('db.system_book_code AS client_brand_code');
-    // grain 仍是 client_code（不变换）
-    expect(sql).toContain('GROUP BY tgt.target_id, w.client_code');
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // 标量子查询 + LIMIT 1，WHERE 引用 cteN.client_name
+    expect(sql).toMatch(/\(SELECT db\.system_book_code FROM dim_branch db WHERE db\.branch_name = cte\d+\.client_name LIMIT 1\) AS client_brand_code/);
+    // 不含 LEFT JOIN dim_branch（避翻倍）
+    expect(sql).not.toContain('LEFT JOIN dim_branch');
   });
 });
 ```
@@ -307,43 +335,70 @@ describe('Tier1 extra_join', () => {
 - [ ] **Step 3: 跑测试验证失败**
 
 Run: `cd services/semantic-generator && npm test -- tier1.test.ts`
-Expected: FAIL（extra_join 未实现）
+Expected: FAIL（customer dimKey 未映射 / carry_cols 未实现 / extra_join 标量子查询未实现）
 
-- [ ] **Step 4: tier1.ts final SELECT 加 extra_join 列 + FROM 加 LEFT JOIN**
-
-final SELECT 指标列后追加 extra_join cols（约 335 行，指标列 for 循环后）：
+- [ ] **Step 4: tier1.ts dimKey 映射扩展（line 68）**
 
 ```typescript
-  // extra_join 补列（不变换 grain，LEFT JOIN）
-  if (config.extra_join) {
-    for (const c of config.extra_join.cols) {
-      sel.push(`${c.expr} AS ${c.out}`);
+  const dimKey = dim_code === 'brand' ? 'system_book_code'
+    : dim_code === 'category' ? 'category_group'
+    : dim_code === 'customer' ? 'client_code'
+    : dim_code === 'item' ? 'item_num'
+    : 'branch_num';
+```
+
+- [ ] **Step 5: actual CTE 加 carry_cols（else 单表分支 + category-union 各 union 分支）**
+
+在 actual CTE 的 `cols` 构建后（dim_grain.extra 块之后）追加：
+
+```typescript
+      // carry_cols：源表列 MAX 带出
+      if (config.carry_cols) {
+        for (const col of config.carry_cols) {
+          cols.push(`MAX(s.${col}) AS ${col}`);
+        }
+      }
+```
+
+> 两处都加（else 单表分支 + isCategoryUnion 内每个 union CTE），保持一致。customer 视图实际只走单表分支。
+
+- [ ] **Step 6: final SELECT 加 carry_cols 列（维度列块之后、指标列之前或之后均可）**
+
+```typescript
+  // carry_cols：从 firstCte 选
+  if (config.carry_cols) {
+    const carryFirstCte = [...new Set(cteOf.values())][0];
+    for (const col of config.carry_cols) {
+      sel.push(`${carryFirstCte}.${col} AS ${col}`);
     }
   }
 ```
 
-FROM 块末尾（dim_grain/dim_table/cte 分支后）追加 extra_join：
+- [ ] **Step 7: final SELECT 加 extra_join 标量子查询（指标列后）**
 
 ```typescript
-  // extra_join LEFT JOIN
+  // extra_join：标量子查询补列（避 LEFT JOIN 翻倍）
   if (config.extra_join) {
-    const mainAlias = fromParts[0].split(' ')[0]; // 第一个 FROM 项的表名/别名作锚
-    fromParts.push(`LEFT JOIN ${config.extra_join.table} ON ${config.extra_join.on}`);
+    const ejFirstCte = [...new Set(cteOf.values())][0];
+    const joinAlias = config.extra_join.table.split(' ')[1];
+    for (const c of config.extra_join.cols) {
+      sel.push(`(SELECT ${c.expr} FROM ${config.extra_join.table} WHERE ${joinAlias}.${config.extra_join.on.right} = ${ejFirstCte}.${config.extra_join.on.left} LIMIT 1) AS ${c.out}`);
+    }
   }
 ```
 
-> 注意：extra_join ON 条件引用的别名（如 `w.client_name`）需与 actual CTE 别名一致。customer 视图 actual 表别名是 `s`（tier1 通用别名），ON 要用 `s.client_name`。config 里写 `db.branch_name=s.client_name`。
+> 标量子查询 `LIMIT 1` 保证即使 dim_branch.branch_name 多义也只取一行，杜绝 SUM 翻倍。ON.left（client_name）由 carry_cols 带出已在 CTE。
 
-- [ ] **Step 5: 跑测试验证通过**
+- [ ] **Step 8: 跑测试验证通过**
 
-Run: `cd services/semantic-generator && npm test -- tier1.test.ts`
-Expected: PASS
+Run: `cd services/semantic-generator && npm test -- tier1.test.ts && npm test`
+Expected: PASS（3 新用例 + 原有全过，0 regression）
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add services/semantic-generator/src/types.ts services/semantic-generator/src/generators/tier1.ts services/semantic-generator/__tests__/tier1.test.ts
-git commit -m "feat(generator): extra_join 能力——final SELECT LEFT JOIN 补列"
+git commit -m "feat(generator): 客户视图支持——dimKey 映射扩 customer/item + carry_cols + extra_join 标量子查询"
 ```
 
 ---
@@ -403,8 +458,9 @@ export const itemBreakdownView: ViewConfig = {
  * 批发客户视图配置（Phase 2 前端板块）
  * 生成 report_wholesale_customer_gen，按 client_code 聚合
  * 服务：批发客户报表（3120 客户排行 + 品品甜占比）
- * 品牌识别数据驱动：LEFT JOIN dim_branch ON branch_name=client_name 取 system_book_code AS client_brand_code
- *   前端判断 client_brand_code 对应品牌（无 64188 字面量在生成器/config）
+ * 品牌识别数据驱动：carry_cols 带 client_name/system_book_code 出 CTE，extra_join 标量子查询
+ *   (SELECT db.system_book_code FROM dim_branch db WHERE db.branch_name=cte.client_name LIMIT 1) AS client_brand_code
+ *   标量子查询避 LEFT JOIN 翻倍；前端判断 client_brand_code 对应品牌（无 64188 字面量在生成器/config）
  */
 export const wholesaleCustomerView: ViewConfig = {
   view_name: 'report_wholesale_customer_gen',
@@ -416,9 +472,10 @@ export const wholesaleCustomerView: ViewConfig = {
   levels: ['customer'],
   target_metric_codes: [],
   scope: { target_window: true, target_status: ['active', 'closed'] },
+  carry_cols: ['client_name', 'system_book_code'],
   extra_join: {
     table: 'dim_branch db',
-    on: 'db.branch_name=s.client_name',
+    on: { left: 'client_name', right: 'branch_name' },
     cols: [{ out: 'client_brand_code', expr: 'db.system_book_code' }],
   },
 };
