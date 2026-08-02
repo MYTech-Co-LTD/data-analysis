@@ -34,23 +34,36 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
   );
 
   // 合计行：SUM 各列数值，率 = 合计实际/合计目标（前端算）
+  // 成本脱敏时视图对 profit_actual/daily_profit 返回 NULL（类型标注为 number 是已知 type gap）
+  // 参考 supply-chain-outbound-table.tsx：用 hasProfit/hasDailyProfit 标志，全脱敏时保持 null -> 显示「-」而非「¥0」
   const totals = useMemo(() => {
     let saleTarget = 0;
     let saleActual = 0;
     let profitTarget = 0;
-    let profitActual = 0;
+    let profitSum = 0;
+    let hasProfit = false;
     let dailyAmount = 0;
-    let dailyProfit = 0;
+    let dailyProfitSum = 0;
+    let hasDailyProfit = false;
     let remainingDailyProfitTarget = 0;
     for (const r of detailRows) {
       saleTarget += r.sale_target;
       saleActual += r.sale_actual;
       profitTarget += r.profit_target;
-      profitActual += r.profit_actual;
       dailyAmount += r.daily_amount;
-      dailyProfit += r.daily_profit;
       remainingDailyProfitTarget += r.remaining_daily_profit_target;
+      // sale/delivery 不脱敏，直接累加；profit 脱敏时为 NULL，不可 +=（null+0=0 会误显「¥0」）
+      if (r.profit_actual != null) {
+        profitSum += r.profit_actual;
+        hasProfit = true;
+      }
+      if (r.daily_profit != null) {
+        dailyProfitSum += r.daily_profit;
+        hasDailyProfit = true;
+      }
     }
+    const profitActual = hasProfit ? profitSum : null;
+    const dailyProfit = hasDailyProfit ? dailyProfitSum : null;
     return {
       saleTarget,
       saleActual,
@@ -60,9 +73,9 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
       dailyProfit,
       remainingDailyProfitTarget,
       saleRate: saleTarget > 0 ? saleActual / saleTarget : null,
-      profitRate: profitTarget > 0 ? profitActual / profitTarget : null,
-      profitMargin: saleActual > 0 ? profitActual / saleActual : null,
-      dailyProfitMargin: dailyAmount > 0 ? dailyProfit / dailyAmount : null,
+      profitRate: profitActual != null && profitTarget > 0 ? profitActual / profitTarget : null,
+      profitMargin: profitActual != null && saleActual > 0 ? profitActual / saleActual : null,
+      dailyProfitMargin: dailyProfit != null && dailyAmount > 0 ? dailyProfit / dailyAmount : null,
     };
   }, [detailRows]);
 
@@ -82,8 +95,8 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
     body.push([
       "合计",
       totals.saleTarget, totals.saleActual, fmtRate(totals.saleRate),
-      totals.profitTarget, totals.profitActual, fmtRate(totals.profitRate), fmtRate(totals.profitMargin),
-      totals.dailyAmount, totals.dailyProfit, fmtRate(totals.dailyProfitMargin),
+      totals.profitTarget, totals.profitActual ?? "", fmtRate(totals.profitRate), fmtRate(totals.profitMargin),
+      totals.dailyAmount, totals.dailyProfit ?? "", fmtRate(totals.dailyProfitMargin),
       totals.remainingDailyProfitTarget,
     ]);
     exportExcel([head, ...body], `${targetMonth}月仓储出库数据报表`);
