@@ -388,8 +388,8 @@ export function generateTier1View(
       sel.push(`tgt.target_id`);
     } else {
       // dim_grain 或纯 CTE 路径：tgt 不在 final FROM（只在 actual CTE 内 JOIN），
-      // actual CTE 已 SELECT target_id，多 CTE 时 COALESCE 跨 CTE
-      sel.push(refCol('target_id'));
+      // actual CTE 已 SELECT target_id，多 CTE 时 COALESCE 跨 CTE（表达式须显式 AS target_id 命名）
+      sel.push(`${refCol('target_id')} AS target_id`);
     }
   }
   if (config.dim_grain) {

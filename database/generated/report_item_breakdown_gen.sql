@@ -17,7 +17,7 @@ cte0 AS (
     MAX(di.item_brand) AS item_brand,
     MAX(di.category_group) AS category_group
   FROM report_daily_item_sales s
-  JOIN dim_item di ON di.system_book_code=s.system_book_code AND di.item_num=s.item_num
+  JOIN LATERAL (SELECT * FROM dim_item WHERE item_num = s.item_num ORDER BY (system_book_code = s.system_book_code) DESC LIMIT 1) di ON true
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   GROUP BY tgt.target_id, di.item_code
 ),
@@ -33,17 +33,17 @@ cte1 AS (
     MAX(di.item_brand) AS item_brand,
     MAX(di.category_group) AS category_group
   FROM report_daily_item_outbound s
-  JOIN dim_item di ON di.system_book_code=s.system_book_code AND di.item_num=s.item_num
+  JOIN LATERAL (SELECT * FROM dim_item WHERE item_num = s.item_num ORDER BY (system_book_code = s.system_book_code) DESC LIMIT 1) di ON true
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   GROUP BY tgt.target_id, di.item_code
 )
-SELECT cte0.target_id,
-  cte0.item_code AS item_code,
-  cte0.item_name AS item_name,
-  cte0.category_name AS category_name,
-  cte0.top_category AS top_category,
-  cte0.item_brand AS item_brand,
-  cte0.category_group AS category_group,
+SELECT COALESCE(cte0.target_id, cte1.target_id) AS target_id,
+  COALESCE(cte0.item_code, cte1.item_code) AS item_code,
+  COALESCE(cte0.item_name, cte1.item_name) AS item_name,
+  COALESCE(cte0.category_name, cte1.category_name) AS category_name,
+  COALESCE(cte0.top_category, cte1.top_category) AS top_category,
+  COALESCE(cte0.item_brand, cte1.item_brand) AS item_brand,
+  COALESCE(cte0.category_group, cte1.category_group) AS category_group,
   cte0.sale_amount AS sale_amount,
   CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN cte0.sale_profit END AS sale_profit,
   cte1.delivery_amount AS delivery_amount,

@@ -448,7 +448,7 @@ describe('Tier1 extra_grain', () => {
     const sql = generateTier1View(config, mockMetrics, mockSources);
     expect(sql).toMatch(/FULL OUTER JOIN cte\d+ ON/);
     // target_id / item_code / extra 列均 COALESCE 跨两 CTE（修旧 bug：只从 firstCte 取会丢 cte1-only 行）
-    expect(sql).toMatch(/COALESCE\(cte\d+\.target_id, cte\d+\.target_id\)/);
+    expect(sql).toMatch(/COALESCE\(cte\d+\.target_id, cte\d+\.target_id\) AS target_id/);
     expect(sql).toMatch(/COALESCE\(cte\d+\.item_code, cte\d+\.item_code\) AS item_code/);
     expect(sql).toMatch(/COALESCE\(cte\d+\.category_group, cte\d+\.category_group\) AS category_group/);
   });
