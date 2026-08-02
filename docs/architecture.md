@@ -1089,6 +1089,16 @@ spec：`docs/superpowers/specs/2026-07-29-report-phase2-data-layer-design.md`。
 
 **完整性**：与现有 `report_daily_*` 同模式——`/compute` 用 `DELETE-before-INSERT` 清该日期范围旧行（覆盖写、无 stale 残留），全程记 `compute_logs`，`status=failed` 触发企微告警。**按品牌行数对账（聚合行数 ≥ parquet distinct(sbc, item_num/client_code, biz_date)）目前未实现**，作为后续增强；当前依赖 DELETE 覆盖 + 失败告警兜底，不做按维度行数比对（与 `report_daily_delivery/wholesale` 等既有聚合表一致）。
 
+### 10.11 Phase 2 前端板块（2026-08-02）
+
+spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.md`。在 §10.9 数据层之上挂 3 个看板板块到目标详情页（PC + 移动，`web/app/reports/targets/[id]/`）下方，紧随既有 KPI/品牌×指标/门店/类别表之后：
+
+- **商品 TOP4 榜**（`ItemTopBoards`，`web/components/report-center/item-top-boards.tsx`）：销售/出库 × 月/日 2×2 网格 + 日期选择器；月榜从视图读、日榜走 `get_item_top_by_day(p_target_id, p_day)` RPC（视图无单日维度）；全品牌按 `item_code` 合并；行点击触发 `ItemDetailDrawer` 弹层（走 `get_item_detail(p_target_id, p_item_code)` RPC）。
+- **出库商品下钻列表**（`ItemOutboundList`）：类 Excel 交叉表，top_category/item_brand/item_name 筛选 + 服务端分页（首页 server 预取，翻页走 `/api/admin/reports/item-list`）。
+- **批发客户报表**（`WholesaleCustomerReport`）：3120 客户排行 + 累计占比 + 品品甜 KPI 卡 + 高亮品品甜客户行（`client_brand_code` 数据驱动识别，无字面量 `'64188'`，从 `dim_brand` 反查 `brand_name='品品甜'` 的 `system_book_code`）。
+
+**生成器新能力**（§10.10）：`dim_grain`（actual CTE 粒度变换，支持商品级从品牌×商品聚合到 item_code 全品牌合并）/ `carry_cols`（携带原表列如 `item_name`/`category_name`，免去额外 JOIN）/ `extra_join`（补 LEFT JOIN 如 `dim_item` 取 `top_category`）/ `source_override`（覆盖 metric_sources 默认表名，支持 wholesale 客户视图切 `report_daily_wholesale_customer`）。**3 板块走 2 视图 + 2 RPC**：`report_item_breakdown_gen`（含 `sale_amount`+`outbound_amount`+`top_category`+`item_brand` 等携带列）+ `report_wholesale_customer_gen`（3120 客户排行）+ `get_item_top_by_day`/`get_item_detail` 2 RPC（迁移 141/142）。迁移 143 调 `report_item_breakdown_gen` 的 outbound 口径 `depends_on` 对齐（与 `outbound_amt` 同源）。**预取策略**：`page.tsx` 的 `Promise.all` 加 `getItemBreakdownTop` + `getItemOutboundListPage(targetId, 1, {})` + `getWholesaleCustomer`，首屏 SSR 同步出 3 板块；日榜切换/列表翻页/弹层走 client fetch。
+
 ---
 
 ## 十一、待实现/待讨论

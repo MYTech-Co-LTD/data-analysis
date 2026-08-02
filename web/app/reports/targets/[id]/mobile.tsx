@@ -7,9 +7,17 @@ import { KpiCards } from "@/components/report-center/kpi-cards";
 import { RegionDrillTable } from "@/components/report-center/region-drill-table";
 import { CategorySummary } from "@/components/report-center/category-summary";
 import { BrandMetricTable } from "@/components/report-center/brand-metric-table";
+import { ItemTopBoards } from "@/components/report-center/item-top-boards";
+import { ItemOutboundList } from "@/components/report-center/item-outbound-list";
+import { WholesaleCustomerReport } from "@/components/report-center/wholesale-customer-report";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 import { CategorySummaryRow } from "@/lib/report-center/category-summary";
 import { BrandMetricRow } from "@/lib/report-center/brand-metric";
+import type {
+  ItemBreakdownTop,
+  ItemOutboundListRow,
+} from "@/lib/report-center/item-breakdown";
+import type { WholesaleCustomerResult } from "@/lib/report-center/wholesale-customer";
 
 function fmtFresh(s: string | null) {
   if (!s) return "—";
@@ -39,6 +47,10 @@ export function MobileDashboard({
   progress,
   targetMonth,
   freshness,
+  targetId,
+  itemTop,
+  itemList,
+  wholesaleCustomer,
 }: {
   target: any;
   kpi: any[];
@@ -48,6 +60,10 @@ export function MobileDashboard({
   progress: number;
   targetMonth: number;
   freshness: string | null;
+  targetId: number;
+  itemTop: ItemBreakdownTop;
+  itemList: { rows: ItemOutboundListRow[]; total: number };
+  wholesaleCustomer: WholesaleCustomerResult;
 }) {
   return (
     <div className="space-y-4">
@@ -102,6 +118,30 @@ export function MobileDashboard({
       {/* 类别出库报表 */}
       <div className="px-4">
         <CategorySummary rows={categorySummary} targetMonth={targetMonth} />
+      </div>
+
+      {/* 商品 TOP 榜（移动单列堆叠，组件内自适应） */}
+      <div className="px-4">
+        <ItemTopBoards top={itemTop} targetId={targetId} />
+      </div>
+
+      {/* 出库商品明细列表 */}
+      <div className="px-4">
+        <ItemOutboundList
+          initialRows={itemList.rows}
+          initialTotal={itemList.total}
+          targetId={targetId}
+        />
+      </div>
+
+      {/* 批发客户报表 */}
+      <div className="px-4">
+        <WholesaleCustomerReport
+          rows={wholesaleCustomer.rows}
+          pinpintianAmount={wholesaleCustomer.pinpintianAmount}
+          pinpintianPct={wholesaleCustomer.pinpintianPct}
+          total3120={wholesaleCustomer.total3120}
+        />
       </div>
     </div>
   );

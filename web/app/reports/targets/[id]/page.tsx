@@ -6,6 +6,11 @@ import { getTargetKpi } from "@/lib/report-center/targets";
 import { getRegionBreakdown } from "@/lib/report-center/region-breakdown";
 import { getCategorySummary } from "@/lib/report-center/category-summary";
 import { getBrandMetric } from "@/lib/report-center/brand-metric";
+import {
+  getItemBreakdownTop,
+  getItemOutboundListPage,
+} from "@/lib/report-center/item-breakdown";
+import { getWholesaleCustomer } from "@/lib/report-center/wholesale-customer";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { DesktopDashboard } from "./desktop";
@@ -33,11 +38,22 @@ export default async function TargetDashboard({
   if (!totalRows?.length) notFound();
   const t = totalRows[0];
 
-  const [kpi, regionBreakdown, categorySummary, brandMetric] = await Promise.all([
+  const [
+    kpi,
+    regionBreakdown,
+    categorySummary,
+    brandMetric,
+    itemTop,
+    itemList,
+    wholesaleCustomer,
+  ] = await Promise.all([
     getTargetKpi(targetId),
     getRegionBreakdown(id),
     getCategorySummary(id),
     getBrandMetric(targetId),
+    getItemBreakdownTop(targetId),
+    getItemOutboundListPage(targetId, 1, {}),
+    getWholesaleCustomer(targetId),
   ]);
 
   // 数据新鲜度：3 表最早 /compute 时间（updated_at min）
@@ -64,6 +80,10 @@ export default async function TargetDashboard({
       progress={progress}
       targetMonth={targetMonth}
       freshness={freshness}
+      targetId={targetId}
+      itemTop={itemTop}
+      itemList={itemList}
+      wholesaleCustomer={wholesaleCustomer}
     />
   ) : (
     <div className="p-6">
@@ -76,6 +96,10 @@ export default async function TargetDashboard({
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}
+        targetId={targetId}
+        itemTop={itemTop}
+        itemList={itemList}
+        wholesaleCustomer={wholesaleCustomer}
       />
     </div>
   );
