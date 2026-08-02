@@ -67,14 +67,14 @@ export function CategoryItemDrawer({ targetId, category, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [category, targetId]);
 
-  // ESC 关闭
+  // ESC 关闭（内层商品详情抽屉打开时让内层优先，避免一次 ESC 双关）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !drawerItem) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, drawerItem]);
 
   const onSort = (key: SortKey) => {
     if (key === sortKey) {
@@ -118,7 +118,7 @@ export function CategoryItemDrawer({ targetId, category, onClose }: Props) {
       aria-modal="true"
     >
       <div
-        className="flex h-full w-[720px] max-w-[94vw] flex-col overflow-auto bg-white p-6 shadow-xl"
+        className="flex h-full w-full flex-col overflow-auto bg-white p-6 shadow-xl md:w-[720px]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between">
