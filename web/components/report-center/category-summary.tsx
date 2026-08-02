@@ -88,8 +88,8 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
     const body = detailRows.map((r) => [
       r.category,
       r.sale_target, r.sale_actual, fmtRate(r.sale_rate),
-      r.profit_target, r.profit_actual, fmtRate(r.profit_rate), fmtRate(r.profit_margin),
-      r.daily_amount, r.daily_profit, fmtRate(r.daily_profit_margin),
+      r.profit_target, r.profit_actual ?? "", fmtRate(r.profit_rate), fmtRate(r.profit_margin),
+      r.daily_amount, r.daily_profit ?? "", fmtRate(r.daily_profit_margin),
       r.remaining_daily_profit_target,
     ]);
     body.push([

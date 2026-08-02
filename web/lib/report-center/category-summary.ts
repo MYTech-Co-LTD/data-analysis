@@ -9,11 +9,11 @@ export interface CategorySummaryRow {
   sale_actual: number;
   sale_rate: number | null;
   profit_target: number;
-  profit_actual: number;
+  profit_actual: number | null;  // 脱敏时视图返 NULL（can_see_cost=false）
   profit_rate: number | null;
   profit_margin: number | null;
   daily_amount: number;
-  daily_profit: number;
+  daily_profit: number | null;  // 脱敏时视图返 NULL（can_see_cost=false）
   daily_profit_margin: number | null;
   remaining_daily_profit_target: number;
 }
