@@ -151,3 +151,60 @@ export const regionBreakdownView: ViewConfig = {
     },
   ],
 };
+
+/**
+ * 商品分解视图配置（Phase 2 前端板块）
+ * 生成 report_item_breakdown_gen，按 item_code 合并跨品牌（dim_item join grain 变换）
+ * 服务：商品 TOP4 榜（销售/出库 × 月/日）+ 出库商品列表
+ * 口径：sale_amount + delivery/wholesale/outbound（derived=delivery+wholesale，AST 已有）
+ * 无 target 列（item 级无目标分解），target_id 仅借目标周期作时间窗口
+ */
+export const itemBreakdownView: ViewConfig = {
+  view_name: 'report_item_breakdown_gen',
+  metrics: [
+    'sale_amount',
+    'sale_profit',
+    'delivery_amount',
+    'delivery_profit',
+    'wholesale_amount',
+    'wholesale_profit',
+    'outbound_amount',   // derived = delivery + wholesale（AST）
+    'outbound_profit',   // derived = delivery_profit + wholesale_profit（AST）
+  ],
+  dim_code: 'item',
+  levels: ['item'],
+  target_metric_codes: [],  // 无 target
+  scope: { target_window: true, target_status: ['active', 'closed'] },
+  dim_grain: {
+    table: 'dim_item di',
+    on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+    key: 'item_code',
+    extra: ['item_name', 'category_name', 'top_category', 'item_brand'],
+  },
+};
+
+/**
+ * 批发客户视图配置（Phase 2 前端板块）
+ * 生成 report_wholesale_customer_gen，按 client_code 聚合
+ * 服务：批发客户报表（3120 客户排行 + 品品甜占比）
+ * 品牌识别数据驱动：carry_cols 带 client_name/system_book_code 出 CTE，extra_join 标量子查询
+ *   (SELECT db.system_book_code FROM dim_branch db WHERE db.branch_name=cte.client_name LIMIT 1) AS client_brand_code
+ *   标量子查询避 LEFT JOIN 翻倍；前端判断 client_brand_code 对应品牌（无 64188 字面量在生成器/config）
+ */
+export const wholesaleCustomerView: ViewConfig = {
+  view_name: 'report_wholesale_customer_gen',
+  metrics: [
+    'wholesale_amount',
+    'wholesale_profit',
+  ],
+  dim_code: 'customer',
+  levels: ['customer'],
+  target_metric_codes: [],
+  scope: { target_window: true, target_status: ['active', 'closed'] },
+  carry_cols: ['client_name', 'system_book_code'],
+  extra_join: {
+    table: 'dim_branch db',
+    on: { left: 'client_name', right: 'branch_name' },
+    cols: [{ out: 'client_brand_code', expr: 'db.system_book_code' }],
+  },
+};
