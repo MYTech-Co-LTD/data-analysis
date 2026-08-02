@@ -161,7 +161,7 @@ export async function getItemOutboundListPage(
     )
     .eq("target_id", targetId);
   if (filters.category) query = query.eq("top_category", filters.category);
-  if (filters.brand) query = query.eq("item_brand", filters.brand);
+  // 注：原 filters.brand → item_brand 筛选已移除（item_brand 是 manufacturer brand，脏值+跨品牌粒度，会导致 0 行）。
   if (filters.q) query = query.ilike("item_name", `%${filters.q}%`);
 
   const { data, count, error } = await query

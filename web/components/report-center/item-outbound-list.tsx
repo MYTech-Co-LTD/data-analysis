@@ -1,6 +1,6 @@
 "use client";
 
-// 出库商品明细列表（类 Excel 交叉表）：top_category/item_brand/item_name 筛选 + 服务端分页。
+// 出库商品明细列表（类 Excel 交叉表）：top_category/item_name 筛选 + 服务端分页。
 // 首页走 server 预取（initialRows/initialTotal），翻页/筛选走 /api/admin/reports/item-list。
 // DESIGN.md：tabular-nums + bordered cross-table + chart-actions 三动作。
 import { useRef, useState } from "react";
@@ -9,7 +9,8 @@ import type { ItemOutboundListRow } from "@/lib/report-center/item-breakdown";
 
 const PAGE_SIZE = 50;
 const CATEGORIES = ["水果", "标品", "耗材"] as const;
-const BRANDS = ["熊喵鲜生", "品品甜"] as const;
+// 注：原 BRANDS 筛选已移除——dim_item.item_brand 是 manufacturer brand（prod 多为 NULL/脏值），
+// 且视图 item_code 粒度跨品牌，该筛选既语义错位又会导致 0 行结果。
 
 // 金额万化（在交叉表里展示），<万 直出整数；null/undefined → —
 function fmtCell(v: number | null | undefined): string {
@@ -28,9 +29,8 @@ export function ItemOutboundList({ initialRows, initialTotal, targetId }: ItemOu
   const [rows, setRows] = useState<ItemOutboundListRow[]>(initialRows);
   const [total, setTotal] = useState<number>(initialTotal);
   const [page, setPage] = useState<number>(1);
-  const [filters, setFilters] = useState<{ category: string; brand: string; q: string }>({
+  const [filters, setFilters] = useState<{ category: string; q: string }>({
     category: "",
-    brand: "",
     q: "",
   });
   const [loading, setLoading] = useState<boolean>(false);
@@ -111,18 +111,6 @@ export function ItemOutboundList({ initialRows, initialTotal, targetId }: ItemOu
           {CATEGORIES.map((c) => (
             <option key={c} value={c}>
               {c}
-            </option>
-          ))}
-        </select>
-        <select
-          value={filters.brand}
-          onChange={(e) => onFilterChange({ ...filters, brand: e.target.value })}
-          className="rounded border border-slate-200 px-2 py-1 focus:border-blue-500 focus:outline-none"
-        >
-          <option value="">全品牌</option>
-          {BRANDS.map((b) => (
-            <option key={b} value={b}>
-              {b}
             </option>
           ))}
         </select>
