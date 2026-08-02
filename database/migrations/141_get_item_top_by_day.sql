@@ -3,7 +3,8 @@
 -- 服务：商品 TOP 日榜（销售/出库 × 选定日）。日榜选目标周期内截至当天任一天。
 -- 粒度：item_code（跨品牌合并，dim_item join）。sale 来自 item_sales，outbound = delivery+wholesale 来自 item_outbound。
 -- p_day 须在 target 周期内（否则返空）。
--- 幂等：CREATE OR REPLACE FUNCTION + ON CONFLICT 无关；GRANT 重跑无碍。
+-- 幂等：DROP FUNCTION IF EXISTS + CREATE OR REPLACE（返回类型被 145 改过，CREATE OR REPLACE 单独不能改签名，须先 DROP 重建）；GRANT 重跑无碍。
+DROP FUNCTION IF EXISTS get_item_top_by_day(BIGINT, DATE);
 CREATE OR REPLACE FUNCTION get_item_top_by_day(p_target_id BIGINT, p_day DATE)
 RETURNS TABLE(
   item_code TEXT, item_name TEXT, category_name TEXT,
