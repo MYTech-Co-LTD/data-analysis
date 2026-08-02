@@ -369,6 +369,13 @@ export function generateTier1View(
     coalesceRefs: true,
   };
   const sel: string[] = [];
+  // 多 CTE FULL JOIN 时，维度列/键/target_id 须 COALESCE 跨 CTE；否则只从 firstCte 取会丢另一侧 only 行
+  // （如 item 视图：有出库无销售的商品只在 cte1，旧实现从 cte0 取键 → target_id/category_group NULL 被丢）
+  const uniqCtes = [...new Set(cteOf.values())];
+  const refCol = (col: string) =>
+    uniqCtes.length > 1
+      ? `COALESCE(${uniqCtes.map((c) => `${c}.${col}`).join(', ')})`
+      : `${uniqCtes[0]}.${col}`;
 
   // 维度列
   if (useTargetWindow) {
@@ -381,18 +388,16 @@ export function generateTier1View(
       sel.push(`tgt.target_id`);
     } else {
       // dim_grain 或纯 CTE 路径：tgt 不在 final FROM（只在 actual CTE 内 JOIN），
-      // actual CTE 已 SELECT target_id，从 firstCte 取
-      const tidFirstCte = [...new Set(cteOf.values())][0];
-      sel.push(`${tidFirstCte}.target_id`);
+      // actual CTE 已 SELECT target_id，多 CTE 时 COALESCE 跨 CTE
+      sel.push(refCol('target_id'));
     }
   }
   if (config.dim_grain) {
-    // dim_grain：维度列从 actual CTE 选（actual CTE 已含 key + extra）
-    const firstCte = [...new Set(cteOf.values())][0];
-    sel.push(`${firstCte}.${config.dim_grain.key} AS ${config.dim_grain.key}`);
+    // dim_grain：维度列从 actual CTE 选（actual CTE 已含 key + extra），多 CTE 时 COALESCE 跨 CTE
+    sel.push(`${refCol(config.dim_grain.key)} AS ${config.dim_grain.key}`);
     if (config.dim_grain.extra) {
       for (const ex of config.dim_grain.extra) {
-        sel.push(`${firstCte}.${ex} AS ${ex}`);
+        sel.push(`${refCol(ex)} AS ${ex}`);
       }
     }
   } else if (dim_table) {
@@ -406,20 +411,18 @@ export function generateTier1View(
     sel.push(`${dimKey} AS ${dimKey}`);
   }
 
-  // extra_grain：actual CTE 已 GROUP BY 这些 fact 表列，final SELECT 从 firstCte 输出（去 s. 前缀作列名）
+  // extra_grain：actual CTE 已 GROUP BY 这些 fact 表列，final SELECT 从 CTE 输出（去 s. 前缀作列名），多 CTE 时 COALESCE
   if (extraGrainCols.length) {
-    const egFirstCte = [...new Set(cteOf.values())][0];
     for (const eg of extraGrainCols) {
       const colName = egColName(eg);
-      sel.push(`${egFirstCte}.${colName} AS ${colName}`);
+      sel.push(`${refCol(colName)} AS ${colName}`);
     }
   }
 
-  // carry_cols：从 firstCte 选
+  // carry_cols：从 CTE 选，多 CTE 时 COALESCE
   if (config.carry_cols) {
-    const carryFirstCte = [...new Set(cteOf.values())][0];
     for (const col of config.carry_cols) {
-      sel.push(`${carryFirstCte}.${col} AS ${col}`);
+      sel.push(`${refCol(col)} AS ${col}`);
     }
   }
 

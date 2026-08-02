@@ -419,10 +419,38 @@ describe('Tier1 extra_grain', () => {
     expect(sql).toContain('GROUP BY tgt.target_id, s.client_code, s.biz_date');
     // actual CTE SELECT 含 extra_grain 列
     expect(sql).toMatch(/SELECT tgt\.target_id, s\.client_code, s\.biz_date,/);
-    // final SELECT 输出 extra_grain 列（去 s. 前缀作列名）
-    expect(sql).toMatch(/cte\d+\.biz_date AS biz_date/);
+    // final SELECT 输出 extra_grain 列（去 s. 前缀作列名）；多 CTE FULL JOIN 时 COALESCE 跨 CTE
+    expect(sql).toMatch(/COALESCE\(cte\d+\.biz_date, cte\d+\.biz_date\) AS biz_date/);
     // 多 CTE FULL JOIN ON 含 extra_grain 列（防 cross join 翻倍）
     expect(sql).toMatch(/FULL OUTER JOIN cte\d+ ON cte\d+\.target_id = cte\d+\.target_id AND cte\d+\.client_code = cte\d+\.client_code AND cte\d+\.biz_date = cte\d+\.biz_date/);
+  });
+
+  it('多 CTE FULL JOIN 时 final SELECT 对 target_id/key/extra COALESCE（不丢 cte1-only 行）', () => {
+    // sale_amount(item_sales) + delivery_amount(item_outbound) -> 2 CTE -> FULL JOIN，dim_grain item
+    const config: ViewConfig = {
+      view_name: 'test_fulljoin_coalesce',
+      metrics: ['sale_amount', 'delivery_amount'],
+      dim_code: 'item',
+      levels: ['item'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      source_override: {
+        sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' },
+        delivery_amount: { table: 'report_daily_item_outbound', column: 'delivery_amount' },
+      },
+      dim_grain: {
+        table: 'dim_item di',
+        on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+        key: 'item_code',
+        extra: ['item_name', 'category_group'],
+      },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toMatch(/FULL OUTER JOIN cte\d+ ON/);
+    // target_id / item_code / extra 列均 COALESCE 跨两 CTE（修旧 bug：只从 firstCte 取会丢 cte1-only 行）
+    expect(sql).toMatch(/COALESCE\(cte\d+\.target_id, cte\d+\.target_id\)/);
+    expect(sql).toMatch(/COALESCE\(cte\d+\.item_code, cte\d+\.item_code\) AS item_code/);
+    expect(sql).toMatch(/COALESCE\(cte\d+\.category_group, cte\d+\.category_group\) AS category_group/);
   });
 
   it('无 extra_grain 时行为不变（回归）', () => {
