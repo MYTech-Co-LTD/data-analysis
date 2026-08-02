@@ -1,12 +1,15 @@
 "use client";
 
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { CategorySummaryRow } from "@/lib/report-center/category-summary";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { CategoryItemDrawer } from "./category-item-drawer";
 
 interface CategorySummaryProps {
   rows: CategorySummaryRow[];
   targetMonth: number;
+  targetId: number;
 }
 
 // 毛利率 < 12% 标红
@@ -24,8 +27,9 @@ function fmtRate(r: number | null): string {
   return r == null ? "—" : `${(r * 100).toFixed(1)}%`;
 }
 
-export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
+export function CategorySummary({ rows, targetMonth, targetId }: CategorySummaryProps) {
   const tableRef = useRef<HTMLDivElement>(null);
+  const [drawerCat, setDrawerCat] = useState<string | null>(null);
 
   // 排除「合计」行（视图可能返回），tbody 只展示明细，tfoot 展示合计
   const detailRows = useMemo(
@@ -149,9 +153,16 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
               </tr>
             )}
             {detailRows.map((r) => (
-              <tr key={r.category} className="hover:bg-slate-50">
+              <tr
+                key={r.category}
+                className="cursor-pointer hover:bg-slate-50"
+                onClick={() => setDrawerCat(r.category)}
+              >
                 <td className="px-3 py-2 text-slate-700 font-medium">
-                  {r.category}
+                  <span className="inline-flex items-center gap-1">
+                    <ChevronRight size={14} strokeWidth={1.5} className="text-slate-400" />
+                    {r.category}
+                  </span>
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-slate-700">
                   {fmtCurrency(r.sale_target)}
@@ -229,6 +240,13 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
           </tfoot>
         </table>
       </div>
+      {drawerCat && (
+        <CategoryItemDrawer
+          targetId={targetId}
+          category={drawerCat}
+          onClose={() => setDrawerCat(null)}
+        />
+      )}
     </div>
   );
 }

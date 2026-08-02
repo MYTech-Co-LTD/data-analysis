@@ -8,7 +8,6 @@ import { RegionDrillTable } from "@/components/report-center/region-drill-table"
 import { CategorySummary } from "@/components/report-center/category-summary";
 import { BrandMetricTable } from "@/components/report-center/brand-metric-table";
 import { SaleTopBoards, OutboundTopBoards, useItemDayBoards } from "@/components/report-center/item-top-boards";
-import { ItemOutboundList } from "@/components/report-center/item-outbound-list";
 import { SupplyChainOutboundTable } from "@/components/report-center/supply-chain-outbound-table";
 import { WholesaleDailyTable } from "@/components/report-center/wholesale-daily-table";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
@@ -16,7 +15,6 @@ import { CategorySummaryRow } from "@/lib/report-center/category-summary";
 import { BrandMetricRow } from "@/lib/report-center/brand-metric";
 import type {
   ItemBreakdownTop,
-  ItemOutboundListRow,
 } from "@/lib/report-center/item-breakdown";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import type { WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
@@ -51,7 +49,6 @@ export function MobileDashboard({
   freshness,
   targetId,
   itemTop,
-  itemList,
   supplyChain,
   wholesaleDaily,
 }: {
@@ -65,7 +62,6 @@ export function MobileDashboard({
   freshness: string | null;
   targetId: number;
   itemTop: ItemBreakdownTop;
-  itemList: { rows: ItemOutboundListRow[]; total: number };
   supplyChain: SupplyChainOutboundRow[];
   wholesaleDaily: WholesaleDailyRow[];
 }) {
@@ -142,7 +138,7 @@ export function MobileDashboard({
 
       {/* 类别出库报表 */}
       <div className="px-4">
-        <CategorySummary rows={categorySummary} targetMonth={targetMonth} />
+        <CategorySummary rows={categorySummary} targetMonth={targetMonth} targetId={targetId} />
       </div>
 
       {/* 供应链出库层级 */}
@@ -175,15 +171,6 @@ export function MobileDashboard({
           busy={busy}
           startDate={target.start_date}
           endDate={target.end_date}
-          targetId={targetId}
-        />
-      </div>
-
-      {/* 出库商品明细列表 */}
-      <div className="px-4">
-        <ItemOutboundList
-          initialRows={itemList.rows}
-          initialTotal={itemList.total}
           targetId={targetId}
         />
       </div>
