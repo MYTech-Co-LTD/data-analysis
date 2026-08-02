@@ -44,9 +44,11 @@ export default function TargetsPage() {
                 <td className="border border-slate-200 p-2 text-right">{fmt(t.metrics.sale)}</td>
                 <td className="border border-slate-200 p-2 text-right">{fmt(t.metrics.delivery)}</td>
                 <td className="border border-slate-200 p-2">
-                  <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-xs ${t.status === 'active' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
-                    {t.status === 'active' ? '进行中' : '已结束'}
-                  </span>
+                  {/* 显示层状态：active 且未到期=进行中；到期（即使未定格）=已结束 */}
+                  {(() => { const ongoing = t.status === 'active' && t.end >= new Date().toISOString().slice(0, 10); return (
+                  <span className={`whitespace-nowrap rounded px-1.5 py-0.5 text-xs ${ongoing ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-500'}`}>
+                    {ongoing ? '进行中' : '已结束'}
+                  </span> ); })()}
                 </td>
                 <td className="border border-slate-200 p-2"><a href={`/admin/targets/${t.id}`} className="text-primary">分解</a></td>
               </tr>
