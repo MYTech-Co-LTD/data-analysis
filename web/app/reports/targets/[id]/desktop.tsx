@@ -7,7 +7,7 @@ import { KpiCards } from "@/components/report-center/kpi-cards";
 import { RegionDrillTable } from "@/components/report-center/region-drill-table";
 import { CategorySummary } from "@/components/report-center/category-summary";
 import { BrandMetricTable } from "@/components/report-center/brand-metric-table";
-import { ItemTopBoards } from "@/components/report-center/item-top-boards";
+import { SaleTopBoards, OutboundTopBoards, useItemDayBoards } from "@/components/report-center/item-top-boards";
 import { ItemOutboundList } from "@/components/report-center/item-outbound-list";
 import { WholesaleCustomerReport } from "@/components/report-center/wholesale-customer-report";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
@@ -65,6 +65,13 @@ export function DesktopDashboard({
   itemList: { rows: ItemOutboundListRow[]; total: number };
   wholesaleCustomer: WholesaleCustomerResult;
 }) {
+  // 日榜 day state（销售/出库共用，切日并行请求两 metric）
+  const { day, saleDay, outboundDay, onDayChange, busy } = useItemDayBoards(
+    targetId,
+    itemTop.defaultDay,
+    itemTop.saleDay,
+    itemTop.outboundDay,
+  );
   return (
     <div className="space-y-5">
       {/* 头部 */}
@@ -102,18 +109,39 @@ export function DesktopDashboard({
       {/* 品牌×指标 */}
       <BrandMetricTable rows={brandMetric} targetMonth={targetMonth} />
 
-      {/* 门店零售/配送数据报表 */}
+      {/* 门店零售/配送数据报表（战区） */}
       <RegionDrillTable
         rows={regionBreakdown}
         targetMonth={targetMonth}
         progress={progress}
       />
 
+      {/* 销售商品 TOP（月度+日，2 列并排，日榜带日期选择器） */}
+      <SaleTopBoards
+        monthBoard={itemTop.saleMonth}
+        dayBoard={saleDay}
+        day={day}
+        onDayChange={onDayChange}
+        busy={busy}
+        startDate={target.start_date}
+        endDate={target.end_date}
+        targetId={targetId}
+      />
+
       {/* 类别出库报表 */}
       <CategorySummary rows={categorySummary} targetMonth={targetMonth} />
 
-      {/* 商品 TOP 榜（销售/出库 × 月/日，2×2 网格 + 日期切换 + 点入弹层） */}
-      <ItemTopBoards top={itemTop} targetId={targetId} />
+      {/* 出库商品 TOP（月度+日，2 列并排，日榜带日期选择器） */}
+      <OutboundTopBoards
+        monthBoard={itemTop.outboundMonth}
+        dayBoard={outboundDay}
+        day={day}
+        onDayChange={onDayChange}
+        busy={busy}
+        startDate={target.start_date}
+        endDate={target.end_date}
+        targetId={targetId}
+      />
 
       {/* 出库商品明细列表（类 Excel 交叉表 + 筛选 + 分页） */}
       <ItemOutboundList

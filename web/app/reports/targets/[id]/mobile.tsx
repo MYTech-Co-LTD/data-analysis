@@ -7,7 +7,7 @@ import { KpiCards } from "@/components/report-center/kpi-cards";
 import { RegionDrillTable } from "@/components/report-center/region-drill-table";
 import { CategorySummary } from "@/components/report-center/category-summary";
 import { BrandMetricTable } from "@/components/report-center/brand-metric-table";
-import { ItemTopBoards } from "@/components/report-center/item-top-boards";
+import { SaleTopBoards, OutboundTopBoards, useItemDayBoards } from "@/components/report-center/item-top-boards";
 import { ItemOutboundList } from "@/components/report-center/item-outbound-list";
 import { WholesaleCustomerReport } from "@/components/report-center/wholesale-customer-report";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
@@ -65,6 +65,13 @@ export function MobileDashboard({
   itemList: { rows: ItemOutboundListRow[]; total: number };
   wholesaleCustomer: WholesaleCustomerResult;
 }) {
+  // 日榜 day state（销售/出库共用，切日并行请求两 metric）
+  const { day, saleDay, outboundDay, onDayChange, busy } = useItemDayBoards(
+    targetId,
+    itemTop.defaultDay,
+    itemTop.saleDay,
+    itemTop.outboundDay,
+  );
   return (
     <div className="space-y-4">
       {/* 头部 */}
@@ -106,7 +113,7 @@ export function MobileDashboard({
         <BrandMetricTable rows={brandMetric} targetMonth={targetMonth} />
       </div>
 
-      {/* 门店零售/配送数据报表 */}
+      {/* 门店零售/配送数据报表（战区） */}
       <div className="px-4">
         <RegionDrillTable
           rows={regionBreakdown}
@@ -115,14 +122,37 @@ export function MobileDashboard({
         />
       </div>
 
+      {/* 销售商品 TOP（月度+日，移动单列堆叠） */}
+      <div className="px-4">
+        <SaleTopBoards
+          monthBoard={itemTop.saleMonth}
+          dayBoard={saleDay}
+          day={day}
+          onDayChange={onDayChange}
+          busy={busy}
+          startDate={target.start_date}
+          endDate={target.end_date}
+          targetId={targetId}
+        />
+      </div>
+
       {/* 类别出库报表 */}
       <div className="px-4">
         <CategorySummary rows={categorySummary} targetMonth={targetMonth} />
       </div>
 
-      {/* 商品 TOP 榜（移动单列堆叠，组件内自适应） */}
+      {/* 出库商品 TOP（月度+日，移动单列堆叠） */}
       <div className="px-4">
-        <ItemTopBoards top={itemTop} targetId={targetId} />
+        <OutboundTopBoards
+          monthBoard={itemTop.outboundMonth}
+          dayBoard={outboundDay}
+          day={day}
+          onDayChange={onDayChange}
+          busy={busy}
+          startDate={target.start_date}
+          endDate={target.end_date}
+          targetId={targetId}
+        />
       </div>
 
       {/* 出库商品明细列表 */}
