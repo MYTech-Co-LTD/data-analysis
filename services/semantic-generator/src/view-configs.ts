@@ -187,7 +187,7 @@ export const itemBreakdownView: ViewConfig = {
     table: 'dim_item di',
     on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
     key: 'item_code',
-    extra: ['item_name', 'category_name', 'top_category', 'item_brand'],
+    extra: ['item_name', 'category_name', 'top_category', 'item_brand', 'category_group'],
   },
 };
 

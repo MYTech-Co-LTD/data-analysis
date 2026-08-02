@@ -250,6 +250,26 @@ describe('Tier1 dim_grain', () => {
     // 不含 s.item_num 作为 GROUP BY（grain 已变换）
     expect(sql).not.toMatch(/GROUP BY tgt\.target_id, s\.item_num/);
   });
+
+  it('extra 含生成列 category_group（裸列 MAX 携带，不改生成器）', () => {
+    const config: ViewConfig = {
+      view_name: 'test_item_cat_group',
+      metrics: ['sale_amount'],
+      dim_code: 'item',
+      levels: ['item'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      dim_grain: {
+        table: 'dim_item di',
+        on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+        key: 'item_code',
+        extra: ['item_name', 'category_group'],
+      },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('MAX(di.category_group) AS category_group');
+    expect(sql).toContain('JOIN dim_item di');
+  });
 });
 
 describe('Tier1 customer-view support', () => {
