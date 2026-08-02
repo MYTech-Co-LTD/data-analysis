@@ -76,7 +76,8 @@ LEFT JOIN LATERAL (
 ) dl ON md.metric_code='delivery'
 LEFT JOIN LATERAL (
   SELECT SUM(COALESCE(d.out_money,0)+COALESCE(w.wholesale_money,0)) AS outbound_amt_actual,
-    SUM(COALESCE(d.profit_money,0)+COALESCE(w.wholesale_profit,0)) AS outbound_profit_actual,
+    CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false)
+      THEN SUM(COALESCE(d.profit_money,0)+COALESCE(w.wholesale_profit,0)) ELSE NULL END AS outbound_profit_actual,
     count(DISTINCT COALESCE(d.biz_date,w.biz_date)) AS outbound_days
   FROM report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
     ON d.system_book_code=w.system_book_code AND d.biz_date=w.biz_date AND d.branch_num=w.branch_num AND d.category_group=w.category_group
