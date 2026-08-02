@@ -74,6 +74,7 @@ export interface ViewConfig {
     on: string;          // 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num'
     key: string;         // 'item_code'（actual CTE 聚合到这一列）
     extra?: string[];    // ['item_name','category_name',...]（非分组 dim 列，从 dim 表带出）
+    lateral_pick?: { match: string; prefer_own: string };  // 跨账套回退匹配（本账套优先+跨品牌回退，LIMIT 1）
   };
   carry_cols?: string[];  // 源表列，actual CTE 里 MAX(s.${col}) AS ${col} 带出（client_name/system_book_code）
   extra_grain?: string[];  // 额外 GROUP BY 的 fact 表列（如 ['s.biz_date']），实现双 grain（如 日期×客户）。带 s. 前缀；final SELECT 去 s. 作列名

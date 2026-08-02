@@ -270,6 +270,51 @@ describe('Tier1 dim_grain', () => {
     expect(sql).toContain('MAX(di.category_group) AS category_group');
     expect(sql).toContain('JOIN dim_item di');
   });
+
+  it('lateral_pick 发 LATERAL join（本账套优先+跨品牌回退，LIMIT 1 不翻倍）', () => {
+    const config: ViewConfig = {
+      view_name: 'test_lateral_pick',
+      metrics: ['sale_amount'],
+      dim_code: 'item',
+      levels: ['item'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      dim_grain: {
+        table: 'dim_item di',
+        on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+        key: 'item_code',
+        extra: ['item_name'],
+        lateral_pick: { match: 'item_num = s.item_num', prefer_own: 'system_book_code = s.system_book_code' },
+      },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('JOIN LATERAL');
+    expect(sql).toContain('SELECT * FROM dim_item WHERE item_num = s.item_num');
+    expect(sql).toContain('ORDER BY (system_book_code = s.system_book_code) DESC');
+    expect(sql).toContain('LIMIT 1');
+    // 不含旧式精确 join 谓词作主 join
+    expect(sql).not.toMatch(/JOIN dim_item di ON di\.system_book_code=s\.system_book_code/);
+  });
+
+  it('未设 lateral_pick 时仍发普通 join（回归）', () => {
+    const config: ViewConfig = {
+      view_name: 'test_no_lateral',
+      metrics: ['sale_amount'],
+      dim_code: 'item',
+      levels: ['item'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      dim_grain: {
+        table: 'dim_item di',
+        on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+        key: 'item_code',
+        extra: ['item_name'],
+      },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('JOIN dim_item di ON di.system_book_code=s.system_book_code AND di.item_num=s.item_num');
+    expect(sql).not.toContain('JOIN LATERAL');
+  });
 });
 
 describe('Tier1 customer-view support', () => {

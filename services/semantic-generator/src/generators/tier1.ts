@@ -302,7 +302,15 @@ export function generateTier1View(
       const grainCol = config.dim_grain ? `${dimAlias}.${config.dim_grain.key}` : `s.${dimKey}`;
       if (g.filter) where.push(g.filter);
       if (config.dim_grain) {
-        joins.push(`JOIN ${config.dim_grain.table} ON ${config.dim_grain.on}`);
+        if (config.dim_grain.lateral_pick) {
+          // 跨账套回退匹配：本账套优先、跨品牌回退（如 64188 批发卖 3120 货），LIMIT 1 防 item_num 重叠翻倍
+          const lpTbl = config.dim_grain.table.split(' ')[0]; // 'dim_item'
+          const lpAlias = config.dim_grain.table.split(' ')[1]; // 'di'
+          const lp = config.dim_grain.lateral_pick;
+          joins.push(`JOIN LATERAL (SELECT * FROM ${lpTbl} WHERE ${lp.match} ORDER BY (${lp.prefer_own}) DESC LIMIT 1) ${lpAlias} ON true`);
+        } else {
+          joins.push(`JOIN ${config.dim_grain.table} ON ${config.dim_grain.on}`);
+        }
       }
       let selectDims = grainCol;
       let groupDims = grainCol;

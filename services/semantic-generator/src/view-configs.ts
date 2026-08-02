@@ -188,6 +188,7 @@ export const itemBreakdownView: ViewConfig = {
     on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
     key: 'item_code',
     extra: ['item_name', 'category_name', 'top_category', 'item_brand', 'category_group'],
+    lateral_pick: { match: 'item_num = s.item_num', prefer_own: 'system_book_code = s.system_book_code' },
   },
 };
 
