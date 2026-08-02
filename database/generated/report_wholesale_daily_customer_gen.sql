@@ -13,7 +13,7 @@ cte0 AS (
     SUM(s.wholesale_profit) AS wholesale_ext_customer_profit,
     MAX(s.client_name) AS client_name
   FROM report_daily_wholesale_customer s
-  JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
+  JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.latest_day
   WHERE s.system_book_code = '3120'
   GROUP BY tgt.target_id, s.client_code, s.biz_date
 )
