@@ -75,4 +75,10 @@ export interface ViewConfig {
     key: string;         // 'item_code'（actual CTE 聚合到这一列）
     extra?: string[];    // ['item_name','category_name',...]（非分组 dim 列，从 dim 表带出）
   };
+  carry_cols?: string[];  // 源表列，actual CTE 里 MAX(s.${col}) AS ${col} 带出（client_name/system_book_code）
+  extra_join?: {
+    table: string;  // 'dim_branch db'（表名+别名）
+    on: { left: string; right: string };  // left=外层 CTE 列, right=join 表列：{left:'client_name', right:'branch_name'}
+    cols: { out: string; expr: string }[];  // [{out:'client_brand_code', expr:'db.system_book_code'}]
+  };
 }

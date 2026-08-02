@@ -65,7 +65,11 @@ export function generateTier1View(
     scope, total_row, dim_table, aliases,
   } = config;
 
-  const dimKey = dim_code === 'brand' ? 'system_book_code' : dim_code === 'category' ? 'category_group' : 'branch_num';
+  const dimKey = dim_code === 'brand' ? 'system_book_code'
+    : dim_code === 'category' ? 'category_group'
+    : dim_code === 'customer' ? 'client_code'
+    : dim_code === 'item' ? 'item_num'
+    : 'branch_num';
   const useTargetWindow = scope?.target_window ?? false;
   const useAssessed = scope?.assessed_war_zone ?? false;
   const tgtLevel = scope?.target_level ?? 'total';
@@ -161,6 +165,12 @@ export function generateTier1View(
           tableCols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
         }
       }
+      // carry_cols：源表列 MAX 带出
+      if (config.carry_cols) {
+        for (const col of config.carry_cols) {
+          tableCols.push(`MAX(s.${col}) AS ${col}`);
+        }
+      }
 
       cteList.push(`${cteName} AS (
   SELECT ${selectDims},
@@ -247,6 +257,12 @@ export function generateTier1View(
         const alias = config.dim_grain.table.split(' ')[1]; // 'di'
         for (const ex of config.dim_grain.extra) {
           cols.push(`MAX(${alias}.${ex}) AS ${ex}`);
+        }
+      }
+      // carry_cols：源表列 MAX 带出
+      if (config.carry_cols) {
+        for (const col of config.carry_cols) {
+          cols.push(`MAX(s.${col}) AS ${col}`);
         }
       }
       const colsStr = cols.join(',\n    ');
@@ -342,6 +358,14 @@ export function generateTier1View(
     sel.push(`${dimKey} AS ${dimKey}`);
   }
 
+  // carry_cols：从 firstCte 选
+  if (config.carry_cols) {
+    const carryFirstCte = [...new Set(cteOf.values())][0];
+    for (const col of config.carry_cols) {
+      sel.push(`${carryFirstCte}.${col} AS ${col}`);
+    }
+  }
+
   // 指标列
   for (const code of metricCodes) {
     const m = metrics.find(x => x.metric_code === code);
@@ -358,6 +382,15 @@ export function generateTier1View(
       throw new Error(`derived metric ${code} 缺 formula_ast`);
     }
     sel.push(`${maskCost(expr, m)} AS ${outName}`);
+  }
+
+  // extra_join：标量子查询补列（避 LEFT JOIN 翻倍）
+  if (config.extra_join) {
+    const ejFirstCte = [...new Set(cteOf.values())][0];
+    const joinAlias = config.extra_join.table.split(' ')[1];
+    for (const c of config.extra_join.cols) {
+      sel.push(`(SELECT ${c.expr} FROM ${config.extra_join.table} WHERE ${joinAlias}.${config.extra_join.on.right} = ${ejFirstCte}.${config.extra_join.on.left} LIMIT 1) AS ${c.out}`);
+    }
   }
 
   // FROM + JOIN

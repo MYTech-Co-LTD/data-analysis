@@ -251,3 +251,47 @@ describe('Tier1 dim_grain', () => {
     expect(sql).not.toMatch(/GROUP BY tgt\.target_id, s\.item_num/);
   });
 });
+
+describe('Tier1 customer-view support', () => {
+  it('dimKey 映射 customer→client_code', () => {
+    const config: ViewConfig = {
+      view_name: 't_cust_dimkey', metrics: ['wholesale_pp_amount'],
+      dim_code: 'customer', levels: ['customer'], target_metric_codes: [],
+      scope: { target_window: true },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('GROUP BY tgt.target_id, s.client_code');
+    expect(sql).not.toMatch(/GROUP BY tgt\.target_id, s\.branch_num/);
+  });
+
+  it('carry_cols 带 MAX(s.col) 进 actual CTE', () => {
+    const config: ViewConfig = {
+      view_name: 't_cust_carry', metrics: ['wholesale_pp_amount'],
+      dim_code: 'customer', levels: ['customer'], target_metric_codes: [],
+      scope: { target_window: true },
+      carry_cols: ['client_name', 'system_book_code'],
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('MAX(s.client_name) AS client_name');
+    expect(sql).toContain('MAX(s.system_book_code) AS system_book_code');
+  });
+
+  it('extra_join 标量子查询（避翻倍），WHERE 引用 firstCte 列', () => {
+    const config: ViewConfig = {
+      view_name: 't_cust_join', metrics: ['wholesale_pp_amount'],
+      dim_code: 'customer', levels: ['customer'], target_metric_codes: [],
+      scope: { target_window: true },
+      carry_cols: ['client_name'],
+      extra_join: {
+        table: 'dim_branch db',
+        on: { left: 'client_name', right: 'branch_name' },
+        cols: [{ out: 'client_brand_code', expr: 'db.system_book_code' }],
+      },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // 标量子查询 + LIMIT 1，WHERE 引用 cteN.client_name
+    expect(sql).toMatch(/\(SELECT db\.system_book_code FROM dim_branch db WHERE db\.branch_name = cte\d+\.client_name LIMIT 1\) AS client_brand_code/);
+    // 不含 LEFT JOIN dim_branch（避翻倍）
+    expect(sql).not.toContain('LEFT JOIN dim_branch');
+  });
+});
