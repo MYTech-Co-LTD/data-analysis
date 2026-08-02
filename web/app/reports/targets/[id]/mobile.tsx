@@ -9,7 +9,6 @@ import { CategorySummary } from "@/components/report-center/category-summary";
 import { BrandMetricTable } from "@/components/report-center/brand-metric-table";
 import { SaleTopBoards, OutboundTopBoards, useItemDayBoards } from "@/components/report-center/item-top-boards";
 import { ItemOutboundList } from "@/components/report-center/item-outbound-list";
-import { WholesaleCustomerReport } from "@/components/report-center/wholesale-customer-report";
 import { SupplyChainOutboundTable } from "@/components/report-center/supply-chain-outbound-table";
 import { WholesaleDailyTable } from "@/components/report-center/wholesale-daily-table";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
@@ -19,7 +18,6 @@ import type {
   ItemBreakdownTop,
   ItemOutboundListRow,
 } from "@/lib/report-center/item-breakdown";
-import type { WholesaleCustomerResult } from "@/lib/report-center/wholesale-customer";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import type { WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
 
@@ -54,7 +52,6 @@ export function MobileDashboard({
   targetId,
   itemTop,
   itemList,
-  wholesaleCustomer,
   supplyChain,
   wholesaleDaily,
 }: {
@@ -69,7 +66,6 @@ export function MobileDashboard({
   targetId: number;
   itemTop: ItemBreakdownTop;
   itemList: { rows: ItemOutboundListRow[]; total: number };
-  wholesaleCustomer: WholesaleCustomerResult;
   supplyChain: SupplyChainOutboundRow[];
   wholesaleDaily: WholesaleDailyRow[];
 }) {
@@ -165,6 +161,7 @@ export function MobileDashboard({
           rows={wholesaleDaily}
           startDate={target.start_date}
           endDate={target.end_date}
+          targetId={targetId}
         />
       </div>
 
@@ -188,16 +185,6 @@ export function MobileDashboard({
           initialRows={itemList.rows}
           initialTotal={itemList.total}
           targetId={targetId}
-        />
-      </div>
-
-      {/* 批发客户报表 */}
-      <div className="px-4">
-        <WholesaleCustomerReport
-          rows={wholesaleCustomer.rows}
-          pinpintianAmount={wholesaleCustomer.pinpintianAmount}
-          pinpintianPct={wholesaleCustomer.pinpintianPct}
-          total3120={wholesaleCustomer.total3120}
         />
       </div>
     </div>

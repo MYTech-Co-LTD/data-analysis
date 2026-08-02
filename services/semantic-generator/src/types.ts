@@ -76,6 +76,7 @@ export interface ViewConfig {
     extra?: string[];    // ['item_name','category_name',...]（非分组 dim 列，从 dim 表带出）
   };
   carry_cols?: string[];  // 源表列，actual CTE 里 MAX(s.${col}) AS ${col} 带出（client_name/system_book_code）
+  extra_grain?: string[];  // 额外 GROUP BY 的 fact 表列（如 ['s.biz_date']），实现双 grain（如 日期×客户）。带 s. 前缀；final SELECT 去 s. 作列名
   extra_join?: {
     table: string;  // 'dim_branch db'（表名+别名）
     on: { left: string; right: string };  // left=外层 CTE 列, right=join 表列：{left:'client_name', right:'branch_name'}

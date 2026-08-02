@@ -320,3 +320,33 @@ export const wholesaleDailyView: ViewConfig = {
   scope: { target_window: true, target_status: ['active', 'closed'] },  // date grain 自动用 latest_day 上限
   total_row: false,
 };
+
+/**
+ * 外部批发客户日报视图（看板2 日期下钻客户明细，双 grain: customer × biz_date）
+ * 生成 report_wholesale_daily_customer_gen
+ *
+ * 口径：
+ * - wholesale_ext_customer_* = report_daily_wholesale_customer WHERE system_book_code='3120'
+ *   （客户粒度，有 client_code；与 wholesale_ext_* 同口径不同粒度，SUM 相等）
+ *   品牌过滤在 metric_sources（source_filter='3120'），不在 view-config（铁律）
+ * - 双 grain：extra_grain=['s.biz_date'] -> actual CTE GROUP BY client_code, biz_date
+ *   点日报某天 -> 下钻该天的客户明细（每个客户当天金额/毛利/毛利率）
+ * - carry_cols=['client_name']：携带客户名（MAX，非 grain）
+ * - scope: active+closed total target 日期窗口
+ * - wholesale_ext_customer_margin = profit / amount（op / 重算，脱敏）
+ */
+export const wholesaleDailyCustomerView: ViewConfig = {
+  view_name: 'report_wholesale_daily_customer_gen',
+  metrics: [
+    'wholesale_ext_customer_amount',   // 客户级外部批发金额（source_filter='3120'）
+    'wholesale_ext_customer_profit',   // 客户级外部批发毛利（脱敏）
+    'wholesale_ext_customer_margin',   // 客户级外部批发毛利率（op / 重算）
+  ],
+  dim_code: 'customer',
+  levels: ['customer'],
+  target_metric_codes: [],
+  scope: { target_window: true, target_status: ['active', 'closed'] },
+  extra_grain: ['s.biz_date'],   // 双 grain：customer × biz_date
+  carry_cols: ['client_name'],   // 携带客户名（MAX，非 grain）
+  total_row: false,
+};

@@ -5,15 +5,21 @@
 // 4 列：时间 / 出库金额 / 出库毛利 / 毛利率 + 末行合计。
 // 标红：wholesale_ext_margin < 0（负毛利亏损）整行标红。
 // 脱敏：profit/margin 为 NULL 显示「-」；margin 是 0-1 小数（×100 显示百分比）。
+// 日期下钻：点日期行 -> 展开/折叠该天客户明细子表（API route 懒加载 + 按日缓存）。
+//   客户明细列：客户名称 / 出库金额 / 出库毛利 / 毛利率（margin<0 标红）。
 // DESIGN.md：tabular-nums + 类 Excel 交叉表 + chart-actions 三动作。
-import { useMemo, useRef } from "react";
-import type { WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
+import { Fragment, useMemo, useRef, useState } from "react";
+import type {
+  WholesaleDailyRow,
+  WholesaleDailyCustomerRow,
+} from "@/lib/report-center/wholesale-daily";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 
 interface WholesaleDailyTableProps {
   rows: WholesaleDailyRow[];
   startDate: string;
   endDate: string;
+  targetId: number;
 }
 
 // 金额格式化：≥10000 用「X.X万」，否则整数，¥ 前缀（与 item-top-boards 对齐）
@@ -39,8 +45,42 @@ export function WholesaleDailyTable({
   rows,
   startDate,
   endDate,
+  targetId,
 }: WholesaleDailyTableProps) {
   const tableRef = useRef<HTMLDivElement>(null);
+
+  // 日期下钻状态
+  const [expandedDay, setExpandedDay] = useState<string | null>(null);
+  const [customers, setCustomers] = useState<
+    Record<string, WholesaleDailyCustomerRow[]>
+  >({});
+  const [loadingDay, setLoadingDay] = useState<string | null>(null);
+
+  const onToggleDay = async (biz_date: string) => {
+    if (expandedDay === biz_date) {
+      setExpandedDay(null);
+      return;
+    }
+    setExpandedDay(biz_date);
+    if (!customers[biz_date]) {
+      setLoadingDay(biz_date);
+      try {
+        const res = await fetch("/api/admin/reports/wholesale-day-customers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target_id: targetId, date: biz_date }),
+        }).then((r) => r.json());
+        setCustomers((prev) => ({
+          ...prev,
+          [biz_date]: res?.rows ?? [],
+        }));
+      } catch {
+        setCustomers((prev) => ({ ...prev, [biz_date]: [] }));
+      } finally {
+        setLoadingDay(null);
+      }
+    }
+  };
 
   // 末行合计：SUM amount/profit，margin = 合计 profit / 合计 amount（前端算）
   // profit 全脱敏（无任何非 NULL 行）时显示「-」
@@ -124,19 +164,110 @@ export function WholesaleDailyTable({
                 r.wholesale_ext_margin != null && r.wholesale_ext_margin < 0;
               const rowBg = lowMargin ? "bg-red-50" : "hover:bg-slate-50";
               const numColor = lowMargin ? "text-red-600" : "text-slate-700";
+              const isOpen = expandedDay === r.biz_date;
+              const isLoading = loadingDay === r.biz_date;
+              const dayCustomers = customers[r.biz_date] ?? [];
               return (
-                <tr key={r.biz_date} className={rowBg}>
-                  <td className="px-3 py-2 text-left text-slate-700">{r.biz_date}</td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtCurrency(r.wholesale_ext_amount)}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtProfit(r.wholesale_ext_profit)}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtMargin(r.wholesale_ext_margin)}
-                  </td>
-                </tr>
+                <Fragment key={r.biz_date}>
+                  <tr
+                    className={`${rowBg} cursor-pointer`}
+                    onClick={() => onToggleDay(r.biz_date)}
+                  >
+                    <td className="px-3 py-2 text-left text-slate-700">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="text-slate-400">
+                          {isOpen ? "▾" : "▸"}
+                        </span>
+                        {r.biz_date}
+                      </span>
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtCurrency(r.wholesale_ext_amount)}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtProfit(r.wholesale_ext_profit)}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtMargin(r.wholesale_ext_margin)}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr className="bg-slate-50/60">
+                      <td colSpan={4} className="px-3 py-2">
+                        {isLoading ? (
+                          <div className="py-3 text-center text-[11px] text-slate-400">
+                            加载中…
+                          </div>
+                        ) : dayCustomers.length === 0 ? (
+                          <div className="py-3 text-center text-[11px] text-slate-400">
+                            暂无客户明细
+                          </div>
+                        ) : (
+                          <table className="ml-6 w-[calc(100%-1.5rem)] text-xs tabular-nums">
+                            <thead className="text-[11px] text-slate-500">
+                              <tr className="border-b border-slate-200">
+                                <th className="px-2 py-1.5 text-left font-medium">
+                                  客户名称
+                                </th>
+                                <th className="px-2 py-1.5 text-right font-medium">
+                                  出库金额
+                                </th>
+                                <th className="px-2 py-1.5 text-right font-medium">
+                                  出库毛利
+                                </th>
+                                <th className="px-2 py-1.5 text-right font-medium">
+                                  毛利率
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {dayCustomers.map((c) => {
+                                const cLow =
+                                  c.wholesale_ext_customer_margin != null &&
+                                  c.wholesale_ext_customer_margin < 0;
+                                const cColor = cLow
+                                  ? "text-red-600"
+                                  : "text-slate-700";
+                                const cBg = cLow ? "bg-red-50/50" : "";
+                                return (
+                                  <tr key={c.client_code} className={cBg}>
+                                    <td
+                                      className="px-2 py-1.5 text-left text-slate-700 max-w-[12rem] truncate"
+                                      title={c.client_name}
+                                    >
+                                      {c.client_name || c.client_code || "-"}
+                                    </td>
+                                    <td
+                                      className={`px-2 py-1.5 text-right tabular-nums ${cColor}`}
+                                    >
+                                      {fmtCurrency(
+                                        c.wholesale_ext_customer_amount,
+                                      )}
+                                    </td>
+                                    <td
+                                      className={`px-2 py-1.5 text-right tabular-nums ${cColor}`}
+                                    >
+                                      {fmtProfit(
+                                        c.wholesale_ext_customer_profit,
+                                      )}
+                                    </td>
+                                    <td
+                                      className={`px-2 py-1.5 text-right tabular-nums ${cColor}`}
+                                    >
+                                      {fmtMargin(
+                                        c.wholesale_ext_customer_margin,
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               );
             })}
           </tbody>

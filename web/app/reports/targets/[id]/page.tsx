@@ -10,7 +10,6 @@ import {
   getItemBreakdownTop,
   getItemOutboundListPage,
 } from "@/lib/report-center/item-breakdown";
-import { getWholesaleCustomer } from "@/lib/report-center/wholesale-customer";
 import { getSupplyChainOutbound } from "@/lib/report-center/supply-chain-outbound";
 import { getWholesaleDaily } from "@/lib/report-center/wholesale-daily";
 import { Header } from "@/components/layout/header";
@@ -47,7 +46,6 @@ export default async function TargetDashboard({
     brandMetric,
     itemTop,
     itemList,
-    wholesaleCustomer,
     supplyChain,
     wholesaleDaily,
   ] = await Promise.all([
@@ -57,7 +55,6 @@ export default async function TargetDashboard({
     getBrandMetric(targetId),
     getItemBreakdownTop(targetId),
     getItemOutboundListPage(targetId, 1, {}),
-    getWholesaleCustomer(targetId),
     getSupplyChainOutbound(targetId),
     getWholesaleDaily(targetId),
   ]);
@@ -89,7 +86,6 @@ export default async function TargetDashboard({
       targetId={targetId}
       itemTop={itemTop}
       itemList={itemList}
-      wholesaleCustomer={wholesaleCustomer}
       supplyChain={supplyChain}
       wholesaleDaily={wholesaleDaily}
     />
@@ -107,7 +103,6 @@ export default async function TargetDashboard({
         targetId={targetId}
         itemTop={itemTop}
         itemList={itemList}
-        wholesaleCustomer={wholesaleCustomer}
         supplyChain={supplyChain}
         wholesaleDaily={wholesaleDaily}
       />

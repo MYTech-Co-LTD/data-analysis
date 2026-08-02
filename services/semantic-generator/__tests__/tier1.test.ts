@@ -335,3 +335,87 @@ describe('Tier1 date grain', () => {
     expect(sql).toMatch(/cte\d+\.biz_date AS biz_date/);
   });
 });
+
+describe('Tier1 extra_grain', () => {
+  it('actual CTE GROUP BY 加 extra_grain 列 + final SELECT 输出 + FULL JOIN ON 含 extra_grain', () => {
+    // 双 grain：customer(client_code) × date(biz_date)
+    // sale_amount(report_daily_sales) + wholesale_pp_amount(report_daily_wholesale_customer) -> 2 CTE -> FULL JOIN
+    const config: ViewConfig = {
+      view_name: 'test_dual_grain',
+      metrics: ['wholesale_pp_amount', 'sale_amount'],
+      dim_code: 'customer',
+      levels: ['customer'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      extra_grain: ['s.biz_date'],
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // actual CTE GROUP BY 含 extra_grain 列（与 client_code 并列）
+    expect(sql).toContain('GROUP BY tgt.target_id, s.client_code, s.biz_date');
+    // actual CTE SELECT 含 extra_grain 列
+    expect(sql).toMatch(/SELECT tgt\.target_id, s\.client_code, s\.biz_date,/);
+    // final SELECT 输出 extra_grain 列（去 s. 前缀作列名）
+    expect(sql).toMatch(/cte\d+\.biz_date AS biz_date/);
+    // 多 CTE FULL JOIN ON 含 extra_grain 列（防 cross join 翻倍）
+    expect(sql).toMatch(/FULL OUTER JOIN cte\d+ ON cte\d+\.target_id = cte\d+\.target_id AND cte\d+\.client_code = cte\d+\.client_code AND cte\d+\.biz_date = cte\d+\.biz_date/);
+  });
+
+  it('无 extra_grain 时行为不变（回归）', () => {
+    const config: ViewConfig = {
+      view_name: 'test_no_extra_grain',
+      metrics: ['wholesale_pp_amount'],
+      dim_code: 'customer',
+      levels: ['customer'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('GROUP BY tgt.target_id, s.client_code');
+    // 不含 extra_grain 列输出
+    expect(sql).not.toMatch(/cte\d+\.biz_date AS biz_date/);
+  });
+
+  it('与 carry_cols 兼容（extra_grain 是 GROUP BY，carry_cols 是 MAX）', () => {
+    const config: ViewConfig = {
+      view_name: 'test_grain_plus_carry',
+      metrics: ['wholesale_pp_amount'],
+      dim_code: 'customer',
+      levels: ['customer'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      carry_cols: ['client_name'],
+      extra_grain: ['s.biz_date'],
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // extra_grain 进 GROUP BY（grain）
+    expect(sql).toContain('GROUP BY tgt.target_id, s.client_code, s.biz_date');
+    // carry_cols 是 MAX（不进 GROUP BY）
+    expect(sql).toContain('MAX(s.client_name) AS client_name');
+    // final SELECT 两者都输出
+    expect(sql).toMatch(/cte\d+\.biz_date AS biz_date/);
+    expect(sql).toMatch(/cte\d+\.client_name AS client_name/);
+  });
+
+  it('与 dim_grain 兼容（extra_grain 追加到 grain key 之后）', () => {
+    const config: ViewConfig = {
+      view_name: 'test_grain_plus_dim_grain',
+      metrics: ['sale_amount'],
+      dim_code: 'item',
+      levels: ['item'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      dim_grain: {
+        table: 'dim_item di',
+        on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+        key: 'item_code',
+      },
+      extra_grain: ['s.biz_date'],
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // actual CTE GROUP BY: tgt.target_id, di.item_code, s.biz_date
+    expect(sql).toContain('GROUP BY tgt.target_id, di.item_code, s.biz_date');
+    // final SELECT 输出 item_code + biz_date
+    expect(sql).toMatch(/cte\d+\.item_code AS item_code/);
+    expect(sql).toMatch(/cte\d+\.biz_date AS biz_date/);
+  });
+});

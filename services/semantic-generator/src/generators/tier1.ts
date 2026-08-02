@@ -65,6 +65,11 @@ export function generateTier1View(
     scope, total_row, dim_table, aliases,
   } = config;
 
+  // extra_grain：额外 GROUP BY 的 fact 表列（带 s. 前缀），actual CTE 与 dimKey 并列 GROUP BY
+  const extraGrainCols = config.extra_grain ?? [];
+  // 去 s. 前缀作列名：'s.biz_date' -> 'biz_date'
+  const egColName = (eg: string) => eg.replace(/^s\./, '');
+
   const dimKey = dim_code === 'brand' ? 'system_book_code'
     : dim_code === 'category' ? 'category_group'
     : dim_code === 'customer' ? 'client_code'
@@ -155,8 +160,9 @@ export function generateTier1View(
         where.push(`is_assessed_war_zone(db.first_level_region)`);
       }
       const whereClause = where.length ? `\n  WHERE ${where.join(' AND ')}` : '';
-      const selectDims = useTargetWindow ? `tgt.target_id, s.${dimKey}` : `s.${dimKey}`;
-      const groupDims = useTargetWindow ? `tgt.target_id, s.${dimKey}` : `s.${dimKey}`;
+      const egSuffix = extraGrainCols.length ? `, ${extraGrainCols.join(', ')}` : '';
+      const selectDims = useTargetWindow ? `tgt.target_id, s.${dimKey}${egSuffix}` : `s.${dimKey}${egSuffix}`;
+      const groupDims = useTargetWindow ? `tgt.target_id, s.${dimKey}${egSuffix}` : `s.${dimKey}${egSuffix}`;
 
       // 该表的列（不需要对齐，各自 SUM）；source_override 列重定向
       const tableCols = g.metrics.map(m => {
@@ -203,9 +209,12 @@ export function generateTier1View(
       const selectParts: string[] = [];
 
       // SELECT 列表：维度 + 所有指标
-      const dimSelect = useTargetWindow
-        ? `${unionCteNames[0]}.target_id, ${unionCteNames[0]}.${dimKey}`
-        : `${unionCteNames[0]}.${dimKey}`;
+      const egSelectCols = extraGrainCols.map(c => `${unionCteNames[0]}.${egColName(c)}`);
+      const dimSelect = [
+        useTargetWindow ? `${unionCteNames[0]}.target_id` : null,
+        `${unionCteNames[0]}.${dimKey}`,
+        ...egSelectCols,
+      ].filter(Boolean).join(', ');
 
       const metricCols = allBaseMetrics.map(m => {
         const cteName = cteOf.get(m.metric_code);
@@ -229,9 +238,11 @@ export function generateTier1View(
       // FULL JOIN 多个 CTE
       const fromParts = [unionCteNames[0]];
       for (const cn of unionCteNames.slice(1)) {
-        const on = useTargetWindow
+        const egOnParts = extraGrainCols.map(c => `${cn}.${egColName(c)} = ${unionCteNames[0]}.${egColName(c)}`);
+        const baseOn = useTargetWindow
           ? `${cn}.target_id = ${unionCteNames[0]}.target_id AND ${cn}.${dimKey} = ${unionCteNames[0]}.${dimKey}`
           : `${cn}.${dimKey} = ${unionCteNames[0]}.${dimKey}`;
+        const on = egOnParts.length ? `${baseOn} AND ${egOnParts.join(' AND ')}` : baseOn;
         fromParts.push(`FULL OUTER JOIN ${cn} ON ${on}`);
       }
 
@@ -297,6 +308,12 @@ export function generateTier1View(
         joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND ${dateUpper}`);
         selectDims = `tgt.target_id, ${grainCol}`;
         groupDims = `tgt.target_id, ${grainCol}`;
+      }
+      // extra_grain：fact 表列追加到 actual CTE SELECT + GROUP BY（与 grainCol 并列，实现双 grain）
+      if (extraGrainCols.length) {
+        const egS = `, ${extraGrainCols.join(', ')}`;
+        selectDims += egS;
+        groupDims += egS;
       }
       if (useAssessed) {
         joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
@@ -379,6 +396,15 @@ export function generateTier1View(
     sel.push(`${dimKey} AS ${dimKey}`);
   }
 
+  // extra_grain：actual CTE 已 GROUP BY 这些 fact 表列，final SELECT 从 firstCte 输出（去 s. 前缀作列名）
+  if (extraGrainCols.length) {
+    const egFirstCte = [...new Set(cteOf.values())][0];
+    for (const eg of extraGrainCols) {
+      const colName = egColName(eg);
+      sel.push(`${egFirstCte}.${colName} AS ${colName}`);
+    }
+  }
+
   // carry_cols：从 firstCte 选
   if (config.carry_cols) {
     const carryFirstCte = [...new Set(cteOf.values())][0];
@@ -422,9 +448,11 @@ export function generateTier1View(
     // dim_grain：无 dim_table cross-join，actual CTE 之间 FULL JOIN ON dim_grain.key
     fromParts.push(cteNames[0]);
     for (const cn of cteNames.slice(1)) {
-      const on = useTargetWindow
+      const egOnParts = extraGrainCols.map(c => `${cn}.${egColName(c)} = ${cteNames[0]}.${egColName(c)}`);
+      const baseOn = useTargetWindow
         ? `${cn}.target_id = ${cteNames[0]}.target_id AND ${cn}.${config.dim_grain.key} = ${cteNames[0]}.${config.dim_grain.key}`
         : `${cn}.${config.dim_grain.key} = ${cteNames[0]}.${config.dim_grain.key}`;
+      const on = egOnParts.length ? `${baseOn} AND ${egOnParts.join(' AND ')}` : baseOn;
       fromParts.push(`FULL OUTER JOIN ${cn} ON ${on}`);
     }
   } else if (dim_table) {
@@ -442,9 +470,11 @@ export function generateTier1View(
     if (cteNames.length) {
       fromParts.push(cteNames[0]);
       for (const cn of cteNames.slice(1)) {
-        const on = useTargetWindow
+        const egOnParts = extraGrainCols.map(c => `${cn}.${egColName(c)} = ${cteNames[0]}.${egColName(c)}`);
+        const baseOn = useTargetWindow
           ? `${cn}.target_id = ${cteNames[0]}.target_id AND ${cn}.${dimKey} = ${cteNames[0]}.${dimKey}`
           : `${cn}.${dimKey} = ${cteNames[0]}.${dimKey}`;
+        const on = egOnParts.length ? `${baseOn} AND ${egOnParts.join(' AND ')}` : baseOn;
         fromParts.push(`FULL OUTER JOIN ${cn} ON ${on}`);
       }
     }

@@ -33,3 +33,37 @@ export async function getWholesaleDaily(
 
   return (data ?? []) as WholesaleDailyRow[];
 }
+
+// 双 grain 视图 report_wholesale_daily_customer_gen：每行=该天该客户
+// 列：target_id, client_code, biz_date, client_name, wholesale_ext_customer_*
+// 脱敏：profit/margin 无成本权限时 NULL；margin 为 0-1 小数（round 4 位）
+export interface WholesaleDailyCustomerRow {
+  client_code: string;
+  client_name: string;
+  wholesale_ext_customer_amount: number;
+  wholesale_ext_customer_profit: number | null;  // 脱敏 null
+  wholesale_ext_customer_margin: number | null;    // 0-1 小数，脱敏 null
+}
+
+export async function getWholesaleDailyCustomers(
+  targetId: number,
+  date: string,
+): Promise<WholesaleDailyCustomerRow[]> {
+  const client = await getClient();
+
+  const { data, error } = await client.database
+    .from("report_wholesale_daily_customer_gen")
+    .select(
+      "client_code,client_name,wholesale_ext_customer_amount,wholesale_ext_customer_profit,wholesale_ext_customer_margin",
+    )
+    .eq("target_id", targetId)
+    .eq("biz_date", date)
+    .order("wholesale_ext_customer_amount", { ascending: false });
+
+  if (error) {
+    console.error("getWholesaleDailyCustomers: fetch failed:", error);
+    return [];
+  }
+
+  return (data ?? []) as WholesaleDailyCustomerRow[];
+}
