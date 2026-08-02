@@ -175,6 +175,14 @@ export const itemBreakdownView: ViewConfig = {
   levels: ['item'],
   target_metric_codes: [],  // 无 target
   scope: { target_window: true, target_status: ['active', 'closed'] },
+  source_override: {
+    sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' },
+    sale_profit: { table: 'report_daily_item_sales', column: 'sale_profit' },
+    delivery_amount: { table: 'report_daily_item_outbound', column: 'delivery_amount' },
+    delivery_profit: { table: 'report_daily_item_outbound', column: 'delivery_profit' },
+    wholesale_amount: { table: 'report_daily_item_outbound', column: 'wholesale_amount' },
+    wholesale_profit: { table: 'report_daily_item_outbound', column: 'wholesale_profit' },
+  },
   dim_grain: {
     table: 'dim_item di',
     on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
@@ -201,6 +209,10 @@ export const wholesaleCustomerView: ViewConfig = {
   levels: ['customer'],
   target_metric_codes: [],
   scope: { target_window: true, target_status: ['active', 'closed'] },
+  source_override: {
+    wholesale_amount: { table: 'report_daily_wholesale_customer', column: 'wholesale_amount' },
+    wholesale_profit: { table: 'report_daily_wholesale_customer', column: 'wholesale_profit' },
+  },
   carry_cols: ['client_name', 'system_book_code'],
   extra_join: {
     table: 'dim_branch db',
