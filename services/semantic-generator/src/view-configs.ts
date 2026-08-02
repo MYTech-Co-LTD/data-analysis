@@ -168,8 +168,9 @@ export const itemBreakdownView: ViewConfig = {
     'delivery_profit',
     'wholesale_amount',
     'wholesale_profit',
-    'outbound_amount',   // derived = delivery + wholesale（AST）
-    'outbound_profit',   // derived = delivery_profit + wholesale_profit（AST）
+    // outbound_amount/outbound_profit 不入视图：registry 的 outbound AST 依赖 branch 粒度的
+    // wholesale_pp_amount/wholesale_ext_amount（无 item 粒度源）。item 视图 outbound 由 lib 端
+    // delivery_amount + wholesale_amount 计算（语义等价：item_outbound.wholesale 含全批发）。
   ],
   dim_code: 'item',
   levels: ['item'],

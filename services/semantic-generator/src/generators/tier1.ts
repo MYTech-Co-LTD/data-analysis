@@ -342,12 +342,18 @@ export function generateTier1View(
 
   // 维度列
   if (useTargetWindow) {
-    // category 维度（UNION ALL）从合并 CTE 选，其他从 tgt 选
+    // category 维度（UNION ALL）从合并 CTE 选
     if (isCategoryUnion) {
       const mergedCte = [...new Set(cteOf.values())][0];
       sel.push(`${mergedCte}.target_id`);
-    } else {
+    } else if (dim_table) {
+      // dim_table 路径：tgt 在 FROM（CROSS JOIN tgt），tgt.target_id 恒在
       sel.push(`tgt.target_id`);
+    } else {
+      // dim_grain 或纯 CTE 路径：tgt 不在 final FROM（只在 actual CTE 内 JOIN），
+      // actual CTE 已 SELECT target_id，从 firstCte 取
+      const tidFirstCte = [...new Set(cteOf.values())][0];
+      sel.push(`${tidFirstCte}.target_id`);
     }
   }
   if (config.dim_grain) {
@@ -428,8 +434,8 @@ export function generateTier1View(
       fromParts.push(`LEFT JOIN ${cn} ON ${on}`);
     }
   } else {
-    // 原有逻辑：useTargetWindow 时先 push tgt（final SELECT 引用 tgt.target_id 需它在 FROM）
-    if (useTargetWindow && !isCategoryUnion) fromParts.push(`tgt`);
+    // dim_grain-less/dim_table-less：actual CTE 已带 target_id，final SELECT 引用 cte.target_id
+    // （上面维度列块已切到 firstCte.target_id），tgt 不进 final FROM（避免 FROM tgt cte0 别名陷阱）
     if (cteNames.length) {
       fromParts.push(cteNames[0]);
       for (const cn of cteNames.slice(1)) {
