@@ -9,6 +9,7 @@
 //   客户明细列：客户名称 / 出库金额 / 出库毛利 / 毛利率（margin<0 标红）。
 // DESIGN.md：tabular-nums + 类 Excel 交叉表 + chart-actions 三动作。
 import { Fragment, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type {
   WholesaleDailyRow,
   WholesaleDailyCustomerRow,
@@ -175,8 +176,12 @@ export function WholesaleDailyTable({
                   >
                     <td className="px-3 py-2 text-left text-slate-700">
                       <span className="inline-flex items-center gap-1">
-                        <span className="text-slate-400">
-                          {isOpen ? "▾" : "▸"}
+                        <span className="inline-flex items-center text-slate-400">
+                          {isOpen ? (
+                            <ChevronDown size={14} strokeWidth={1.5} />
+                          ) : (
+                            <ChevronRight size={14} strokeWidth={1.5} />
+                          )}
                         </span>
                         {r.biz_date}
                       </span>

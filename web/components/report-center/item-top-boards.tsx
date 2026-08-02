@@ -265,9 +265,14 @@ export function useItemDayBoards(
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 切日竞态防护：快速切日时 abort 上一次请求，避免旧响应覆盖新。
+  const ctrlRef = useRef<AbortController | null>(null);
 
   const onDayChange = async (d: string) => {
     if (!d || d === day) return;
+    ctrlRef.current?.abort();
+    const ctrl = new AbortController();
+    ctrlRef.current = ctrl;
     setDay(d);
     setBusy(true);
     setError(null);
@@ -277,6 +282,7 @@ export function useItemDayBoards(
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target_id: targetId, date: d, metric: "sale" }),
+          signal: ctrl.signal,
         }).then((r) => r.json()),
         fetch("/api/admin/reports/item-top", {
           method: "POST",
@@ -286,6 +292,7 @@ export function useItemDayBoards(
             date: d,
             metric: "outbound",
           }),
+          signal: ctrl.signal,
         }).then((r) => r.json()),
       ]);
       setBoards({
@@ -294,10 +301,13 @@ export function useItemDayBoards(
         outbound:
           oRes?.board ?? { rows: [], totalAmount: 0, totalProfit: 0 },
       });
-    } catch {
+    } catch (e) {
+      // 取消的请求静默退出，不报错也不清 busy（busy 由 finally 守卫）
+      if ((e as Error).name === "AbortError") return;
       setError("日榜加载失败");
     } finally {
-      setBusy(false);
+      // 仅当本次请求未被 abort 时才清 busy，避免被后续 abort 的请求提前清掉
+      if (!ctrl.signal.aborted) setBusy(false);
     }
   };
 
