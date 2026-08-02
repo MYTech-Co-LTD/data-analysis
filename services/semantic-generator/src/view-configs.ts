@@ -22,7 +22,7 @@ export const brandMetricView: ViewConfig = {
   dim_code: 'brand',
   levels: ['brand'],
   target_metric_codes: ['sale_target'],
-  scope: { target_window: true, assessed_war_zone: true },
+  scope: { target_window: true, assessed_war_zone: true, target_status: ['active', 'closed'] },
   total_row: true,
   dim_table: 'dim_brand',
   aliases: {
@@ -53,7 +53,7 @@ export const categorySummaryView: ViewConfig = {
   metrics: ['outbound_amount', 'outbound_profit'],  // derived 指标（delivery + wholesale）
   levels: [],
   target_metric_codes: [],
-  scope: { target_window: true },
+  scope: { target_window: true, target_status: ['active', 'closed'] },
   total_row: true,
   target_breakdown: 'category',
   categories: ['水果', '标品', '耗材'],  // 类别值列表（配置驱动，不硬编码）
@@ -96,7 +96,7 @@ export const regionBreakdownView: ViewConfig = {
   dim_code: 'branch',
   levels: ['store', 'sub_region', 'region'],
   target_metric_codes: ['sale_target', 'delivery_target'],
-  scope: { target_window: true, assessed_war_zone: true },
+  scope: { target_window: true, assessed_war_zone: true, target_status: ['active', 'closed'] },
   aliases: {
     sale_amount: 'sale_actual',
     distribution_amount: 'delivery_actual',

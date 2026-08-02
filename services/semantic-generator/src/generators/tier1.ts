@@ -1,5 +1,6 @@
 import { Metric, MetricSource, ViewConfig } from '../types';
 import { astToSql, derivedExpr, classifyAst, type Ast, type AstCtx } from '../ast';
+import { statusInClause } from '../sql-util';
 
 /**
  * Tier1 生成器（AST 化版）
@@ -68,7 +69,7 @@ export function generateTier1View(
   const useTargetWindow = scope?.target_window ?? false;
   const useAssessed = scope?.assessed_war_zone ?? false;
   const tgtLevel = scope?.target_level ?? 'total';
-  const tgtStatus = scope?.target_status ?? 'active';
+  const tgtStatusClause = statusInClause(scope?.target_status);
 
   const leaves = collectLeaves(metricCodes, metrics);
 
@@ -114,7 +115,7 @@ export function generateTier1View(
     (end_date - start_date + 1) AS total_days,
     GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
     LEAST(current_date, end_date) AS latest_day
-  FROM targets WHERE target_level='${tgtLevel}' AND status='${tgtStatus}'
+  FROM targets WHERE target_level='${tgtLevel}' AND ${tgtStatusClause}
 )`);
   }
 

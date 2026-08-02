@@ -1,5 +1,6 @@
 import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../types';
 import { astToSql, derivedExpr, classifyAst, type Ast, type AstCtx } from '../ast';
+import { statusInClause } from '../sql-util';
 
 /**
  * 层级视图生成器（T6：final SELECT + 各级 UNION ALL）
@@ -60,7 +61,8 @@ export function generateHierarchyView(
   const { view_name, metrics: metricCodes, scope, hierarchy } = config;
   const useAssessed = scope?.assessed_war_zone ?? false;
   const tgtLevel = scope?.target_level ?? 'total';
-  const tgtStatus = scope?.target_status ?? 'active';
+  const tgtStatusClause = statusInClause(scope?.target_status);
+  const tgtStatusClauseT = statusInClause(scope?.target_status, 't.status');
 
   // Category dimension: special handling (pseudo-hierarchy with categories + total)
   if (config.dim_code === 'category') {
@@ -127,7 +129,7 @@ export function generateHierarchyView(
     (end_date - start_date + 1) AS total_days,
     GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
     LEAST(current_date, end_date) AS latest_day
-  FROM targets WHERE target_level='${tgtLevel}' AND status='${tgtStatus}'
+  FROM targets WHERE target_level='${tgtLevel}' AND ${tgtStatusClause}
 )`);
 
   // 2. 叶级 actual CTE：按 grain 聚合 base + daily FILTER，scope 日期窗口 + assessed
@@ -400,7 +402,8 @@ function generateCategoryView(
 ): string {
   const { view_name, scope, categories } = config;
   const tgtLevel = scope?.target_level ?? 'total';
-  const tgtStatus = scope?.target_status ?? 'active';
+  const tgtStatusClause = statusInClause(scope?.target_status);
+  const tgtStatusClauseT = statusInClause(scope?.target_status, 't.status');
 
   // 反自由发挥：类别值从配置读取，不硬编码
   const categoryValues = categories ?? ['水果', '标品', '耗材'];
@@ -440,7 +443,7 @@ function generateCategoryView(
     (t.end_date - t.start_date + 1) AS total_days,
     GREATEST(LEAST(current_date, t.end_date) - t.start_date + 1, 0) AS days_elapsed
   FROM targets t
-  WHERE t.status = '${tgtStatus}' AND t.target_level = '${tgtLevel}' AND t.category IS NULL
+  WHERE ${tgtStatusClauseT} AND t.target_level = '${tgtLevel}' AND t.category IS NULL
 )`);
 
   // 2. Target CTE：从 hq 类别分解子目标读取（设计 §5：parent_target_id + category 匹配，无分解→NULL 不 fallback）

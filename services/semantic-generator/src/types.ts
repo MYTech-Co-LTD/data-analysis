@@ -53,7 +53,7 @@ export interface ViewScope {
   target_window: boolean;       // true: base 数据按 active total target 的日期窗口过滤
   assessed_war_zone?: boolean;   // true: base 数据按 is_assessed_war_zone 过滤（dim_branch join）
   target_level?: string;        // tgt CTE 取 targets.target_level（默认 'total'）
-  target_status?: string;       // tgt CTE 取 targets.status（默认 'active'）
+  target_status?: string | string[]; // tgt CTE 取 targets.status（默认 'active'；数组如 ['active','closed'] → IN 列表，用于定格后历史目标仍可见）
 }
 
 export interface ViewConfig {
