@@ -81,4 +81,8 @@ export interface ViewConfig {
     on: { left: string; right: string };  // left=外层 CTE 列, right=join 表列：{left:'client_name', right:'branch_name'}
     cols: { out: string; expr: string }[];  // [{out:'client_brand_code', expr:'db.system_book_code'}]
   };
+  source_override?: Record<string, { table: string; column?: string }>;
+  // e.g. { sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' } }
+  // per-view per-metric 源表/列重定向：把 base 指标从 registry canonical 源（门店粒度）
+  // 切到本视图粒度匹配的聚合表（item/customer 粒度）。override 时丢弃原 source_filter（聚合表自洽）。
 }

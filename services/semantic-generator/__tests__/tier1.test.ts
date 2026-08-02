@@ -295,3 +295,19 @@ describe('Tier1 customer-view support', () => {
     expect(sql).not.toContain('LEFT JOIN dim_branch');
   });
 });
+
+describe('Tier1 source_override', () => {
+  it('per-metric 重定向源表/列，CTE 按 override table 分组', () => {
+    // mockSources 里 sale_amount→report_daily_sales；override 到 item 表
+    const config: ViewConfig = {
+      view_name: 't_override', metrics: ['sale_amount'], dim_code: 'item', levels: ['item'],
+      target_metric_codes: [], scope: { target_window: true },
+      dim_grain: { table: 'dim_item di', on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num', key: 'item_code' },
+      source_override: { sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' } },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('FROM report_daily_item_sales s');
+    expect(sql).toContain('SUM(s.sale_amount) AS sale_amount');
+    expect(sql).not.toContain('FROM report_daily_sales');
+  });
+});

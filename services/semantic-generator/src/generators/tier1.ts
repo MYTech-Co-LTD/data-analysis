@@ -94,7 +94,8 @@ export function generateTier1View(
     dailyCodes.add(m.metric_code);
   }
 
-  // base 叶子按 (source_table, source_filter) 分组；target_metric_values 单独走 target CTE
+  // base 叶子按 (effective source_table, source_filter) 分组；target_metric_values 单独走 target CTE
+  // source_override：per-metric 重定向到粒度匹配聚合表（override 时丢弃原 source_filter，聚合表自洽）
   const actualGroups = new Map<string, { table: string; filter: string | null; metrics: Metric[] }>();
   const targetLeaves: Metric[] = [];
   for (const leaf of leaves) {
@@ -104,8 +105,11 @@ export function generateTier1View(
       targetLeaves.push(leaf);
       continue;
     }
-    const key = `${src.source_table}|${src.source_filter ?? ''}`;
-    if (!actualGroups.has(key)) actualGroups.set(key, { table: src.source_table, filter: src.source_filter, metrics: [] });
+    const ov = config.source_override?.[leaf.metric_code];
+    const effTable = ov?.table ?? src.source_table;
+    const effFilter = ov ? null : (src.source_filter ?? null);
+    const key = `${effTable}|${effFilter ?? ''}`;
+    if (!actualGroups.has(key)) actualGroups.set(key, { table: effTable, filter: effFilter, metrics: [] });
     actualGroups.get(key)!.metrics.push(leaf);
   }
 
@@ -151,10 +155,12 @@ export function generateTier1View(
       const selectDims = useTargetWindow ? `tgt.target_id, s.${dimKey}` : `s.${dimKey}`;
       const groupDims = useTargetWindow ? `tgt.target_id, s.${dimKey}` : `s.${dimKey}`;
 
-      // 该表的列（不需要对齐，各自 SUM）
+      // 该表的列（不需要对齐，各自 SUM）；source_override 列重定向
       const tableCols = g.metrics.map(m => {
         const src = sources.find(s => s.metric_code === m.metric_code)!;
-        return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
+        const ov = config.source_override?.[m.metric_code];
+        const col = ov?.column ?? src.source_column;
+        return `SUM(s.${col}) AS ${m.metric_code}`;
       });
       // daily 列
       if (useTargetWindow) {
@@ -162,7 +168,9 @@ export function generateTier1View(
           const dailyCode = dailyMap.get(m.metric_code);
           if (!dailyCode) continue;
           const src = sources.find(s => s.metric_code === m.metric_code)!;
-          tableCols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
+          const ov = config.source_override?.[m.metric_code];
+          const col = ov?.column ?? src.source_column;
+          tableCols.push(`SUM(s.${col}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
         }
       }
       // carry_cols：源表列 MAX 带出
@@ -241,15 +249,19 @@ export function generateTier1View(
       const cteName = `cte${cteIdx++}`;
       const cols = g.metrics.map(m => {
         const src = sources.find(s => s.metric_code === m.metric_code)!;
-        return `SUM(s.${src.source_column}) AS ${m.metric_code}`;
+        const ov = config.source_override?.[m.metric_code];
+        const col = ov?.column ?? src.source_column;
+        return `SUM(s.${col}) AS ${m.metric_code}`;
       });
-      // daily FILTER 列：仅 useTargetWindow 时（无窗口无 tgt.latest_day）
+      // daily FILTER 列：仅 useTargetWindow 时（无窗口无 tgt.latest_day）；source_override 列重定向
       if (useTargetWindow) {
         for (const m of g.metrics) {
           const dailyCode = dailyMap.get(m.metric_code);
           if (!dailyCode) continue;
           const src = sources.find(s => s.metric_code === m.metric_code)!;
-          cols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
+          const ov = config.source_override?.[m.metric_code];
+          const col = ov?.column ?? src.source_column;
+          cols.push(`SUM(s.${col}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
         }
       }
       // dim_grain：extra 列追加（非分组 dim 列，功能依赖于 grain key，MAX 安全）
