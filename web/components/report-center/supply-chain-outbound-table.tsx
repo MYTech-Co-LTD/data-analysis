@@ -246,10 +246,10 @@ export function SupplyChainOutboundTable({
         <h3 className="text-sm font-medium text-slate-700">{title}</h3>
         <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} />
       </div>
-      <div ref={tableRef} className="overflow-x-auto">
+      <div ref={tableRef} className="max-h-[28rem] overflow-auto">
         <table className="w-full text-xs tabular-nums">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>
+            <tr className="sticky top-0 z-10 bg-slate-50">
               <th className="px-3 py-2 text-left font-medium">大区名称</th>
               <th className="px-3 py-2 text-right font-medium">出库金额</th>
               <th className="px-3 py-2 text-right font-medium">出库毛利</th>

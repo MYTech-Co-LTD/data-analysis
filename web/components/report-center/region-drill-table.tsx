@@ -118,10 +118,10 @@ export function RegionDrillTable({ rows, targetMonth, progress }: RegionDrillTab
         <h3 className="text-sm font-medium text-slate-700">{targetMonth}月门店零售/配送数据报表</h3>
         <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} />
       </div>
-      <div ref={tableRef} className="overflow-x-auto">
+      <div ref={tableRef} className="max-h-[28rem] overflow-auto">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>
+            <tr className="sticky top-0 z-10 bg-slate-50">
               <th className="px-3 py-2 text-left font-medium">大区名称</th>
               <th className="px-3 py-2 text-right font-medium">月销售目标</th>
               <th className="px-3 py-2 text-right font-medium">月销售金额</th>

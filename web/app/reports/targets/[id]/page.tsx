@@ -90,7 +90,7 @@ export default async function TargetDashboard({
       wholesaleDaily={wholesaleDaily}
     />
   ) : (
-    <div className="p-6">
+    <div className="mx-auto max-w-[1100px] p-6">
       <DesktopDashboard
         target={t}
         kpi={kpi}
@@ -114,7 +114,7 @@ export default async function TargetDashboard({
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
-        <main className="flex-1">{dashboard}</main>
+        <main className="mx-auto max-w-md flex-1 px-3">{dashboard}</main>
       </div>
     );
   }

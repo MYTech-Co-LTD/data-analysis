@@ -131,48 +131,48 @@ export function ItemOutboundList({ initialRows, initialTotal, targetId }: ItemOu
         </button>
       </div>
 
-      <div ref={tableRef} className="overflow-x-auto">
-        <table className="w-full border-collapse text-sm tabular-nums">
+      <div ref={tableRef} className="max-h-[28rem] overflow-auto">
+        <table className="w-full text-xs tabular-nums">
           <thead>
-            <tr className="bg-slate-50 text-xs text-slate-500">
-              <th className="border border-slate-200 p-2 text-left font-medium">商品</th>
-              <th className="border border-slate-200 p-2 text-left font-medium">品类</th>
-              <th className="border border-slate-200 p-2 text-left font-medium">大类</th>
-              <th className="border border-slate-200 p-2 text-right font-medium">配送</th>
-              <th className="border border-slate-200 p-2 text-right font-medium">批发</th>
-              <th className="border border-slate-200 p-2 text-right font-medium">出库</th>
+            <tr className="sticky top-0 z-10 bg-slate-50 text-xs text-slate-500">
+              <th className="px-3 py-2 text-left font-medium">商品</th>
+              <th className="px-3 py-2 text-left font-medium">品类</th>
+              <th className="px-3 py-2 text-left font-medium">大类</th>
+              <th className="px-3 py-2 text-right font-medium">配送</th>
+              <th className="px-3 py-2 text-right font-medium">批发</th>
+              <th className="px-3 py-2 text-right font-medium">出库</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className="divide-y divide-slate-100">
             {loading ? (
               <tr>
-                <td colSpan={6} className="border border-slate-200 p-4 text-center text-slate-400">
+                <td colSpan={6} className="px-3 py-8 text-center text-slate-400">
                   加载中…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="border border-slate-200 p-4 text-center text-slate-400">
+                <td colSpan={6} className="px-3 py-8 text-center text-slate-400">
                   暂无数据
                 </td>
               </tr>
             ) : (
               rows.map((r) => (
                 <tr key={r.item_code} className="hover:bg-slate-50">
-                  <td className="border border-slate-200 p-2 text-slate-700">{r.item_name}</td>
-                  <td className="border border-slate-200 p-2 text-slate-700">
+                  <td className="px-3 py-2 text-slate-700">{r.item_name}</td>
+                  <td className="px-3 py-2 text-slate-700">
                     {r.category_name ?? "—"}
                   </td>
-                  <td className="border border-slate-200 p-2 text-slate-700">
+                  <td className="px-3 py-2 text-slate-700">
                     {r.top_category ?? "—"}
                   </td>
-                  <td className="border border-slate-200 p-2 text-right text-slate-700">
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
                     {fmtCell(r.delivery_amount)}
                   </td>
-                  <td className="border border-slate-200 p-2 text-right text-slate-700">
+                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
                     {fmtCell(r.wholesale_amount)}
                   </td>
-                  <td className="border border-slate-200 p-2 text-right font-medium text-slate-800">
+                  <td className="px-3 py-2 text-right tabular-nums font-medium text-slate-800">
                     {fmtCell(r.outbound_amount)}
                   </td>
                 </tr>

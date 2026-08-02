@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { CategorySummaryRow } from "@/lib/report-center/category-summary";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 
@@ -26,18 +26,65 @@ function fmtRate(r: number | null): string {
 
 export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
   const tableRef = useRef<HTMLDivElement>(null);
+
+  // 排除「合计」行（视图可能返回），tbody 只展示明细，tfoot 展示合计
+  const detailRows = useMemo(
+    () => rows.filter((r) => r.category !== "合计"),
+    [rows],
+  );
+
+  // 合计行：SUM 各列数值，率 = 合计实际/合计目标（前端算）
+  const totals = useMemo(() => {
+    let saleTarget = 0;
+    let saleActual = 0;
+    let profitTarget = 0;
+    let profitActual = 0;
+    let dailyAmount = 0;
+    let dailyProfit = 0;
+    let remainingDailyProfitTarget = 0;
+    for (const r of detailRows) {
+      saleTarget += r.sale_target;
+      saleActual += r.sale_actual;
+      profitTarget += r.profit_target;
+      profitActual += r.profit_actual;
+      dailyAmount += r.daily_amount;
+      dailyProfit += r.daily_profit;
+      remainingDailyProfitTarget += r.remaining_daily_profit_target;
+    }
+    return {
+      saleTarget,
+      saleActual,
+      profitTarget,
+      profitActual,
+      dailyAmount,
+      dailyProfit,
+      remainingDailyProfitTarget,
+      saleRate: saleTarget > 0 ? saleActual / saleTarget : null,
+      profitRate: profitTarget > 0 ? profitActual / profitTarget : null,
+      profitMargin: saleActual > 0 ? profitActual / saleActual : null,
+      dailyProfitMargin: dailyAmount > 0 ? dailyProfit / dailyAmount : null,
+    };
+  }, [detailRows]);
+
   const handleExcel = () => {
     const head = [
       "类别", "月销售目标", "月销售金额", "月销售完成率",
       "月毛利目标", "月毛利金额", "月毛利完成率", "月毛利率",
       "当天出库金额", "当天出库毛利", "当天毛利率", "差额日均毛利目标",
     ];
-    const body = rows.map((r) => [
+    const body = detailRows.map((r) => [
       r.category,
       r.sale_target, r.sale_actual, fmtRate(r.sale_rate),
       r.profit_target, r.profit_actual, fmtRate(r.profit_rate), fmtRate(r.profit_margin),
       r.daily_amount, r.daily_profit, fmtRate(r.daily_profit_margin),
       r.remaining_daily_profit_target,
+    ]);
+    body.push([
+      "合计",
+      totals.saleTarget, totals.saleActual, fmtRate(totals.saleRate),
+      totals.profitTarget, totals.profitActual, fmtRate(totals.profitRate), fmtRate(totals.profitMargin),
+      totals.dailyAmount, totals.dailyProfit, fmtRate(totals.dailyProfitMargin),
+      totals.remainingDailyProfitTarget,
     ]);
     exportExcel([head, ...body], `${targetMonth}月仓储出库数据报表`);
   };
@@ -65,30 +112,30 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
       <div ref={tableRef} className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>
+            <tr className="sticky top-0 z-10 bg-slate-50">
               <th className="px-3 py-2 text-left font-medium">类别</th>
-              <th className="px-3 py-2 text-right font-medium"> 月销售目标</th>
-              <th className="px-3 py-2 text-right font-medium"> 月销售金额</th>
-              <th className="px-3 py-2 text-right font-medium"> 月销售完成率</th>
-              <th className="px-3 py-2 text-right font-medium"> 月毛利目标</th>
-              <th className="px-3 py-2 text-right font-medium"> 月毛利金额</th>
-              <th className="px-3 py-2 text-right font-medium"> 月毛利完成率</th>
-              <th className="px-3 py-2 text-right font-medium"> 月毛利率</th>
-              <th className="px-3 py-2 text-right font-medium"> 当天出库金额</th>
-              <th className="px-3 py-2 text-right font-medium"> 当天出库毛利</th>
-              <th className="px-3 py-2 text-right font-medium"> 当天毛利率</th>
-              <th className="px-3 py-2 text-right font-medium"> 差额日均毛利目标</th>
+              <th className="px-3 py-2 text-right font-medium">月销售目标</th>
+              <th className="px-3 py-2 text-right font-medium">月销售金额</th>
+              <th className="px-3 py-2 text-right font-medium">月销售完成率</th>
+              <th className="px-3 py-2 text-right font-medium">月毛利目标</th>
+              <th className="px-3 py-2 text-right font-medium">月毛利金额</th>
+              <th className="px-3 py-2 text-right font-medium">月毛利完成率</th>
+              <th className="px-3 py-2 text-right font-medium">月毛利率</th>
+              <th className="px-3 py-2 text-right font-medium">当天出库金额</th>
+              <th className="px-3 py-2 text-right font-medium">当天出库毛利</th>
+              <th className="px-3 py-2 text-right font-medium">当天毛利率</th>
+              <th className="px-3 py-2 text-right font-medium">差额日均毛利目标</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {rows.length === 0 && (
+            {detailRows.length === 0 && (
               <tr>
                 <td colSpan={12} className="px-3 py-8 text-center text-slate-400">
                   暂无数据
                 </td>
               </tr>
             )}
-            {rows.map((r) => (
+            {detailRows.map((r) => (
               <tr key={r.category} className="hover:bg-slate-50">
                 <td className="px-3 py-2 text-slate-700 font-medium">
                   {r.category}
@@ -129,6 +176,44 @@ export function CategorySummary({ rows, targetMonth }: CategorySummaryProps) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr className="border-t border-slate-200 bg-slate-50/50 font-medium text-slate-700">
+              <td className="px-3 py-2 text-left">合计</td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtCurrency(totals.saleTarget)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtCurrency(totals.saleActual)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtRate(totals.saleRate)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtCurrency(totals.profitTarget)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtCurrency(totals.profitActual)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtRate(totals.profitRate)}
+              </td>
+              <td className={`px-3 py-2 text-right tabular-nums ${marginColor(totals.profitMargin)}`}>
+                {fmtRate(totals.profitMargin)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtCurrency(totals.dailyAmount)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtCurrency(totals.dailyProfit)}
+              </td>
+              <td className={`px-3 py-2 text-right tabular-nums ${marginColor(totals.dailyProfitMargin)}`}>
+                {fmtRate(totals.dailyProfitMargin)}
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {fmtCurrency(totals.remainingDailyProfitTarget)}
+              </td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>

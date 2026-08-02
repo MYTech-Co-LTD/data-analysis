@@ -46,7 +46,7 @@ export default async function Loading() {
           <div className="h-5 w-16 animate-pulse rounded bg-slate-200" />
         </div>
         {/* main: DesktopDashboard 布局 */}
-        <div className="flex-1 mx-auto max-w-7xl p-6 space-y-5">
+        <div className="flex-1 mx-auto max-w-[1100px] p-6 space-y-5">
           {/* 目标头 */}
           <div className="space-y-1">
             <div className="h-6 w-56 animate-pulse rounded bg-slate-200" />

@@ -85,7 +85,7 @@ export function BrandMetricTable({ rows, targetMonth }: BrandMetricTableProps) {
       <div ref={tableRef} className="overflow-x-auto">
         <table className="w-full min-w-[640px] text-xs">
           <thead className="bg-slate-50 text-slate-500">
-            <tr>
+            <tr className="sticky top-0 z-10 bg-slate-50">
               <th className="px-3 py-2 text-left font-medium">品牌</th>
               <th className="px-3 py-2 text-right font-medium">销售目标</th>
               <th className="px-3 py-2 text-right font-medium">销售金额</th>

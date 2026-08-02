@@ -162,7 +162,7 @@ function TopBoardCard({
       ) : (
         <table className="w-full text-xs tabular-nums">
           <thead>
-            <tr className="border-b border-slate-100 text-[11px] text-slate-500">
+            <tr className="sticky top-0 z-10 border-b border-slate-100 bg-slate-50 text-[11px] text-slate-500">
               {columns.map((c) => (
                 <th
                   key={c.key}

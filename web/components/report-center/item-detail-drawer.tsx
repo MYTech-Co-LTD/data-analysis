@@ -3,8 +3,9 @@
 // 商品弹层：日趋势（销售+出库聚合到日）+ 品牌分布 + 类别卡。
 // 数据走 /api/admin/reports/item-detail（get_item_detail RPC + dim_item meta）。
 // 品牌显示仅做标签映射（3120→熊喵鲜生 / 64188→品品甜），非生成器代码。
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
+import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 
 interface Daily {
   biz_date: string;
@@ -39,6 +40,7 @@ interface ItemDetailDrawerProps {
 }
 
 export function ItemDetailDrawer({ itemCode, targetId, onClose }: ItemDetailDrawerProps) {
+  const drawerRef = useRef<HTMLDivElement>(null);
   const [daily, setDaily] = useState<Daily[]>([]);
   const [meta, setMeta] = useState<Meta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -106,6 +108,26 @@ export function ItemDetailDrawer({ itemCode, targetId, onClose }: ItemDetailDraw
   const m = meta[0];
   const title = m?.item_name ?? itemCode;
 
+  // 导出 Excel：日趋势 + 品牌分布（单 sheet，带分段标题）
+  const handleExcel = () => {
+    const rows: (string | number)[][] = [];
+    rows.push(["日销售趋势"]);
+    rows.push(["日期", "销售金额"]);
+    dateKeys.forEach((k) => rows.push([k, byDate[k]]));
+    rows.push([]);
+    rows.push(["品牌分布"]);
+    rows.push(["品牌", "销售金额", "出库金额"]);
+    Object.entries(byBrand).forEach(([k, v]) =>
+      rows.push([brandLabel(k), v.sale, v.out]),
+    );
+    exportExcel(rows, `${title}详情`);
+  };
+
+  // 导出图片：截取弹层内容
+  const handleImage = () => {
+    if (drawerRef.current) exportImage(drawerRef.current, `${title}详情`);
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-slate-900/40"
@@ -114,6 +136,7 @@ export function ItemDetailDrawer({ itemCode, targetId, onClose }: ItemDetailDraw
       aria-modal="true"
     >
       <div
+        ref={drawerRef}
         className="h-full w-[480px] max-w-[92vw] overflow-auto bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -121,13 +144,18 @@ export function ItemDetailDrawer({ itemCode, targetId, onClose }: ItemDetailDraw
           <h3 className="text-base font-semibold text-slate-800" title={title}>
             {title}
           </h3>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-700"
-            aria-label="关闭"
-          >
-            <X size={18} strokeWidth={1.5} />
-          </button>
+          <div className="flex items-center gap-3">
+            {!loading && !errorMsg && (
+              <ChartActions onExcel={handleExcel} onImage={handleImage} />
+            )}
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-700"
+              aria-label="关闭"
+            >
+              <X size={18} strokeWidth={1.5} />
+            </button>
+          </div>
         </div>
 
         {loading ? (
@@ -190,7 +218,7 @@ export function ItemDetailDrawer({ itemCode, targetId, onClose }: ItemDetailDraw
                     return (
                       <div
                         key={k}
-                        className="flex-1 bg-blue-400 hover:bg-blue-600"
+                        className="flex-1 bg-blue-600 hover:bg-blue-700"
                         style={{ height: `${h}%` }}
                         title={`${k}: ${fmtWan(v)}`}
                       />
