@@ -242,17 +242,30 @@ export function generateTier1View(
           cols.push(`SUM(s.${src.source_column}) FILTER (WHERE s.biz_date = tgt.latest_day) AS ${dailyCode}`);
         }
       }
+      // dim_grain：extra 列追加（非分组 dim 列，功能依赖于 grain key，MAX 安全）
+      if (config.dim_grain?.extra) {
+        const alias = config.dim_grain.table.split(' ')[1]; // 'di'
+        for (const ex of config.dim_grain.extra) {
+          cols.push(`MAX(${alias}.${ex}) AS ${ex}`);
+        }
+      }
       const colsStr = cols.join(',\n    ');
 
       const joins: string[] = [];
-      let selectDims = `s.${dimKey}`;
-      let groupDims = `s.${dimKey}`;
       const where: string[] = [];
+      // dim_grain：actual CTE 加 dim join + grain 变换（替换 s.${dimKey}）
+      const dimAlias = config.dim_grain?.table.split(' ')[1];
+      const grainCol = config.dim_grain ? `${dimAlias}.${config.dim_grain.key}` : `s.${dimKey}`;
       if (g.filter) where.push(g.filter);
+      if (config.dim_grain) {
+        joins.push(`JOIN ${config.dim_grain.table} ON ${config.dim_grain.on}`);
+      }
+      let selectDims = grainCol;
+      let groupDims = grainCol;
       if (useTargetWindow) {
         joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`);
-        selectDims = `tgt.target_id, s.${dimKey}`;
-        groupDims = `tgt.target_id, s.${dimKey}`;
+        selectDims = `tgt.target_id, ${grainCol}`;
+        groupDims = `tgt.target_id, ${grainCol}`;
       }
       if (useAssessed) {
         joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
@@ -309,8 +322,18 @@ export function generateTier1View(
       sel.push(`tgt.target_id`);
     }
   }
-  if (dim_table) {
+  if (config.dim_grain) {
+    // dim_grain：维度列从 actual CTE 选（actual CTE 已含 key + extra）
+    const firstCte = [...new Set(cteOf.values())][0];
+    sel.push(`${firstCte}.${config.dim_grain.key} AS ${config.dim_grain.key}`);
+    if (config.dim_grain.extra) {
+      for (const ex of config.dim_grain.extra) {
+        sel.push(`${firstCte}.${ex} AS ${ex}`);
+      }
+    }
+  } else if (dim_table) {
     sel.push(`b.${dimKey} AS ${dimKey}`);
+    if (dim_code === 'brand' && dim_table) sel.push(`b.brand_name`);
   } else if (useTargetWindow) {
     // category 维度（UNION ALL）直接从 CTE 选，不经过 dim_table
     const firstCte = [...new Set(cteOf.values())][0];
@@ -318,7 +341,6 @@ export function generateTier1View(
   } else {
     sel.push(`${dimKey} AS ${dimKey}`);
   }
-  if (dim_code === 'brand' && dim_table) sel.push(`b.brand_name`);
 
   // 指标列
   for (const code of metricCodes) {
@@ -340,30 +362,37 @@ export function generateTier1View(
 
   // FROM + JOIN
   const fromParts: string[] = [];
-  if (dim_table) {
-    fromParts.push(`${dim_table} b`);
-    if (useTargetWindow) fromParts.push(`CROSS JOIN tgt`);
-  } else if (useTargetWindow && !isCategoryUnion) {
-    // category 维度（UNION ALL）已经在 CTE 内部 join tgt，外部不再需要
-    fromParts.push(`tgt`);
-  }
-
   const usedCtes = new Set(cteOf.values());
   const cteNames = [...usedCtes];
-  if (dim_table && cteNames.length) {
+  if (config.dim_grain) {
+    // dim_grain：无 dim_table cross-join，actual CTE 之间 FULL JOIN ON dim_grain.key
+    fromParts.push(cteNames[0]);
+    for (const cn of cteNames.slice(1)) {
+      const on = useTargetWindow
+        ? `${cn}.target_id = ${cteNames[0]}.target_id AND ${cn}.${config.dim_grain.key} = ${cteNames[0]}.${config.dim_grain.key}`
+        : `${cn}.${config.dim_grain.key} = ${cteNames[0]}.${config.dim_grain.key}`;
+      fromParts.push(`FULL OUTER JOIN ${cn} ON ${on}`);
+    }
+  } else if (dim_table) {
+    fromParts.push(`${dim_table} b`);
+    if (useTargetWindow) fromParts.push(`CROSS JOIN tgt`);
     for (const cn of cteNames) {
       const on = useTargetWindow
         ? `${cn}.target_id = tgt.target_id AND ${cn}.${dimKey} = b.${dimKey}`
         : `${cn}.${dimKey} = b.${dimKey}`;
       fromParts.push(`LEFT JOIN ${cn} ON ${on}`);
     }
-  } else if (cteNames.length) {
-    fromParts.push(cteNames[0]);
-    for (const cn of cteNames.slice(1)) {
-      const on = useTargetWindow
-        ? `${cn}.target_id = ${cteNames[0]}.target_id AND ${cn}.${dimKey} = ${cteNames[0]}.${dimKey}`
-        : `${cn}.${dimKey} = ${cteNames[0]}.${dimKey}`;
-      fromParts.push(`FULL OUTER JOIN ${cn} ON ${on}`);
+  } else {
+    // 原有逻辑：useTargetWindow 时先 push tgt（final SELECT 引用 tgt.target_id 需它在 FROM）
+    if (useTargetWindow && !isCategoryUnion) fromParts.push(`tgt`);
+    if (cteNames.length) {
+      fromParts.push(cteNames[0]);
+      for (const cn of cteNames.slice(1)) {
+        const on = useTargetWindow
+          ? `${cn}.target_id = ${cteNames[0]}.target_id AND ${cn}.${dimKey} = ${cteNames[0]}.${dimKey}`
+          : `${cn}.${dimKey} = ${cteNames[0]}.${dimKey}`;
+        fromParts.push(`FULL OUTER JOIN ${cn} ON ${on}`);
+      }
     }
   }
 

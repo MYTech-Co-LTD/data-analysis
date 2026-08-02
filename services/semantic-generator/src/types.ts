@@ -69,4 +69,10 @@ export interface ViewConfig {
   hierarchy?: HierarchyLevel[]; // 维度层级（存在时走 generateHierarchyView，产多级 UNION ALL 视图）
   target_breakdown?: TargetBreakdown; // target CTE 的 breakdown_level（默认 'store'；hierarchy 用 leaf.target_breakdown）
   categories?: string[];        // 类别值列表（category 维度专用），如 ['水果', '标品', '耗材']
+  dim_grain?: {
+    table: string;       // 'dim_item di'（含别名）
+    on: string;          // 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num'
+    key: string;         // 'item_code'（actual CTE 聚合到这一列）
+    extra?: string[];    // ['item_name','category_name',...]（非分组 dim 列，从 dim 表带出）
+  };
 }

@@ -224,3 +224,30 @@ describe('Tier1 Generator', () => {
     expect(sql).toContain("'64188'");
   });
 });
+
+describe('Tier1 dim_grain', () => {
+  it('actual CTE join dim table 做 grain 变换 + extra 列', () => {
+    const config: ViewConfig = {
+      view_name: 'test_item_gen',
+      metrics: ['sale_amount'],
+      dim_code: 'item',
+      levels: ['item'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      dim_grain: {
+        table: 'dim_item di',
+        on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+        key: 'item_code',
+        extra: ['item_name', 'category_name'],
+      },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // actual CTE 含 JOIN dim_item + GROUP BY di.item_code + extra 列
+    expect(sql).toContain('JOIN dim_item di ON di.system_book_code=s.system_book_code AND di.item_num=s.item_num');
+    expect(sql).toContain('di.item_code');
+    expect(sql).toContain('di.item_name');
+    expect(sql).toContain('GROUP BY tgt.target_id, di.item_code');
+    // 不含 s.item_num 作为 GROUP BY（grain 已变换）
+    expect(sql).not.toMatch(/GROUP BY tgt\.target_id, s\.item_num/);
+  });
+});
