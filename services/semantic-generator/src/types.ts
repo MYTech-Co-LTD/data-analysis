@@ -4,7 +4,7 @@ import type { Ast } from './ast.js';
 
 export type MeasureType = 'base' | 'derived';
 export type Agg = 'SUM' | 'COUNT_DISTINCT' | 'AVG' | 'MAX' | 'MIN' | null;
-export type DimCode = 'brand' | 'branch' | 'item' | 'customer' | 'category';
+export type DimCode = 'brand' | 'branch' | 'item' | 'customer' | 'category' | 'date';
 export type TargetBreakdown = 'store' | 'region_l2' | 'war_zone' | 'category';
 
 export interface Metric {

@@ -69,11 +69,14 @@ export function generateTier1View(
     : dim_code === 'category' ? 'category_group'
     : dim_code === 'customer' ? 'client_code'
     : dim_code === 'item' ? 'item_num'
+    : dim_code === 'date' ? 'biz_date'
     : 'branch_num';
   const useTargetWindow = scope?.target_window ?? false;
   const useAssessed = scope?.assessed_war_zone ?? false;
   const tgtLevel = scope?.target_level ?? 'total';
   const tgtStatusClause = statusInClause(scope?.target_status);
+  // date grain 语义=时间序列罗列至当日（非全周期累计），join 上限用 latest_day；其它维度保持 end_date
+  const dateUpper = dim_code === 'date' ? 'tgt.latest_day' : 'tgt.end_date';
 
   const leaves = collectLeaves(metricCodes, metrics);
 
@@ -145,7 +148,7 @@ export function generateTier1View(
       const where: string[] = [];
       if (g.filter) where.push(g.filter);
       if (useTargetWindow) {
-        joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`);
+        joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND ${dateUpper}`);
       }
       if (useAssessed) {
         joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
@@ -291,7 +294,7 @@ export function generateTier1View(
       let selectDims = grainCol;
       let groupDims = grainCol;
       if (useTargetWindow) {
-        joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`);
+        joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND ${dateUpper}`);
         selectDims = `tgt.target_id, ${grainCol}`;
         groupDims = `tgt.target_id, ${grainCol}`;
       }

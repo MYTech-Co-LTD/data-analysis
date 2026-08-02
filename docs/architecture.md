@@ -1025,7 +1025,8 @@ spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design
 
 - **形态**：Node/TS 脚本 `services/semantic-generator/`，读 `metric_registry`+`metric_sources`+`dimensions`，产出静态视图 SQL 到 `database/generated/`（入 git，可 review 可回滚）。
 - **不做运行时动态引擎**（07-22 已 YAGNI，理由：RLS/security_invoker 兼容、可审计、避免外部重型服务）。
-- **两档能力**：Tier1（base 聚合 + additive derived + 率重算 + cost脱敏 + target join）；Tier2（窗口派生：daily/remaining/profit_rate）。
+- **两档能力**：Tier1（base 聚合 + additive derived + 率重算 + cost脱敏 + target join + date grain 时间序列）；Tier2（窗口派生：daily/remaining/profit_rate）。
+- **date grain（2026-08-02 架构扩展）**：`dim_code='date'` 支持 biz_date 时间序列 grain（行=日期）。date 维度无 dim_table（biz_date 是 fact 表列），target_window join 用 `BETWEEN start_date AND latest_day`（罗列至当日，非全周期 end_date）-- 用于外部批发客户出库日报等时间序列看板。属生成器能力扩展（新 dim_code），非某指标特殊处理，符合铁律第2条。
 - **三层校验**：L1 `validate_semantic_registry()`（静态，阻断部署）/ L2 生成时 EXPLAIN（阻断部署，失败不产文件）/ L3a rollup `_audit` 视图（运行期告警）/ L3b 双轨 SUM diff（阻断旧视图下线）。
 - **部署**：migrate.sh 扫 `database/migrations/*.sql` + `database/generated/*.sql`；`scripts/deploy.sh` 迁移后 `docker compose restart postgrest` 刷 schema 缓存（视图变更生效）。
 - **迁移次序**：配销比 → 品牌表 → 下钻表 → KPI 卡 → 类别表（双轨 diff=0 才切前端、下线旧视图）。
@@ -1098,6 +1099,20 @@ spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.m
 - **批发客户报表**（`WholesaleCustomerReport`）：3120 客户排行 + 累计占比 + 品品甜 KPI 卡 + 高亮品品甜客户行（`client_brand_code` 数据驱动识别，无字面量 `'64188'`，从 `dim_brand` 反查 `brand_name='品品甜'` 的 `system_book_code`）。
 
 **生成器新能力**（§10.10）：`dim_grain`（actual CTE 粒度变换，支持商品级从品牌×商品聚合到 item_code 全品牌合并）/ `carry_cols`（携带原表列如 `item_name`/`category_name`，免去额外 JOIN）/ `extra_join`（补 LEFT JOIN 如 `dim_item` 取 `top_category`）/ `source_override`（覆盖 metric_sources 默认表名，支持 wholesale 客户视图切 `report_daily_wholesale_customer`）。**3 板块走 2 视图 + 2 RPC**：`report_item_breakdown_gen`（含 `sale_amount`+`outbound_amount`+`top_category`+`item_brand` 等携带列）+ `report_wholesale_customer_gen`（3120 客户排行）+ `get_item_top_by_day`/`get_item_detail` 2 RPC（迁移 141/142）。迁移 143 调 `report_item_breakdown_gen` 的 outbound 口径 `depends_on` 对齐（与 `outbound_amt` 同源）。**预取策略**：`page.tsx` 的 `Promise.all` 加 `getItemBreakdownTop` + `getItemOutboundListPage(targetId, 1, {})` + `getWholesaleCustomer`，首屏 SSR 同步出 3 板块；日榜切换/列表翻页/弹层走 client fetch。
+
+**供应链出库层级报表 + 外部批发客户日报（2026-08-02，date grain 架构扩展）**：
+
+2 新看板挂目标详情页（PC + 移动）：
+
+- **供应链出库数据报表**（`SupplyChainOutboundTable`）：四级战区->二级区域->门店 三级下钻（参考 `RegionDrillTable` 交互），7 列（大区名称/出库金额/出库毛利/毛利率/当天出库金额/当天出库毛利/当天毛利率），末行门店合计，**门店行毛利率<12% 标红**。数据走 `report_supply_chain_outbound_gen` 视图（生成器产出，复用 `regionBreakdownView` 三级 hierarchy 模式），metrics: `delivery_amount`/`delivery_profit`/`delivery_margin` + `daily_delivery`/`daily_delivery_profit`/`daily_delivery_margin`（后两个为新指标）。出库语义=仅配送（`report_daily_delivery` out_money/profit_money），与批发看板互补。当天=固定 `current_date`（closed 用 end_date，即 `tgt.latest_day`）。考核过滤 `is_assessed_war_zone`。
+- **外部批发客户出库报表**（`WholesaleDailyTable`）：按日期序列（start_date ~ min(today, end_date)，每日一行），4 列（时间/出库金额/出库毛利/毛利率），**毛利率<0 标红**。数据走 `report_wholesale_daily_gen` 视图（生成器产出，**date grain**：`dim_code='date'`，行=biz_date），metrics: `wholesale_ext_amount`/`wholesale_ext_profit`（source_filter `system_book_code='3120'` = 除品品甜的外部批发，口径在 metric_sources 数据驱动）+ `wholesale_ext_margin`。target_window 用 `latest_day` 上限（罗列至当日）。
+
+**生成器能力扩展（date grain，架构变更）**：
+- `types.ts`：`DimCode` 加 `'date'`
+- `tier1.ts`：`dimKey` 加 `dim_code === 'date' ? 'biz_date'`；date 维度 target_window join 用 `BETWEEN start_date AND tgt.latest_day`（非 end_date），date 无 dim_table（biz_date 是 fact 列，不 cross-join dim 表）
+- **新 metric_registry 指标**（迁移）：`daily_delivery_profit`（derived, cost_sensitive, formula_ast = filter delivery_profit on biz_date=latest_day）/ `daily_delivery_margin`（derived = daily_delivery_profit/daily_delivery, cost_sensitive）/ `wholesale_ext_margin`（derived = wholesale_ext_profit/wholesale_ext_amount, cost_sensitive）
+- **2 新 view-configs**：`supplyChainOutboundView`（dim_code='branch', 三级 hierarchy, delivery metrics + daily）+ `wholesaleDailyView`（dim_code='date', wholesale_ext metrics）
+- 命名用目标起止日期范围（`{startM}月{startD}日-{endM}月{endD}日...`，跨月/非全月统一规则）
 
 ---
 

@@ -10,6 +10,8 @@ import { BrandMetricTable } from "@/components/report-center/brand-metric-table"
 import { SaleTopBoards, OutboundTopBoards, useItemDayBoards } from "@/components/report-center/item-top-boards";
 import { ItemOutboundList } from "@/components/report-center/item-outbound-list";
 import { WholesaleCustomerReport } from "@/components/report-center/wholesale-customer-report";
+import { SupplyChainOutboundTable } from "@/components/report-center/supply-chain-outbound-table";
+import { WholesaleDailyTable } from "@/components/report-center/wholesale-daily-table";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 import { CategorySummaryRow } from "@/lib/report-center/category-summary";
 import { BrandMetricRow } from "@/lib/report-center/brand-metric";
@@ -18,6 +20,8 @@ import type {
   ItemOutboundListRow,
 } from "@/lib/report-center/item-breakdown";
 import type { WholesaleCustomerResult } from "@/lib/report-center/wholesale-customer";
+import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
+import type { WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
 
 function fmtFresh(s: string | null) {
   if (!s) return "—";
@@ -51,6 +55,8 @@ export function MobileDashboard({
   itemTop,
   itemList,
   wholesaleCustomer,
+  supplyChain,
+  wholesaleDaily,
 }: {
   target: any;
   kpi: any[];
@@ -64,6 +70,8 @@ export function MobileDashboard({
   itemTop: ItemBreakdownTop;
   itemList: { rows: ItemOutboundListRow[]; total: number };
   wholesaleCustomer: WholesaleCustomerResult;
+  supplyChain: SupplyChainOutboundRow[];
+  wholesaleDaily: WholesaleDailyRow[];
 }) {
   // 日榜 day state（销售/出库共用，切日并行请求两 metric）
   const { day, saleDay, outboundDay, onDayChange, busy } = useItemDayBoards(
@@ -139,6 +147,25 @@ export function MobileDashboard({
       {/* 类别出库报表 */}
       <div className="px-4">
         <CategorySummary rows={categorySummary} targetMonth={targetMonth} />
+      </div>
+
+      {/* 供应链出库层级 */}
+      <div className="px-4">
+        <SupplyChainOutboundTable
+          rows={supplyChain}
+          startDate={target.start_date}
+          endDate={target.end_date}
+          targetId={targetId}
+        />
+      </div>
+
+      {/* 外部批发日报 */}
+      <div className="px-4">
+        <WholesaleDailyTable
+          rows={wholesaleDaily}
+          startDate={target.start_date}
+          endDate={target.end_date}
+        />
       </div>
 
       {/* 出库商品 TOP（月度+日，移动单列堆叠） */}

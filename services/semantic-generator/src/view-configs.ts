@@ -220,3 +220,103 @@ export const wholesaleCustomerView: ViewConfig = {
     cols: [{ out: 'client_brand_code', expr: 'db.system_book_code' }],
   },
 };
+
+/**
+ * 供应链出库三级层级视图（看板1）
+ * 生成 report_supply_chain_outbound_gen，三级 region(战区) -> sub_region(二级区域) -> store(门店)
+ *
+ * 口径：
+ * - 纯 actual（无 target 对比）：delivery_amount/profit/margin + daily_delivery_amount/profit/margin
+ * - delivery 口径 = report_daily_delivery（纯配送，不含品品甜批发）
+ * - scope: active+closed total target 日期窗口 + is_assessed_war_zone 考核战区过滤
+ * - daily_delivery_* = biz_date=latest_day 当天值（filter AST，T2 新增）
+ *
+ * hierarchy 结构照 regionBreakdownView（region/sub_region/store 三级 + columns 映射），
+ * 但 target_metric_codes=[]（无目标对比）-> target CTE 不生成，target_breakdown 占位不读。
+ */
+export const supplyChainOutboundView: ViewConfig = {
+  view_name: 'report_supply_chain_outbound_gen',
+  metrics: [
+    'delivery_amount',          // 周期配送金额（纯 delivery，不含品品甜）
+    'delivery_profit',          // 周期配送毛利（脱敏）
+    'delivery_margin',          // 周期毛利率 = delivery_profit / delivery_amount
+    'daily_delivery_amount',   // 当天配送金额（T2 新增，filter AST）
+    'daily_delivery_profit',    // 当天配送毛利（T2 新增，脱敏）
+    'daily_delivery_margin',    // 当天毛利率（T2 新增，op / 重算）
+  ],
+  dim_code: 'branch',
+  levels: ['store', 'sub_region', 'region'],
+  target_metric_codes: [],   // 无 target（纯 actual）
+  scope: { target_window: true, assessed_war_zone: true, target_status: ['active', 'closed'] },
+  total_row: true,
+  hierarchy: [
+    {
+      level: 'region',
+      grain: ['war_zone'],
+      target_breakdown: 'war_zone',   // 占位（target_metric_codes=[] 不读）
+      rollup_from: 'store',
+      is_leaf: false,
+      parent_expr: null,
+      columns: [
+        { out: 'region_code', expr: 'war_zone' },
+        { out: 'region_name', expr: 'war_zone' },
+      ],
+    },
+    {
+      level: 'sub_region',
+      grain: ['war_zone', 'region_l2'],
+      target_breakdown: 'region_l2',   // 占位
+      rollup_from: 'store',
+      is_leaf: false,
+      parent_expr: 'war_zone',
+      columns: [
+        { out: 'region_code', expr: 'war_zone' },
+        { out: 'region_name', expr: 'war_zone' },
+        { out: 'sub_region_code', expr: 'region_l2' },
+        { out: 'sub_region_name', expr: 'region_l2' },
+      ],
+    },
+    {
+      level: 'store',
+      grain: ['system_book_code', 'branch_num'],   // 复合门店键
+      target_breakdown: 'store',   // 占位
+      is_leaf: true,
+      parent_expr: 'region_l2',
+      columns: [
+        { out: 'region_code', expr: 'first_level_region' },
+        { out: 'region_name', expr: 'first_level_region' },
+        { out: 'sub_region_code', expr: 'second_level_region' },
+        { out: 'sub_region_name', expr: 'second_level_region' },
+        { out: 'branch_num', expr: 'branch_num' },
+        { out: 'branch_name', expr: 'branch_name' },
+        { out: 'war_zone', expr: 'first_level_region' },
+        { out: 'region_l2', expr: 'second_level_region' },
+      ],
+    },
+  ],
+};
+
+/**
+ * 外部批发日报视图（看板2，date grain）
+ * 生成 report_wholesale_daily_gen，按 biz_date 罗列时间序列
+ *
+ * 口径：
+ * - wholesale_ext_* = report_daily_wholesale WHERE system_book_code='3120'（外部客户批发，除品品甜）
+ *   品牌过滤在 metric_sources（source_filter='3120'），不在 view-config（铁律）
+ * - date grain：join 上限用 tgt.latest_day（当天截止，非全周期累计）
+ * - scope: active+closed total target 日期窗口
+ * - wholesale_ext_margin = wholesale_ext_profit / wholesale_ext_amount（op / 重算，脱敏）
+ */
+export const wholesaleDailyView: ViewConfig = {
+  view_name: 'report_wholesale_daily_gen',
+  metrics: [
+    'wholesale_ext_amount',   // 外部批发金额（source_filter='3120'，除品品甜）
+    'wholesale_ext_profit',   // 外部批发毛利（脱敏）
+    'wholesale_ext_margin',   // 外部批发毛利率（T2 新增，op / 重算）
+  ],
+  dim_code: 'date',
+  levels: [],                // date 无层级
+  target_metric_codes: [],
+  scope: { target_window: true, target_status: ['active', 'closed'] },  // date grain 自动用 latest_day 上限
+  total_row: false,
+};

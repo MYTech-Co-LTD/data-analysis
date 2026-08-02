@@ -311,3 +311,27 @@ describe('Tier1 source_override', () => {
     expect(sql).not.toContain('FROM report_daily_sales');
   });
 });
+
+describe('Tier1 date grain', () => {
+  it('dim_code=date: biz_date 作行 + latest_day 上限 + 无 dim_table cross-join', () => {
+    const config: ViewConfig = {
+      view_name: 't_date_grain',
+      metrics: ['wholesale_pp_amount'],
+      dim_code: 'date',
+      levels: ['date'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // dimKey 映射 date->biz_date：actual CTE GROUP BY 含 biz_date
+    expect(sql).toContain('GROUP BY tgt.target_id, s.biz_date');
+    // date grain 语义=时间序列罗列至当日，join 上限用 latest_day
+    expect(sql).toContain('BETWEEN tgt.start_date AND tgt.latest_day');
+    // 非 end_date（date 维度不走全周期累计，区别于其它维度）
+    expect(sql).not.toMatch(/BETWEEN tgt\.start_date AND tgt\.end_date/);
+    // date 无 dim_table，不 cross-join 维表
+    expect(sql).not.toContain('CROSS JOIN');
+    // final SELECT 输出 biz_date 列
+    expect(sql).toMatch(/cte\d+\.biz_date AS biz_date/);
+  });
+});

@@ -11,6 +11,8 @@ import {
   getItemOutboundListPage,
 } from "@/lib/report-center/item-breakdown";
 import { getWholesaleCustomer } from "@/lib/report-center/wholesale-customer";
+import { getSupplyChainOutbound } from "@/lib/report-center/supply-chain-outbound";
+import { getWholesaleDaily } from "@/lib/report-center/wholesale-daily";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { DesktopDashboard } from "./desktop";
@@ -46,6 +48,8 @@ export default async function TargetDashboard({
     itemTop,
     itemList,
     wholesaleCustomer,
+    supplyChain,
+    wholesaleDaily,
   ] = await Promise.all([
     getTargetKpi(targetId),
     getRegionBreakdown(id),
@@ -54,6 +58,8 @@ export default async function TargetDashboard({
     getItemBreakdownTop(targetId),
     getItemOutboundListPage(targetId, 1, {}),
     getWholesaleCustomer(targetId),
+    getSupplyChainOutbound(targetId),
+    getWholesaleDaily(targetId),
   ]);
 
   // 数据新鲜度：3 表最早 /compute 时间（updated_at min）
@@ -84,6 +90,8 @@ export default async function TargetDashboard({
       itemTop={itemTop}
       itemList={itemList}
       wholesaleCustomer={wholesaleCustomer}
+      supplyChain={supplyChain}
+      wholesaleDaily={wholesaleDaily}
     />
   ) : (
     <div className="p-6">
@@ -100,6 +108,8 @@ export default async function TargetDashboard({
         itemTop={itemTop}
         itemList={itemList}
         wholesaleCustomer={wholesaleCustomer}
+        supplyChain={supplyChain}
+        wholesaleDaily={wholesaleDaily}
       />
     </div>
   );
