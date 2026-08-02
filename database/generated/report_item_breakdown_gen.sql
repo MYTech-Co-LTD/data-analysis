@@ -14,7 +14,8 @@ cte0 AS (
     MAX(di.item_name) AS item_name,
     MAX(di.category_name) AS category_name,
     MAX(di.top_category) AS top_category,
-    MAX(di.item_brand) AS item_brand
+    MAX(di.item_brand) AS item_brand,
+    MAX(di.category_group) AS category_group
   FROM report_daily_item_sales s
   JOIN dim_item di ON di.system_book_code=s.system_book_code AND di.item_num=s.item_num
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
@@ -29,7 +30,8 @@ cte1 AS (
     MAX(di.item_name) AS item_name,
     MAX(di.category_name) AS category_name,
     MAX(di.top_category) AS top_category,
-    MAX(di.item_brand) AS item_brand
+    MAX(di.item_brand) AS item_brand,
+    MAX(di.category_group) AS category_group
   FROM report_daily_item_outbound s
   JOIN dim_item di ON di.system_book_code=s.system_book_code AND di.item_num=s.item_num
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
@@ -41,6 +43,7 @@ SELECT cte0.target_id,
   cte0.category_name AS category_name,
   cte0.top_category AS top_category,
   cte0.item_brand AS item_brand,
+  cte0.category_group AS category_group,
   cte0.sale_amount AS sale_amount,
   CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN cte0.sale_profit END AS sale_profit,
   cte1.delivery_amount AS delivery_amount,
