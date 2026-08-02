@@ -403,6 +403,84 @@ git commit -m "feat(generator): 客户视图支持——dimKey 映射扩 custome
 
 ---
 
+### Task 2b: 生成器 source_override 能力（per-metric 源表/列重定向）
+
+> **新增（2026-08-02，用户确认 Option A）：** gen-views 验证暴露 metric_registry 一指标一源（`sale_amount`→`report_daily_sales` 门店粒度、`delivery_amount`→`report_daily_delivery`、`wholesale_amount`→`report_daily_wholesale`），但 item 视图需同指标从 item 粒度表（`report_daily_item_sales`/`_outbound`）取、customer 视图需 wholesale 从 `report_daily_wholesale_customer` 取。`source_override` 让视图 per-metric 重定向源表/列到粒度匹配的聚合表，不改 registry 全局映射。通用、无品牌字面量。**Task 3 的两个 config 须加 source_override（见下）。**
+
+**Files:**
+- Modify: `services/semantic-generator/src/types.ts`
+- Modify: `services/semantic-generator/src/generators/tier1.ts`
+- Test: `services/semantic-generator/__tests__/tier1.test.ts`
+
+**Interfaces:**
+- Produces: `ViewConfig.source_override?: Record<string, { table: string; column?: string }>`。tier1 actualGroups 构建时，leaf 有效源表=`override.table`（默认 `src.source_table`），有效列=`override.column`（默认 `src.source_column`）；override 的 metric 不带原 `source_filter`（聚合表自洽）。derived outbound 自然复用 override 后的 delivery/wholesale CTE 列。
+
+**Why:** 同一逻辑指标在不同粒度有不同物化（门店粒度 vs item 粒度 vs 客户粒度）。registry 选门店粒度为 canonical（服务 brand/region 视图）；item/customer 视图按需 override 到粒度匹配表。
+
+- [ ] **Step 1: types.ts 加 source_override**
+
+```typescript
+// ViewConfig 加（extra_join 后）：
+  source_override?: Record<string, { table: string; column?: string }>;
+  // e.g. { sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' } }
+```
+
+- [ ] **Step 2: tier1.test.ts 写失败测试**
+
+```typescript
+describe('Tier1 source_override', () => {
+  it('per-metric 重定向源表/列，CTE 按 override table 分组', () => {
+    // mockSources 里 sale_amount→report_daily_sales；override 到 item 表
+    const config: ViewConfig = {
+      view_name: 't_override', metrics: ['sale_amount'], dim_code: 'item', levels: ['item'],
+      target_metric_codes: [], scope: { target_window: true },
+      dim_grain: { table: 'dim_item di', on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num', key: 'item_code' },
+      source_override: { sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' } },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    expect(sql).toContain('FROM report_daily_item_sales s');
+    expect(sql).toContain('SUM(s.sale_amount) AS sale_amount');
+    expect(sql).not.toContain('FROM report_daily_sales');
+  });
+});
+```
+
+- [ ] **Step 3: 跑测试验证失败**
+
+Run: `cd services/semantic-generator && npm test -- tier1.test.ts`
+Expected: FAIL
+
+- [ ] **Step 4: tier1.ts actualGroups + cols 用 override**
+
+actualGroups 分组循环（collectLeaves 后）：
+```typescript
+  const ov = config.source_override?.[leaf.metric_code];
+  const effTable = ov?.table ?? src.source_table;
+  const effFilter = ov ? null : (src.source_filter ?? null);
+  const key = `${effTable}|${effFilter ?? ''}`;
+```
+CTE cols（else 单表 + category-union 各 union 分支），列用 override：
+```typescript
+  const ov = config.source_override?.[m.metric_code];
+  const col = ov?.column ?? src.source_column;
+  return `SUM(s.${col}) AS ${m.metric_code}`;
+```
+daily FILTER 列同理用 override column。
+
+- [ ] **Step 5: 跑测试验证通过**
+
+Run: `cd services/semantic-generator && npm test -- tier1.test.ts && npm test`
+Expected: PASS（新用例 + 全过 0 regression）
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add services/semantic-generator/src/types.ts services/semantic-generator/src/generators/tier1.ts services/semantic-generator/__tests__/tier1.test.ts
+git commit -m "feat(generator): source_override 能力——per-metric 源表/列重定向到粒度匹配聚合表"
+```
+
+---
+
 ### Task 3: view-configs 加 2 配置 + 生成视图 + 部署
 
 **Files:**
@@ -442,6 +520,14 @@ export const itemBreakdownView: ViewConfig = {
   levels: ['item'],
   target_metric_codes: [],  // 无 target
   scope: { target_window: true, target_status: ['active', 'closed'] },
+  source_override: {
+    sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' },
+    sale_profit: { table: 'report_daily_item_sales', column: 'sale_profit' },
+    delivery_amount: { table: 'report_daily_item_outbound', column: 'delivery_amount' },
+    delivery_profit: { table: 'report_daily_item_outbound', column: 'delivery_profit' },
+    wholesale_amount: { table: 'report_daily_item_outbound', column: 'wholesale_amount' },
+    wholesale_profit: { table: 'report_daily_item_outbound', column: 'wholesale_profit' },
+  },
   dim_grain: {
     table: 'dim_item di',
     on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
@@ -472,6 +558,10 @@ export const wholesaleCustomerView: ViewConfig = {
   levels: ['customer'],
   target_metric_codes: [],
   scope: { target_window: true, target_status: ['active', 'closed'] },
+  source_override: {
+    wholesale_amount: { table: 'report_daily_wholesale_customer', column: 'wholesale_amount' },
+    wholesale_profit: { table: 'report_daily_wholesale_customer', column: 'wholesale_profit' },
+  },
   carry_cols: ['client_name', 'system_book_code'],
   extra_join: {
     table: 'dim_branch db',
