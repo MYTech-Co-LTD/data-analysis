@@ -131,6 +131,7 @@ export interface ItemOutboundListRow {
   item_name: string;
   category_name: string | null;
   top_category: string | null;
+  category_group: string | null;
   delivery_amount: number;
   wholesale_amount: number;
   outbound_amount: number;
@@ -150,11 +151,11 @@ export async function getItemOutboundListPage(
   let query = client.database
     .from("report_item_breakdown_gen")
     .select(
-      "item_code,item_name,category_name,top_category,delivery_amount,wholesale_amount,outbound_amount",
+      "item_code,item_name,category_name,top_category,category_group,delivery_amount,wholesale_amount,outbound_amount",
       { count: "exact" },
     )
     .eq("target_id", targetId);
-  if (filters.category) query = query.eq("top_category", filters.category);
+  if (filters.category) query = query.eq("category_group", filters.category);
   // 注：原 filters.brand -> item_brand 筛选已移除（item_brand 是 manufacturer brand，脏值+跨品牌粒度，会导致 0 行）。
   if (filters.q) query = query.ilike("item_name", `%${filters.q}%`);
 
@@ -170,6 +171,7 @@ export async function getItemOutboundListPage(
     item_name: String(r.item_name ?? ""),
     category_name: r.category_name == null ? null : String(r.category_name),
     top_category: r.top_category == null ? null : String(r.top_category),
+    category_group: r.category_group == null ? null : String(r.category_group),
     delivery_amount: Number(r.delivery_amount || 0),
     wholesale_amount: Number(r.wholesale_amount || 0),
     outbound_amount: Number(r.outbound_amount || 0),
