@@ -4,14 +4,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@insforge/sdk';
 import { requireAdmin } from '@/lib/admin-api-auth';
 import { runQaChecks } from '@/lib/qa-runner';
-import { runC0 } from '@/lib/qa/c0';
+import { runC0Checks } from '@/lib/qa/c0-runner';
 import { duckQuery } from '@/lib/qa/duck';
 import { notifyWecom } from '@/lib/notify';
-import { countRetailApi, decodeCompanyId, getDateOffsetChina } from '@/lib/collect';
-import { countDeliveryApi } from '@/lib/collect-delivery';
-import { countWholesaleApi } from '@/lib/collect-wholesale';
-import detailSources from '@/lib/qa/config/detail-sources.json';
-import type { DetailSource, CheckResult } from '@/lib/qa/types';
+import type { CheckResult } from '@/lib/qa/types';
 
 const DUCKDB_URL = process.env.DUCKDB_URL || 'http://duckdb:9000';
 const AGENT_API_KEY = process.env.AGENT_API_KEY!;
@@ -19,7 +15,6 @@ const INSFORGE_API_BASE = process.env.INSFORGE_API_BASE!;
 const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
 // PostgREST 直连（gateway 不代理 /rpc，固化 RPC 直连，同 web/lib/scheduler.ts:23）
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
-const C0_DAYS = 7;
 
 export async function POST(req: NextRequest) {
   const denied = requireAdmin(req);
@@ -47,57 +42,8 @@ export async function POST(req: NextRequest) {
 
   const results: CheckResult[] = await runQaChecks({ runId, trigger, db, duck, checks });
 
-  // C0 双向 count（需 token + 源 API，仅 web 上下文可跑）
-  // 一个 function_slug 可有多个 collect_tasks（每品牌一行，token 按 brand 隔离）——不能 .single()，
-  // 否则多品牌时返回 error → token undefined 崩溃（实测坑 2026-08-03）。
-  for (const src of detailSources as DetailSource[]) {
-    if (checks && !checks.includes(`C0:${src.name}`)) continue;
-    try {
-      const { data: tasks } = await client.database.from('collect_tasks')
-        .select('source_id,params').eq('function_slug', src.function_slug);
-      if (!tasks?.length) {
-        results.push({ run_id: runId, trigger, check_type: 'C0', check_name: src.name, status: 'error', diff: null, detail: [{ error: `no collect_tasks for ${src.function_slug}` }] });
-        continue;
-      }
-      for (const task of tasks) {
-        const { data: cred } = await client.database.from('auth_credentials')
-          .select('credential_data').eq('source_id', task.source_id).single();
-        let token = '';
-        try { token = JSON.parse(cred?.credential_data || '{}').token || ''; } catch {}
-        const authToken = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
-        let companyId = 'unknown';
-        try { companyId = decodeCompanyId(authToken); } catch {}
-
-        // C0 窗口 = [昨天-(C0_DAYS-1), 昨天]：不含今天（今天数据未采集完，count<api 恒误报 missing）
-        for (let i = C0_DAYS; i >= 1; i--) {
-          const dayIso = getDateOffsetChina(-i);
-          const dayCompact = dayIso.replace(/-/g, '');
-          const checkName = `${src.name}:${companyId}:${dayIso}`;
-          let apiCount = -1;
-          let libCount = 0;
-          try {
-            if (src.name === 'retail') {
-              const bn: number[] = task.params?.branch_nums || [];
-              apiCount = await countRetailApi(authToken, bn, bn.join(','), [dayIso, dayIso]);
-              libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/retail_detail/${companyId}/${dayIso}/all.parquet')`))[0]?.c as number || 0;
-            } else if (src.name === 'delivery') {
-              const dbn = Number(task.params?.distribution_branch_num) || 99;
-              apiCount = await countDeliveryApi(authToken, dbn, String(dbn), `${dayIso} 00:00:00`, `${dayIso} 23:59:59`);
-              libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/${companyId}/${dayCompact}/all.parquet')`))[0]?.c as number || 0;
-            } else {
-              apiCount = await countWholesaleApi(authToken, '99', `${dayIso} 00:00:00`, `${dayIso} 23:59:59`);
-              libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/${companyId}/${dayCompact}/all.parquet')`))[0]?.c as number || 0;
-            }
-          } catch (e) { apiCount = -1; }
-          const r = await runC0(src, dayIso, apiCount, libCount);
-          results.push({ ...r, run_id: runId, trigger, check_name: checkName });
-          await client.database.from('qa_logs').insert([{ ...r, run_id: runId, trigger, check_name: checkName }]).then((x) => x.error && console.error('[qa-run] qa_logs 写入失败', x.error));
-        }
-      }
-    } catch (e) {
-      results.push({ run_id: runId, trigger, check_type: 'C0', check_name: src.name, status: 'error', diff: null, detail: [{ error: String(e instanceof Error ? e.message : e) }] });
-    }
-  }
+  // C0 双向 count（共享执行器，route 与 scheduler 每日 job 共用）——需 token + 源 API，仅 web 上下文可跑
+  results.push(...await runC0Checks({ client, duck, runId, trigger, checks }));
 
   const failed = results.filter((r) => r.status !== 'pass');
   if (failed.length) {

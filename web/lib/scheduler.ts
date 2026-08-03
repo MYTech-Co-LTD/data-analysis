@@ -12,6 +12,7 @@ import { collectBranches } from './collect-branches';
 import { notifyWecom } from './notify';
 import { runServiceDownBucket, runCollectTokenBucket, runHourlyBucket, runDailyBucket } from './monitor/runtime';
 import { runQaChecks } from './qa-runner';
+import { runC0Checks } from './qa/c0-runner';
 import detailSources from './qa/config/detail-sources.json';
 import { duckQuery } from './qa/duck';
 import { buildDayGlob } from './qa/d1';
@@ -245,6 +246,10 @@ async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFr
   // 随机后缀防同毫秒 run_id 撞 qa_logs 的 UNIQUE 约束（采集后 hook 与每日 09:15 可能同毫秒）
   const runId = `${trigger}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const results = await runQaChecks({ runId, trigger, db, duck, checks, dateFrom, dateTo, d1Globs });
+  // C0 源API count ↔ 明细 count（分毫不差：库==源）——每日 job 也要验证「采集=源」，不只手动
+  if (!checks || checks.some((c) => c.startsWith('C0:'))) {
+    results.push(...await runC0Checks({ client, duck, runId, trigger, checks }));
+  }
   const failed = results.filter((r) => r.status !== 'pass');
   if (failed.length) {
     await notifyWecom('⚠️ 每日数据质量巡检异常', `${failed.length}/${results.length} 项失败:\n${failed.slice(0, 10).map((r) => `${r.check_type}:${r.check_name} ${r.status}`).join('\n')}`).catch(() => {});
