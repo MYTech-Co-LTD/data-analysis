@@ -5,6 +5,9 @@ import { join } from 'path';
 import { readRegistry } from './registry-reader.js';
 import { generateTier1View } from './generators/tier1.js';
 import { generateHierarchyView } from './generators/hierarchy.js';
+import { generateQaView } from './generators/qa.js';
+import qaChecks from './qa-checks.json';
+import type { ViewAssertion } from './qa-types.js';
 import { explainSql } from './explain.js';
 import type { ViewConfig } from './types.js';
 
@@ -55,6 +58,14 @@ export async function runGenerator(opts: GenOpts): Promise<GenResult> {
       const file = join(opts.outDir, `${config.view_name}.sql`);
       writeFileSync(file, sql + '\n');
       produced.push(config.view_name);
+
+      // L4 C2：该视图有断言则产 ${view}_qa 对账视图（静态 SQL，migrate 幂等应用）
+      const viewAssertions = (qaChecks as ViewAssertion[]).filter((a) => a.view === config.view_name);
+      if (viewAssertions.length) {
+        const qaSql = generateQaView(viewAssertions);
+        const qaFile = join(opts.outDir, `${config.view_name}_qa.sql`);
+        writeFileSync(qaFile, qaSql + '\n');
+      }
     } catch (err) {
       explainFailures.push(`${config.view_name}: ${err instanceof Error ? err.message : String(err)}`);
     }
