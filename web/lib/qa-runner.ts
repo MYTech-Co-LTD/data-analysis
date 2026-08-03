@@ -88,6 +88,10 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
     if (!want(opts.checks, 'C2', a.view)) continue;
     try {
       const res = await opts.db.from(`${a.view}_qa`).select('metric,view_sum,ref_sum,diff');
+      if (res.error) {
+        await record('C2', a.view, 'error', null, [{ error: String(res.error) }]);
+        continue;
+      }
       const rows = (res.data ?? []) as { metric: string; view_sum: number; ref_sum: number; diff: number }[];
       const bad = rows.filter((r) => Math.abs(r.diff) > a.tolerance);
       if (bad.length) {

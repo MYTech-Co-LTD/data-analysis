@@ -21,16 +21,14 @@ describe('runQaChecks', () => {
     const db = makeDb();
     const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
     const results = await runQaChecks({ runId: 'test-1', trigger: 'cron', db, duck });
-    expect(results.filter((r) => r.check_type === 'D1' && r.status === 'pass').length).toBe(3);
-    expect(results.filter((r) => r.check_type === 'D2' && r.status === 'pass').length).toBe(3);
+    expect(results.filter((r) => r.check_type === 'D1' && r.status === 'pass').length).toBe(detailSources.length);
+    expect(results.filter((r) => r.check_type === 'D2' && r.status === 'pass').length).toBe(detailSources.length);
     expect(db._inserted.length).toBeGreaterThan(0);
   });
 
   it('D1 有重复行记 fail 且 diff=重复行数', async () => {
-    const retail = detailSources.find((s) => s.name === 'retail')!;
     const db = makeDb();
     const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
-    // duck 返回零售重复行（仅当 sql 含 retail）
     duck.mockImplementation(async (sql: string) =>
       sql.includes('retail_detail')
         ? [{ system_book_code: '3120', bizday: '20260728', total_rows: 120, distinct_rows: 2 }]
@@ -39,6 +37,19 @@ describe('runQaChecks', () => {
     const d1 = results.find((r) => r.check_type === 'D1');
     expect(d1?.status).toBe('fail');
     expect(d1?.diff).toBe(1);
+  });
+
+  it('C2 视图查询报错记 error 不静默 pass', async () => {
+    const db = makeDb({
+      from: vi.fn((t: string) => {
+        if (t.endsWith('_qa')) return { select: vi.fn(async () => ({ data: undefined, error: 'relation does not exist' })) };
+        return { select: vi.fn(async () => ({ data: [], error: null })), insert: vi.fn(async (rows: unknown[]) => { (db as any)._inserted.push(...(rows as unknown[])); return { data: rows, error: null }; }) };
+      }),
+    });
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-4', trigger: 'manual', db, duck });
+    const c2 = results.find((r) => r.check_type === 'C2');
+    expect(c2?.status).toBe('error');
   });
 
   it('checks 过滤生效', async () => {
