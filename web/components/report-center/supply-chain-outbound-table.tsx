@@ -11,12 +11,14 @@ import { useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 
 interface SupplyChainOutboundTableProps {
   rows: SupplyChainOutboundRow[];
   startDate: string;
   endDate: string;
   targetId: number; // 预留（任务要求 props 含此字段，纯展示组件当前未直接使用）
+  isMobile?: boolean;
 }
 
 // 金额格式化：≥10000 用「X.X万」，否则整数，¥ 前缀（与 item-top-boards 对齐）
@@ -53,6 +55,7 @@ export function SupplyChainOutboundTable({
   rows,
   startDate,
   endDate,
+  isMobile = false,
 }: SupplyChainOutboundTableProps) {
   const tableRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -179,6 +182,26 @@ export function SupplyChainOutboundTable({
 
   const title = fmtRangeTitle(startDate, endDate, "供应链出库数据报表");
 
+  // 移动端：点行末 ▸ 看该行全字段（6 列 label-value）
+  const [detailNode, setDetailNode] = useState<TreeNode | null>(null);
+  function buildSupplyFields(d: SupplyChainOutboundRow): DetailField[] {
+    return [
+      { label: "出库金额", value: fmtCurrency(d.delivery_amount) },
+      { label: "出库毛利", value: fmtProfit(d.delivery_profit) },
+      {
+        label: "毛利率",
+        value: fmtMargin(d.delivery_margin),
+        color:
+          d.delivery_margin != null && d.delivery_margin < LOW_MARGIN_THRESHOLD
+            ? "text-red-600"
+            : undefined,
+      },
+      { label: "当天出库金额", value: fmtCurrency(d.daily_delivery_amount) },
+      { label: "当天出库毛利", value: fmtProfit(d.daily_delivery_profit) },
+      { label: "当天毛利率", value: fmtMargin(d.daily_delivery_margin) },
+    ];
+  }
+
   const handleExcel = () => {
     // 扁平化当前可见行（含已展开子孙），导出原始数值 + 合计行
     const flat: SupplyChainOutboundRow[] = [];
@@ -244,113 +267,208 @@ export function SupplyChainOutboundTable({
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-700">{title}</h3>
-        <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} />
+        <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} isMobile={isMobile} />
       </div>
-      <div ref={tableRef} className="max-h-[28rem] overflow-auto">
-        <table className="w-full text-xs tabular-nums">
-          <thead className="bg-slate-50 text-slate-500">
-            <tr className="sticky top-0 z-10 bg-slate-50">
-              <th className="px-3 py-2 text-left font-medium">大区名称</th>
-              <th className="px-3 py-2 text-right font-medium">出库金额</th>
-              <th className="px-3 py-2 text-right font-medium">出库毛利</th>
-              <th className="px-3 py-2 text-right font-medium">毛利率</th>
-              <th className="px-3 py-2 text-right font-medium">当天出库金额</th>
-              <th className="px-3 py-2 text-right font-medium">当天出库毛利</th>
-              <th className="px-3 py-2 text-right font-medium">当天毛利率</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {tree.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
-                  暂无数据
-                </td>
+
+      {/* 桌面：7 列宽表（原样不动） */}
+      {!isMobile && (
+        <div ref={tableRef} className="max-h-[28rem] overflow-auto">
+          <table className="w-full text-xs tabular-nums">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr className="sticky top-0 z-10 bg-slate-50">
+                <th className="px-3 py-2 text-left font-medium">大区名称</th>
+                <th className="px-3 py-2 text-right font-medium">出库金额</th>
+                <th className="px-3 py-2 text-right font-medium">出库毛利</th>
+                <th className="px-3 py-2 text-right font-medium">毛利率</th>
+                <th className="px-3 py-2 text-right font-medium">当天出库金额</th>
+                <th className="px-3 py-2 text-right font-medium">当天出库毛利</th>
+                <th className="px-3 py-2 text-right font-medium">当天毛利率</th>
               </tr>
-            )}
-            {flatRows.map(({ node, depth }) => {
-              const hasChildren = node.children.length > 0;
-              const isExpanded = expandedNodes.has(node.code);
-              const indent = depth * 24;
-              const isStore = node.level === "store";
-              const lowMargin =
-                isStore &&
-                node.data.delivery_margin != null &&
-                node.data.delivery_margin < LOW_MARGIN_THRESHOLD;
-              const rowBg = lowMargin ? "bg-red-50" : "hover:bg-slate-50";
-              const numColor = lowMargin ? "text-red-600" : "text-slate-700";
-              return (
-                <tr
-                  key={`${node.level}-${node.data.parent_code || "root"}-${node.code}`}
-                  className={rowBg}
-                >
-                  <td
-                    className="px-3 py-2 text-slate-700"
-                    style={{
-                      paddingLeft: `${indent + 12}px`,
-                      cursor: hasChildren ? "pointer" : "default",
-                    }}
-                    onClick={hasChildren ? () => toggleExpand(node.code) : undefined}
-                  >
-                    {hasChildren && (
-                      <span className="mr-1 inline-flex h-4 w-4 items-center justify-center text-slate-400">
-                        {isExpanded ? (
-                          <ChevronDown size={14} strokeWidth={1.5} />
-                        ) : (
-                          <ChevronRight size={14} strokeWidth={1.5} />
-                        )}
-                      </span>
-                    )}
-                    <span className={depth === 0 ? "font-semibold" : ""}>
-                      {node.name}
-                    </span>
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtCurrency(node.data.delivery_amount)}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtProfit(node.data.delivery_profit)}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtMargin(node.data.delivery_margin)}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtCurrency(node.data.daily_delivery_amount)}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtProfit(node.data.daily_delivery_profit)}
-                  </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
-                    {fmtMargin(node.data.daily_delivery_margin)}
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {tree.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
+                    暂无数据
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr className="border-t border-slate-200 bg-slate-50/50 font-medium text-slate-700">
-              <td className="px-3 py-2 text-left">合计</td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {fmtCurrency(totals.amount)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {fmtProfit(totals.profit)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {fmtMargin(totals.margin)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {fmtCurrency(totals.dailyAmount)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {fmtProfit(totals.dailyProfit)}
-              </td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                {fmtMargin(totals.dailyMargin)}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+              )}
+              {flatRows.map(({ node, depth }) => {
+                const hasChildren = node.children.length > 0;
+                const isExpanded = expandedNodes.has(node.code);
+                const indent = depth * 24;
+                const isStore = node.level === "store";
+                const lowMargin =
+                  isStore &&
+                  node.data.delivery_margin != null &&
+                  node.data.delivery_margin < LOW_MARGIN_THRESHOLD;
+                const rowBg = lowMargin ? "bg-red-50" : "hover:bg-slate-50";
+                const numColor = lowMargin ? "text-red-600" : "text-slate-700";
+                return (
+                  <tr
+                    key={`${node.level}-${node.data.parent_code || "root"}-${node.code}`}
+                    className={rowBg}
+                  >
+                    <td
+                      className="px-3 py-2 text-slate-700"
+                      style={{
+                        paddingLeft: `${indent + 12}px`,
+                        cursor: hasChildren ? "pointer" : "default",
+                      }}
+                      onClick={hasChildren ? () => toggleExpand(node.code) : undefined}
+                    >
+                      {hasChildren && (
+                        <span className="mr-1 inline-flex h-4 w-4 items-center justify-center text-slate-400">
+                          {isExpanded ? (
+                            <ChevronDown size={14} strokeWidth={1.5} />
+                          ) : (
+                            <ChevronRight size={14} strokeWidth={1.5} />
+                          )}
+                        </span>
+                      )}
+                      <span className={depth === 0 ? "font-semibold" : ""}>
+                        {node.name}
+                      </span>
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtCurrency(node.data.delivery_amount)}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtProfit(node.data.delivery_profit)}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtMargin(node.data.delivery_margin)}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtCurrency(node.data.daily_delivery_amount)}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtProfit(node.data.daily_delivery_profit)}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtMargin(node.data.daily_delivery_margin)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200 bg-slate-50/50 font-medium text-slate-700">
+                <td className="px-3 py-2 text-left">合计</td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {fmtCurrency(totals.amount)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {fmtProfit(totals.profit)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {fmtMargin(totals.margin)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {fmtCurrency(totals.dailyAmount)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {fmtProfit(totals.dailyProfit)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {fmtMargin(totals.dailyMargin)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      {/* 移动：精简 4 列（名称 · 出库金额 · 毛利率 · 当天出库）+ 行末 ▸ 看全字段。
+          树 chevron（左）展开子级，▸（右）开全字段抽屉，两个独立 tap 区。
+          store 级 delivery_margin < 0.12 整行标红（与桌面一致）。 */}
+      {isMobile && (
+        <div ref={tableRef} className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 text-slate-500">
+              <tr className="sticky top-0 z-10 bg-slate-50">
+                <th className="px-2 py-2 text-left font-medium">名称</th>
+                <th className="px-2 py-2 text-right font-medium">出库金额</th>
+                <th className="px-2 py-2 text-right font-medium">毛利率</th>
+                <th className="px-2 py-2 text-right font-medium">当天出库</th>
+                <th className="w-8 px-1 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {tree.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-2 py-8 text-center text-slate-400">
+                    暂无数据
+                  </td>
+                </tr>
+              )}
+              {flatRows.map(({ node, depth }) => {
+                const hasChildren = node.children.length > 0;
+                const isExpanded = expandedNodes.has(node.code);
+                const indent = depth * 16;
+                const isStore = node.level === "store";
+                const lowMargin =
+                  isStore &&
+                  node.data.delivery_margin != null &&
+                  node.data.delivery_margin < LOW_MARGIN_THRESHOLD;
+                const numColor = lowMargin ? "text-red-600" : "text-slate-700";
+                return (
+                  <tr
+                    key={`${node.level}-${node.data.parent_code || "root"}-${node.code}`}
+                    className={lowMargin ? "bg-red-50" : ""}
+                  >
+                    <td className="px-2 py-2 text-slate-700" style={{ paddingLeft: `${indent + 8}px` }}>
+                      <div className="flex items-center gap-1">
+                        {hasChildren ? (
+                          <button
+                            onClick={() => toggleExpand(node.code)}
+                            aria-label="展开子级"
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center text-slate-400"
+                          >
+                            {isExpanded ? (
+                              <ChevronDown size={16} strokeWidth={1.5} />
+                            ) : (
+                              <ChevronRight size={16} strokeWidth={1.5} />
+                            )}
+                          </button>
+                        ) : null}
+                        <span className={`truncate ${depth === 0 ? "font-semibold" : ""}`}>
+                          {node.name}
+                        </span>
+                      </div>
+                    </td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtCurrency(node.data.delivery_amount)}
+                    </td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtMargin(node.data.delivery_margin)}
+                    </td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${numColor}`}>
+                      {fmtCurrency(node.data.daily_delivery_amount)}
+                    </td>
+                    <td className="px-1 py-2 text-right">
+                      <button
+                        onClick={() => setDetailNode(node)}
+                        aria-label="查看全部字段"
+                        className="inline-flex h-8 w-8 items-center justify-center text-slate-400 hover:text-slate-700"
+                      >
+                        <ChevronRight size={16} strokeWidth={1.5} />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <RowDetailDrawer
+        open={!!detailNode}
+        title={detailNode?.name ?? ""}
+        fields={detailNode ? buildSupplyFields(detailNode.data) : []}
+        onClose={() => setDetailNode(null)}
+      />
     </div>
   );
 }
