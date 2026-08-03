@@ -105,12 +105,12 @@ export function MobileDashboard({
 
       {/* KPI 卡 */}
       <div className="px-4">
-        <KpiCards rows={kpi} />
+        <KpiCards rows={kpi} isMobile />
       </div>
 
       {/* 品牌×指标 */}
       <div className="px-4">
-        <BrandMetricTable rows={brandMetric} targetMonth={targetMonth} />
+        <BrandMetricTable rows={brandMetric} targetMonth={targetMonth} isMobile />
       </div>
 
       {/* 门店零售/配送数据报表（战区） */}
@@ -119,6 +119,7 @@ export function MobileDashboard({
           rows={regionBreakdown}
           targetMonth={targetMonth}
           progress={progress}
+          isMobile
         />
       </div>
 
@@ -138,7 +139,7 @@ export function MobileDashboard({
 
       {/* 类别出库报表 */}
       <div className="px-4">
-        <CategorySummary rows={categorySummary} targetMonth={targetMonth} targetId={targetId} />
+        <CategorySummary rows={categorySummary} targetMonth={targetMonth} targetId={targetId} isMobile />
       </div>
 
       {/* 供应链出库层级 */}
@@ -148,6 +149,7 @@ export function MobileDashboard({
           startDate={target.start_date}
           endDate={target.end_date}
           targetId={targetId}
+          isMobile
         />
       </div>
 
@@ -158,6 +160,7 @@ export function MobileDashboard({
           startDate={target.start_date}
           endDate={target.end_date}
           targetId={targetId}
+          isMobile
         />
       </div>
 
