@@ -1,6 +1,7 @@
 // web/lib/report-center/category-summary.ts
 // 类别出库报表数据获取
 import { getClient } from "@/lib/api";
+import { getSnapshotRows } from "./target-snapshot";
 
 export interface CategorySummaryRow {
   target_id: number;
@@ -21,8 +22,14 @@ export interface CategorySummaryRow {
 const CATEGORY_ORDER = ['水果', '标品', '耗材', '合计'] as const;
 
 export async function getCategorySummary(
-  targetId: string
+  targetId: string,
+  closed?: boolean
 ): Promise<CategorySummaryRow[]> {
+  // 已定格目标：读快照（视图不再算 closed 目标）
+  if (closed) {
+    const snap = await getSnapshotRows(Number(targetId), "category");
+    if (snap) return (snap as CategorySummaryRow[]).sort((a, b) => CATEGORY_ORDER.indexOf(a.category as any) - CATEGORY_ORDER.indexOf(b.category as any));
+  }
   const client = await getClient();
 
   const { data, error } = await client.database

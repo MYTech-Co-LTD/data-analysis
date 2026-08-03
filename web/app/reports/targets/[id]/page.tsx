@@ -37,6 +37,8 @@ export default async function TargetDashboard({
     .limit(1);
   if (!totalRows?.length) notFound();
   const t = totalRows[0];
+  // 已定格目标：各模块从 target_snapshot_breakdowns 读 close_target 冻结快照（视图不再算 closed 目标）
+  const closed = t.status === "closed";
 
   const [
     kpi,
@@ -48,12 +50,12 @@ export default async function TargetDashboard({
     wholesaleDaily,
   ] = await Promise.all([
     getTargetKpi(targetId),
-    getRegionBreakdown(id),
-    getCategorySummary(id),
-    getBrandMetric(targetId),
-    getItemBreakdownTop(targetId),
-    getSupplyChainOutbound(targetId),
-    getWholesaleDaily(targetId),
+    getRegionBreakdown(id, closed),
+    getCategorySummary(id, closed),
+    getBrandMetric(targetId, closed),
+    getItemBreakdownTop(targetId, closed),
+    getSupplyChainOutbound(targetId, closed),
+    getWholesaleDaily(targetId, closed),
   ]);
 
   // 数据新鲜度：3 表最早 /compute 时间（updated_at min）

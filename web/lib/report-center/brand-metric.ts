@@ -2,6 +2,7 @@
 // 品牌×指标表数据获取（report_brand_metric_gen，3 行：熊喵/品品甜/合计）
 // P1: 切换到语义层生成器产物（口径源自 metric_registry，双轨 diff=0 已验证）
 import { getClient } from "@/lib/api";
+import { getSnapshotRows } from "./target-snapshot";
 
 export interface BrandMetricRow {
   target_id: number;
@@ -16,8 +17,14 @@ export interface BrandMetricRow {
 }
 
 export async function getBrandMetric(
-  targetId: number
+  targetId: number,
+  closed?: boolean
 ): Promise<BrandMetricRow[]> {
+  // 已定格目标：读快照
+  if (closed) {
+    const snap = await getSnapshotRows(targetId, "brand");
+    if (snap) return (snap as BrandMetricRow[]).sort((a, b) => a.system_book_code.localeCompare(b.system_book_code));
+  }
   const client = await getClient();
   const { data, error } = await client.database
     .from("report_brand_metric_gen")

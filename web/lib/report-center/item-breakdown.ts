@@ -3,6 +3,7 @@
 // 月榜走视图 report_item_breakdown_gen（含脱敏 sale_profit/outbound_profit）；
 // 日榜走 RPC get_item_top_by_day（migration 145 后返 7 列含脱敏利润）。
 import { getClient } from "@/lib/api";
+import { getSnapshotRows } from "./target-snapshot";
 
 export interface ItemTopRow {
   item_code: string;
@@ -56,6 +57,7 @@ function toBoard(
  */
 export async function getItemBreakdownTop(
   targetId: number,
+  closed?: boolean,
 ): Promise<ItemBreakdownTop> {
   const emptyBoard: TopBoard = { rows: [], totalAmount: 0, totalProfit: 0 };
   const empty: ItemBreakdownTop = {
@@ -88,19 +90,24 @@ export async function getItemBreakdownTop(
         ? endDate
         : startDate;
 
-  // 月榜全集（视图已按周期聚合，含脱敏利润列）
-  const { data: monthRows, error: mErr } = await client.database
-    .from("report_item_breakdown_gen")
-    .select(
-      "item_code,item_name,category_name,sale_amount,sale_profit,outbound_amount,outbound_profit",
-    )
-    .eq("target_id", targetId);
-  if (mErr) {
-    console.error("getItemBreakdownTop: month view fetch failed:", mErr);
-    return { ...empty, defaultDay };
+  // 月榜：closed 读快照（close_target 全量快照视图输出）；active 查视图
+  let monthArr: Array<Record<string, unknown>>;
+  if (closed) {
+    const snap = await getSnapshotRows(targetId, "item");
+    monthArr = (snap ?? []) as unknown as Array<Record<string, unknown>>;
+  } else {
+    const { data: monthRows, error: mErr } = await client.database
+      .from("report_item_breakdown_gen")
+      .select(
+        "item_code,item_name,category_name,sale_amount,sale_profit,outbound_amount,outbound_profit",
+      )
+      .eq("target_id", targetId);
+    if (mErr) {
+      console.error("getItemBreakdownTop: month view fetch failed:", mErr);
+      return { ...empty, defaultDay };
+    }
+    monthArr = (monthRows ?? []) as unknown as Array<Record<string, unknown>>;
   }
-  const monthArr =
-    (monthRows ?? []) as unknown as Array<Record<string, unknown>>;
   const saleMonth = toBoard(monthArr, "sale_amount", "sale_profit");
   const outboundMonth = toBoard(monthArr, "outbound_amount", "outbound_profit");
 

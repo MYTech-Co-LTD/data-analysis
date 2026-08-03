@@ -2,6 +2,7 @@
 // 门店零售/配送数据报表下钻数据获取
 // P2: 切换到语义层生成器产物（口径源自 metric_registry，三级层级生成器产出，双轨 diff=0 已验证）
 import { getClient } from "@/lib/api";
+import { getSnapshotRows } from "./target-snapshot";
 
 export interface RegionBreakdownRow {
   target_id: number;
@@ -26,8 +27,14 @@ export interface RegionBreakdownRow {
 }
 
 export async function getRegionBreakdown(
-  targetId: string
+  targetId: string,
+  closed?: boolean
 ): Promise<RegionBreakdownRow[]> {
+  // 已定格目标：读 close_target 全量快照（视图不再算 closed 目标）
+  if (closed) {
+    const snap = await getSnapshotRows(Number(targetId), "region");
+    if (snap) return (snap as RegionBreakdownRow[]).sort((a, b) => (b.sale_rate ?? 0) - (a.sale_rate ?? 0));
+  }
   const client = await getClient();
 
   const { data, error } = await client.database

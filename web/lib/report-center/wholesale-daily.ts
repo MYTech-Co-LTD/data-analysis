@@ -6,6 +6,7 @@
 // 脱敏：profit/margin 受 request.jwt.claims.can_see_cost 控制，无成本权限时视图返 NULL（非 0，前端自行处理）
 // margin 为 round(x,4) 即 0-1 小数（0.1234 = 12.34%），amount=0 时 NULLIF 致 margin NULL
 import { getClient } from "@/lib/api";
+import { getSnapshotRows } from "./target-snapshot";
 
 export interface WholesaleDailyRow {
   target_id: number;
@@ -17,7 +18,13 @@ export interface WholesaleDailyRow {
 
 export async function getWholesaleDaily(
   targetId: number,
+  closed?: boolean,
 ): Promise<WholesaleDailyRow[]> {
+  // 已定格目标：读快照
+  if (closed) {
+    const snap = await getSnapshotRows(targetId, "wholesale_daily");
+    if (snap) return (snap as WholesaleDailyRow[]).sort((a, b) => String(a.biz_date).localeCompare(String(b.biz_date)));
+  }
   const client = await getClient();
 
   const { data, error } = await client.database
