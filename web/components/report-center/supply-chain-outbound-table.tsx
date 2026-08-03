@@ -185,20 +185,19 @@ export function SupplyChainOutboundTable({
   // 移动端：点行末 ▸ 看该行全字段（6 列 label-value）
   const [detailNode, setDetailNode] = useState<TreeNode | null>(null);
   function buildSupplyFields(d: SupplyChainOutboundRow): DetailField[] {
+    // store 级低毛利行：抽屉内全部数字字段标红，与桌面整行 numColor 语义一致
+    const lowMargin =
+      d.level === "store" &&
+      d.delivery_margin != null &&
+      d.delivery_margin < LOW_MARGIN_THRESHOLD;
+    const numColor = lowMargin ? "text-red-600" : undefined;
     return [
-      { label: "出库金额", value: fmtCurrency(d.delivery_amount) },
-      { label: "出库毛利", value: fmtProfit(d.delivery_profit) },
-      {
-        label: "毛利率",
-        value: fmtMargin(d.delivery_margin),
-        color:
-          d.delivery_margin != null && d.delivery_margin < LOW_MARGIN_THRESHOLD
-            ? "text-red-600"
-            : undefined,
-      },
-      { label: "当天出库金额", value: fmtCurrency(d.daily_delivery_amount) },
-      { label: "当天出库毛利", value: fmtProfit(d.daily_delivery_profit) },
-      { label: "当天毛利率", value: fmtMargin(d.daily_delivery_margin) },
+      { label: "出库金额", value: fmtCurrency(d.delivery_amount), color: numColor },
+      { label: "出库毛利", value: fmtProfit(d.delivery_profit), color: numColor },
+      { label: "毛利率", value: fmtMargin(d.delivery_margin), color: numColor },
+      { label: "当天出库金额", value: fmtCurrency(d.daily_delivery_amount), color: numColor },
+      { label: "当天出库毛利", value: fmtProfit(d.daily_delivery_profit), color: numColor },
+      { label: "当天毛利率", value: fmtMargin(d.daily_delivery_margin), color: numColor },
     ];
   }
 

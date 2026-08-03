@@ -15,7 +15,7 @@ test.describe('移动地基', () => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
     const cookies = await page.context().cookies();
     const dt = cookies.find((c) => c.name === 'device_type');
-    // iPhone 12 UA → middleware 判定 mobile → 写 device_type=mobile
+    // Pixel 5 UA → middleware 判定 mobile → 写 device_type=mobile
     expect(dt?.value).toBe('mobile');
   });
 });

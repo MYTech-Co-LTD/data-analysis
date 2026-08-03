@@ -11,7 +11,8 @@ test.describe('移动壳回归', () => {
 
   test('首页移动壳：无 Sidebar + 无横向溢出', async ({ page }) => {
     await page.goto('/', { waitUntil: 'domcontentloaded' });
-    // 移动壳不含 Sidebar（PC 才有）
+    // 移动壳不含 Sidebar（PC 才有）：Sidebar 渲染 <aside>，移动分支应 0 个
+    await expect(page.locator('aside')).toHaveCount(0);
     await expect(page.locator('body')).toBeVisible();
     // body 无横向滚动（关键移动健康指标）
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

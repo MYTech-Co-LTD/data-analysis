@@ -291,7 +291,7 @@ export function CategorySummary({ rows, targetMonth, targetId, isMobile = false 
                   <td className="px-2 py-2 text-slate-700 font-medium">
                     <button
                       onClick={() => setDrawerCat(r.category)}
-                      className="flex items-center gap-1 text-left"
+                      className="flex min-h-8 items-center gap-1 text-left"
                     >
                       <ChevronRight size={14} strokeWidth={1.5} className="text-slate-400" />
                       <span>{r.category}</span>
@@ -318,6 +318,21 @@ export function CategorySummary({ rows, targetMonth, targetId, isMobile = false 
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr className="border-t border-slate-200 bg-slate-50/50 font-medium text-slate-700">
+                <td className="px-2 py-2 text-left">合计</td>
+                <td className="px-2 py-2 text-right tabular-nums">
+                  {fmtRate(totals.saleRate)}
+                </td>
+                <td className={`px-2 py-2 text-right tabular-nums ${marginColor(totals.profitMargin)}`}>
+                  {fmtRate(totals.profitMargin)}
+                </td>
+                <td className="px-2 py-2 text-right tabular-nums">
+                  {fmtCurrency(totals.dailyAmount)}
+                </td>
+                <td className="px-1 py-2"></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
