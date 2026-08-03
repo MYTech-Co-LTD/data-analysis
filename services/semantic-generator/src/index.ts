@@ -116,6 +116,25 @@ async function main() {
         allFails.forEach((f) => console.error('   -', f));
         process.exit(1);
       }
+
+      // 达成视图（target×metric 矩阵）：独立生成器 + EXPLAIN + 写文件（迁移 118 total 级口径收口语义层）
+      const { achievementViewConfig } = await import('./achievement-config.js');
+      const { generateAchievementView } = await import('./generators/achievement.js');
+      try {
+        const achSql = generateAchievementView(achievementViewConfig);
+        await client.query(achSql);  // DROP+CREATE in DB（gen 期建好，EXPLAIN + 契约）
+        const achExplain = await explainSql(client, `SELECT * FROM ${achievementViewConfig.view_name}`);
+        if (!achExplain.ok) {
+          console.error(`  - ${achievementViewConfig.view_name} EXPLAIN 失败: ${achExplain.error}`);
+          process.exit(1);
+        }
+        const achFile = join('../../database/generated', `${achievementViewConfig.view_name}.sql`);
+        writeFileSync(achFile, achSql + '\n');
+        console.log(`  产出: ${achievementViewConfig.view_name}`);
+      } catch (e) {
+        console.error(`  - ${achievementViewConfig.view_name} 生成失败: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
     } finally {
       client.release();
     }

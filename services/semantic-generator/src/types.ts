@@ -90,3 +90,21 @@ export interface ViewConfig {
   perm_skip_branch?: boolean;
   // true: 跳过 branch_nums 过滤（item 粒度聚合表无 branch_num 列，brands 过滤仍适用）
 }
+
+// ===== 达成视图配置（report_achievement_gen）：target×metric 矩阵（目标列表 + KPI）=====
+// 铁律：每指标的实际计算是"配置数据"（SQL 片段，引用 t=targets 别名），生成器只组装不写口径。
+// 生成器 achievements.ts 只做结构化组装（tgt 窗口 + metric CASE + snapshot + 率），无业务字面量。
+export interface AchievementCteConfig {
+  sql: string;   // CTE 体：SELECT t.id AS target_id, <actual> AS actual_value, <days> AS days FROM ... WHERE ... GROUP BY t.id
+}
+export interface AchievementMetricConfig {
+  data_ready: boolean;
+  cte: string;                 // 引用 ctes 里的 CTE 名
+  cost_sensitive?: boolean;    // actual 列按 can_see_cost 脱敏（CTE 内已处理时省略）
+}
+export interface AchievementViewConfig {
+  view_name: string;
+  target_level: string;        // 'total'（前端只消费 total 行）
+  ctes: Record<string, AchievementCteConfig>;
+  metrics: Record<string, AchievementMetricConfig>;
+}
