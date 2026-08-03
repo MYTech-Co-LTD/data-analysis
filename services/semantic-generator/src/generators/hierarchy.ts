@@ -1,6 +1,7 @@
 import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../types';
 import { astToSql, derivedExpr, classifyAst, type Ast, type AstCtx } from '../ast';
 import { statusInClause } from '../sql-util';
+import { permFilterFact, permFilterTarget } from './perm.js';
 
 /**
  * 层级视图生成器（T6：final SELECT + 各级 UNION ALL）
@@ -157,6 +158,7 @@ export function generateHierarchyView(
     const joins: string[] = [`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date`];
     const where: string[] = [];
     if (g.filter) where.push(g.filter);
+    where.push(permFilterFact('s'));
     if (useAssessed) {
       // 复合门店键 join dim_branch（禁 branch_num 单独 join）
       joins.push(`JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num`);
@@ -191,7 +193,7 @@ export function generateHierarchyView(
     }).join(' OR ');
 
     const joins: string[] = [];
-    const whereExtra: string[] = [`t.branch_num <> 'ALL'`];
+    const whereExtra: string[] = [`t.branch_num <> 'ALL'`, permFilterTarget('t')];
     if (useAssessed) {
       joins.push(`JOIN dim_branch db ON db.system_book_code = t.system_book_code AND db.branch_num = t.branch_num`);
       whereExtra.push(`is_assessed_war_zone(db.first_level_region)`);
@@ -299,7 +301,7 @@ export function generateHierarchyView(
   sel.push(`tgt.total_days`);
   sel.push(`tgt.days_elapsed`);
 
-  const whereParts = [`db.is_active`, `db.branch_num <> '99'`];
+  const whereParts = [`db.is_active`, `db.branch_num <> '99'`, permFilterFact('db')];
   if (useAssessed) whereParts.push(`is_assessed_war_zone(db.first_level_region)`);
 
   cteList.push(`leaf_rows AS (
@@ -351,7 +353,7 @@ export function generateHierarchyView(
         return src.source_filter ?? 'true';
       }).join(' OR ');
       const grainT2 = pgrain.map(g => `t.${g}`).join(', ');
-      const whereExtra: string[] = [`t.breakdown_level = '${p.target_breakdown}'`];
+      const whereExtra: string[] = [`t.breakdown_level = '${p.target_breakdown}'`, permFilterTarget('t')];
       // 考核过滤：targets 表 war_zone 列恒在（breakdown_level 为 war_zone/region_l2 的行均带 war_zone）
       if (useAssessed) whereExtra.push(`is_assessed_war_zone(t.war_zone)`);
       cteList.push(`${tgtCteName} AS (
@@ -474,6 +476,7 @@ function generateCategoryView(
   JOIN target_base tb ON d.biz_date BETWEEN tb.start_date AND tb.end_date
   WHERE (tb.system_book_code = 'ALL' OR d.system_book_code = tb.system_book_code)
     AND d.category_group IN (${categoryValues.map(c => `'${c}'`).join(', ')})
+    AND ${permFilterFact('d')}
   GROUP BY tb.target_id, d.category_group
 )`);
 
@@ -489,6 +492,7 @@ function generateCategoryView(
   JOIN target_base tb ON w.biz_date BETWEEN tb.start_date AND tb.end_date
   WHERE (tb.system_book_code = 'ALL' OR w.system_book_code = tb.system_book_code)
     AND w.category_group IN (${categoryValues.map(c => `'${c}'`).join(', ')})
+    AND ${permFilterFact('w')}
   GROUP BY tb.target_id, w.category_group
 )`);
 
