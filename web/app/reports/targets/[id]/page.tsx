@@ -30,7 +30,7 @@ export default async function TargetDashboard({
 
   const client = await getClient();
   const { data: totalRows } = await client.database
-    .from("report_achievement_v")
+    .from("report_achievement_gen")
     .select("*")
     .eq("target_id", targetId)
     .eq("target_level", "total")

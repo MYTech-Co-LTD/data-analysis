@@ -12,7 +12,7 @@ export interface TargetSummary {
 // 目标列表：DISTINCT total 行（一个目标 4 指标 → 取一行代表）
 export async function getTargetList(status?: "active"|"closed"): Promise<TargetSummary[]> {
   const client = await getClient();
-  let q = client.database.from("report_achievement_v").select("*").eq("target_level","total");
+  let q = client.database.from("report_achievement_gen").select("*").eq("target_level","total");
   if (status) q = q.eq("status", status);
   const { data, error } = await q.order("status").order("start_date",{ascending:false});
   if (error) throw error;
@@ -33,7 +33,7 @@ export async function getTargetList(status?: "active"|"closed"): Promise<TargetS
 // total 详情：该目标全指标 KPI 行
 export async function getTargetKpi(targetId: number) {
   const client = await getClient();
-  const { data, error } = await client.database.from("report_achievement_v")
+  const { data, error } = await client.database.from("report_achievement_gen")
     .select("*").eq("target_id", targetId).eq("target_level","total");
   if (error) throw error;
   return data ?? [];  // 每行一个 metric_code 的 KPI
