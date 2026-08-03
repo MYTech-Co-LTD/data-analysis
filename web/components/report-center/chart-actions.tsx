@@ -22,44 +22,48 @@ export async function exportImage(el: HTMLElement, filename: string) {
 }
 
 // 组件级操作条：Excel / 图片 / 分享。lucide 图标 + 纯文本（DESIGN 禁 emoji）。
+// 移动端（isMobile）只渲染 onImage（文案"分享图"），隐 Excel（企微 webview 下 xlsx 体验差）与分享链接
+// —— 遵循 DESIGN.md「移动端只生成分享图」。
 export function ChartActions({
   onExcel,
   onImage,
   onShare,
+  isMobile = false,
 }: {
   onExcel?: () => void;
   onImage?: () => void;
   onShare?: () => void;
+  isMobile?: boolean;
 }) {
   return (
     <div className="flex items-center gap-1 text-xs text-slate-400">
-      {onExcel && (
+      {!isMobile && onExcel && (
         <button
           onClick={onExcel}
           title="导出 Excel"
           className="flex items-center gap-1 hover:text-slate-700"
         >
-          <Download size={14} />
+          <Download size={14} strokeWidth={1.5} />
           <span>Excel</span>
         </button>
       )}
       {onImage && (
         <button
           onClick={onImage}
-          title="导出图片"
+          title={isMobile ? "生成分享图" : "导出图片"}
           className="flex items-center gap-1 hover:text-slate-700"
         >
-          <ImageIcon size={14} />
-          <span>图片</span>
+          <ImageIcon size={14} strokeWidth={1.5} />
+          <span>{isMobile ? "分享图" : "图片"}</span>
         </button>
       )}
-      {onShare && (
+      {!isMobile && onShare && (
         <button
           onClick={onShare}
           title="分享"
           className="flex items-center gap-1 hover:text-slate-700"
         >
-          <Share2 size={14} />
+          <Share2 size={14} strokeWidth={1.5} />
           <span>分享</span>
         </button>
       )}
