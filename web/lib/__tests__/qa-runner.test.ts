@@ -6,10 +6,19 @@ function makeDb(overrides: Record<string, unknown> = {}) {
   const inserted: unknown[] = [];
   const db = {
     rpc: vi.fn(async () => ({ data: [] })),
-    from: vi.fn((t: string) => ({
-      select: vi.fn(async () => ({ data: [], error: null })),
-      insert: vi.fn(async (rows: unknown[]) => { inserted.push(...(rows as unknown[])); return { data: rows, error: null }; }),
-    })),
+    from: vi.fn((t: string) => {
+      // 链式 thenable query builder（C5 会调 .select().eq().single()）
+      const qb = {
+        select: vi.fn(() => qb),
+        eq: vi.fn(() => qb),
+        single: vi.fn(() => qb),
+        order: vi.fn(() => qb),
+        limit: vi.fn(() => qb),
+        insert: vi.fn(async (rows: unknown[]) => { inserted.push(...(rows as unknown[])); return { data: rows, error: null }; }),
+        then: (resolve: (v: unknown) => void) => resolve({ data: [], error: null }),
+      };
+      return qb;
+    }),
     _inserted: inserted,
     ...overrides,
   };
@@ -42,8 +51,16 @@ describe('runQaChecks', () => {
   it('C2 视图查询报错记 error 不静默 pass', async () => {
     const db = makeDb({
       from: vi.fn((t: string) => {
-        if (t.endsWith('_qa')) return { select: vi.fn(async () => ({ data: undefined, error: 'relation does not exist' })) };
-        return { select: vi.fn(async () => ({ data: [], error: null })), insert: vi.fn(async (rows: unknown[]) => { (db as any)._inserted.push(...(rows as unknown[])); return { data: rows, error: null }; }) };
+        const qb = {
+          select: vi.fn(() => qb),
+          eq: vi.fn(() => qb),
+          single: vi.fn(() => qb),
+          order: vi.fn(() => qb),
+          limit: vi.fn(() => qb),
+          insert: vi.fn(async (rows: unknown[]) => { (db as any)._inserted.push(...(rows as unknown[])); return { data: rows, error: null }; }),
+          then: (resolve: (v: unknown) => void) => resolve(t.endsWith('_qa') ? { data: undefined, error: 'relation does not exist' } : { data: [], error: null }),
+        };
+        return qb;
       }),
     });
     const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);

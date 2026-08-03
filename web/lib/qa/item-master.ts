@@ -2,9 +2,9 @@
 // 商品主数据完整性守护：检测 delivery/wholesale 里不在 dim_item 的商品（新商品/采集遗漏），
 // 发现即自动触发商品档案采集（collectItems）+ 重算受影响的日聚合，杜绝"其他"漏算。
 // 铁律：口径单一来源（dim_item 主数据）；这是数据完整性守护（D 类检查），自动修复。
-import { collectItems } from "@/lib/collect-items";
-import { decodeCompanyId, getDateOffsetChina } from "@/lib/collect";
-import type { CheckResult, QaTrigger } from "@/lib/qa/types";
+import { collectItems } from '../collect-items';
+import { decodeCompanyId, getDateOffsetChina } from '../collect';
+import type { CheckResult, QaTrigger } from './types';
 
 const LOOKBACK_DAYS = 3;          // 检测最近 3 天的 delivery/wholesale
 const DUCKDB_URL = process.env.DUCKDB_URL || "http://duckdb:9000";
@@ -41,21 +41,26 @@ export async function runItemMasterCheck(opts: {
 
     try {
       // 近 N 天 delivery + wholesale 里 item_num 不在 dim_item 的商品
+      // 配送(transfer_detail)仅 3120 采集；64188 无配送文件，须跳过 delivery 分支（否则 glob 无文件报错）
       const dayFrom = getDateOffsetChina(-LOOKBACK_DAYS).replace(/-/g, "");
-      const unmappedSql = `SELECT DISTINCT t.item_num, t.pos_item_name
-FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/${companyId}/*/all.parquet', filename=true, union_by_name=true) t
-LEFT JOIN read_parquet('s3://lemeng-datasource/dims/dim_item.parquet', filename=true, union_by_name=true) di
-  ON di.system_book_code = '${companyId}' AND di.item_num = t.item_num
-WHERE substr(t.order_time,1,4)||substr(t.order_time,6,2)||substr(t.order_time,9,2) >= '${dayFrom}'
-  AND t.item_num IS NOT NULL AND di.item_num IS NULL
-UNION
-SELECT DISTINCT t.item_num, t.pos_item_name
+      const branches: string[] = [];
+      // wholesale：两品牌都有
+      branches.push(`SELECT DISTINCT t.item_num, t.pos_item_name
 FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/${companyId}/*/all.parquet', filename=true, union_by_name=true) t
 LEFT JOIN read_parquet('s3://lemeng-datasource/dims/dim_item.parquet', filename=true, union_by_name=true) di
   ON di.system_book_code = '${companyId}' AND di.item_num = t.item_num
 WHERE substr(t.audit_time,1,4)||substr(t.audit_time,6,2)||substr(t.audit_time,9,2) >= '${dayFrom}'
-  AND t.item_num IS NOT NULL AND di.item_num IS NULL`;
-      const unmapped = (await duck(unmappedSql)) as { item_num: string; pos_item_name: string }[];
+  AND t.item_num IS NOT NULL AND di.item_num IS NULL`);
+      // delivery：仅 3120（transfer_detail 只采 3120）
+      if (companyId === '3120') {
+        branches.push(`SELECT DISTINCT t.item_num, t.pos_item_name
+FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/3120/*/all.parquet', filename=true, union_by_name=true) t
+LEFT JOIN read_parquet('s3://lemeng-datasource/dims/dim_item.parquet', filename=true, union_by_name=true) di
+  ON di.system_book_code = '3120' AND di.item_num = t.item_num
+WHERE substr(t.order_time,1,4)||substr(t.order_time,6,2)||substr(t.order_time,9,2) >= '${dayFrom}'
+  AND t.item_num IS NOT NULL AND di.item_num IS NULL`);
+      }
+      const unmapped = (await duck(branches.join('\nUNION\n'))) as { item_num: string; pos_item_name: string }[];
 
       if (unmapped.length) {
         // 自动修复：触发商品档案采集 → 重算受影响日聚合
