@@ -9,23 +9,25 @@ export const C0_EPSILON = 0;   // 0 = 精确匹配（分毫不差）
 export async function runC0(
   src: DetailSource,
   day: string,
-  apiCount: number,        // 源 API 返回的总数；<0 = 源取数失败
-  libCount: number,        // 库内 parquet 行数
+  apiCount: number | string,   // 源 API 返回的总数（lemeng 返回字符串，须强转）；<0 = 源取数失败
+  libCount: number | string,   // 库内 parquet 行数
 ): Promise<CheckResult> {
-  let status: CheckResult['status'] = apiCount < 0 ? 'error' : 'pass';
+  const apiN = Number(apiCount);
+  const libN = Number(libCount);
+  let status: CheckResult['status'] = apiN < 0 ? 'error' : 'pass';
   let diff: number | null = null;
   let detail: unknown[] | null = null;
-  if (apiCount >= 0) {
-    if (libCount !== apiCount) {
+  if (apiN >= 0) {
+    if (libN !== apiN) {
       status = 'fail';
-      const verdict = libCount < apiCount ? 'missing' : 'dup-suspect';
-      detail = [{ day, api: apiCount, lib: libCount, verdict }];
-      diff = libCount - apiCount;
+      const verdict = libN < apiN ? 'missing' : 'dup-suspect';
+      detail = [{ day, api: apiN, lib: libN, verdict }];
+      diff = libN - apiN;
     } else {
       diff = 0;
     }
   } else {
-    detail = [{ day, api: apiCount, lib: libCount, verdict: 'error' }];
+    detail = [{ day, api: apiN, lib: libN, verdict: 'error' }];
   }
   return { run_id: '', trigger: 'manual', check_type: 'C0', check_name: src.name, status, diff, detail };
 }

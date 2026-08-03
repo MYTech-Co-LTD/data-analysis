@@ -49,4 +49,11 @@ describe('runC0', () => {
     expect(r.diff).toBe(-1);
     expect(r.detail![0]).toMatchObject({ verdict: 'missing' });
   });
+
+  it('字符串 api（lemeng 返字符串 count）与数字 lib 相等 → pass（强转）', async () => {
+    const r = await runC0(src, '2026-07-28', '12496', 12496);
+    expect(r.status).toBe('pass');
+    expect(r.diff).toBe(0);
+    expect(r.detail).toBeNull();
+  });
 });
