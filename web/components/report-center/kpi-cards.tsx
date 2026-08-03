@@ -1,6 +1,7 @@
 "use client";
 
 import { METRICS, METRIC_ORDER, MetricCode } from "@/lib/report-center/metric-source";
+import { statusToZh } from "@/lib/report-center/status-i18n";
 
 interface KpiRow {
   metric_code: MetricCode;
@@ -72,8 +73,10 @@ function KpiTooltip({ target, actual, rate }: { target: string; actual: string; 
 // hover 显示 tooltip：总目标、总完成、完成率。
 export function KpiCards({
   rows,
+  isMobile = false,
 }: {
   rows: KpiRow[];
+  isMobile?: boolean;
 }) {
   if (rows.length === 0) {
     return (
@@ -101,7 +104,7 @@ export function KpiCards({
                   r.data_status,
                 )}`}
               >
-                {r.data_status}
+                {isMobile ? statusToZh(r.data_status) : r.data_status}
               </span>
             </div>
             <div
@@ -115,12 +118,14 @@ export function KpiCards({
               {fmtWan(r.actual_value ?? 0)} / {fmtWan(r.target_value)} · 进度{" "}
               {(progress * 100).toFixed(0)}%
             </div>
-            {/* Tooltip */}
-            <KpiTooltip
-              target={fmtCurrency(r.target_value)}
-              actual={fmtCurrency(r.actual_value ?? 0)}
-              rate={fmtPercent(r.achievement_rate ?? 0)}
-            />
+            {/* Tooltip（移动端隐藏 hover tooltip） */}
+            {!isMobile && (
+              <KpiTooltip
+                target={fmtCurrency(r.target_value)}
+                actual={fmtCurrency(r.actual_value ?? 0)}
+                rate={fmtPercent(r.achievement_rate ?? 0)}
+              />
+            )}
           </div>
         );
       })}
