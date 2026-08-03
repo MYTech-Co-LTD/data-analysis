@@ -14,10 +14,10 @@ cte0 AS (
     MAX(s.client_name) AS client_name
   FROM report_daily_wholesale_customer s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.latest_day
-  WHERE s.system_book_code = '3120'
+  WHERE s.system_book_code = '3120' AND claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, s.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, s.branch_num::text)
   GROUP BY tgt.target_id, s.client_code, s.biz_date
 )
-SELECT cte0.target_id,
+SELECT cte0.target_id AS target_id,
   cte0.client_code AS client_code,
   cte0.biz_date AS biz_date,
   cte0.client_name AS client_name,

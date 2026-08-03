@@ -10,9 +10,12 @@
  * GUC 来源：迁移 114 pgrst_pre_request 把 JWT claims 扁平化为 request.jwt.claims.<key>。
  */
 
-/** actual CTE（fact 表）行过滤：品牌 + 门店双维度 */
-export function permFilterFact(alias: string): string {
-  return `claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, ${alias}.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, ${alias}.branch_num::text)`;
+/** actual CTE（fact 表）行过滤：品牌 + 门店双维度
+ *  skipBranch=true 时仅过滤品牌（item 粒度聚合表无 branch_num 列） */
+export function permFilterFact(alias: string, skipBranch = false): string {
+  const brand = `claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, ${alias}.system_book_code)`;
+  if (skipBranch) return brand;
+  return `${brand} AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, ${alias}.branch_num::text)`;
 }
 
 /** targets CTE 行过滤：'ALL' 汇总行（总部/总目标）恒可见，门店行按 claim 过滤 */

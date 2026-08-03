@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync } from 'fs';
+import { fileURLToPath } from 'url';
 import { generateTier1View } from '../src/generators/tier1';
 import { generateHierarchyView } from '../src/generators/hierarchy';
 import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../src/types';
 
 const BRANDS_PRED = `claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb`;
 const BRANCH_PRED = `claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb`;
+
+const GEN_DIR = fileURLToPath(new URL('../../../database/generated', import.meta.url));
 
 // 照 tier1.test.ts fixture 字段名（formula_ast/note/levels/target_metric_codes 补齐 types.ts 必填字段）
 const mockMetrics: Metric[] = [
@@ -175,4 +179,24 @@ describe('权限收口：hierarchy 行级过滤注入', () => {
     const brandsCount = sql.split(BRANDS_PRED).length - 1;
     expect(brandsCount).toBeGreaterThanOrEqual(2); // delivery + wholesale 两个 actual CTE
   });
+});
+
+describe('权限收口契约：所有提交产物必含行级过滤', () => {
+  const files = readdirSync(GEN_DIR).filter(f => f.endsWith('.sql'));
+  // item 粒度聚合表无 branch_num 列，仅 brands 过滤（perm_skip_branch=true）
+  const skipBranch = new Set(['report_item_breakdown_gen.sql']);
+
+  it('生成视图不少于 8 个', () => {
+    expect(files.length).toBeGreaterThanOrEqual(8);
+  });
+
+  for (const f of files) {
+    it(`${f} 含 brands${skipBranch.has(f) ? '（item 无 branch_num，仅 brands）' : ' + branch_nums'} 过滤`, () => {
+      const sql = readFileSync(`${GEN_DIR}/${f}`, 'utf8');
+      expect(sql).toContain(BRANDS_PRED);
+      if (!skipBranch.has(f)) {
+        expect(sql).toContain(BRANCH_PRED);
+      }
+    });
+  }
 });

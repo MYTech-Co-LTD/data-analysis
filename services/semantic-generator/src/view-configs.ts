@@ -190,6 +190,7 @@ export const itemBreakdownView: ViewConfig = {
     extra: ['item_name', 'category_name', 'top_category', 'item_brand', 'category_group'],
     lateral_pick: { match: 'item_num = s.item_num', prefer_own: 'system_book_code = s.system_book_code' },
   },
+  perm_skip_branch: true,  // item 粒度聚合表无 branch_num 列（仅 brands 过滤）
 };
 
 /**

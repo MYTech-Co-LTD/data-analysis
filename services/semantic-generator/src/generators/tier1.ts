@@ -155,7 +155,7 @@ export function generateTier1View(
       const joins: string[] = [];
       const where: string[] = [];
       if (g.filter) where.push(g.filter);
-      where.push(permFilterFact('s'));
+      where.push(permFilterFact('s', config.perm_skip_branch ?? false));
       if (useTargetWindow) {
         joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND ${dateUpper}`);
       }
@@ -303,7 +303,7 @@ export function generateTier1View(
       const dimAlias = config.dim_grain?.table.split(' ')[1];
       const grainCol = config.dim_grain ? `${dimAlias}.${config.dim_grain.key}` : `s.${dimKey}`;
       if (g.filter) where.push(g.filter);
-      where.push(permFilterFact('s'));
+      where.push(permFilterFact('s', config.perm_skip_branch ?? false));
       if (config.dim_grain) {
         if (config.dim_grain.lateral_pick) {
           // 跨账套回退匹配：本账套优先、跨品牌回退（如 64188 批发卖 3120 货），LIMIT 1 防 item_num 重叠翻倍

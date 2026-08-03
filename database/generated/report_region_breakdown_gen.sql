@@ -14,7 +14,7 @@ leaf_act_0 AS (
   FROM report_daily_sales s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE is_assessed_war_zone(db.first_level_region)
+  WHERE claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, s.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, s.branch_num::text) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code, s.branch_num
 ),
 leaf_act_1 AS (
@@ -24,7 +24,7 @@ leaf_act_1 AS (
   FROM report_daily_delivery s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE is_assessed_war_zone(db.first_level_region)
+  WHERE claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, s.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, s.branch_num::text) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code, s.branch_num
 ),
 leaf_act_2 AS (
@@ -34,7 +34,7 @@ leaf_act_2 AS (
   FROM report_daily_wholesale_customer s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE s.system_book_code = '64188' AND is_assessed_war_zone(db.first_level_region)
+  WHERE s.system_book_code = '64188' AND claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, s.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, s.branch_num::text) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code, s.branch_num
 ),
 leaf_tgt AS (
@@ -44,7 +44,7 @@ leaf_tgt AS (
   FROM targets t
   JOIN target_metric_values tmv ON tmv.target_id = t.id AND (metric_code='sale' OR metric_code='delivery')
   JOIN dim_branch db ON db.system_book_code = t.system_book_code AND db.branch_num = t.branch_num
-  WHERE t.breakdown_level = 'store' AND t.branch_num <> 'ALL' AND is_assessed_war_zone(db.first_level_region)
+  WHERE t.breakdown_level = 'store' AND t.branch_num <> 'ALL' AND (t.branch_num = 'ALL' OR claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, t.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, t.branch_num::text)) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY t.parent_target_id, t.system_book_code, t.branch_num
 ),
 leaf_rows AS (
@@ -73,7 +73,7 @@ leaf_rows AS (
   LEFT JOIN leaf_act_1 a1 ON a1.target_id = tgt.target_id AND a1.system_book_code = db.system_book_code AND a1.branch_num = db.branch_num
   LEFT JOIN leaf_act_2 a2 ON a2.target_id = tgt.target_id AND a2.system_book_code = db.system_book_code AND a2.branch_num = db.branch_num
   LEFT JOIN leaf_tgt a3 ON a3.target_id = tgt.target_id AND a3.system_book_code = db.system_book_code AND a3.branch_num = db.branch_num
-  WHERE db.is_active AND db.branch_num <> '99' AND is_assessed_war_zone(db.first_level_region)
+  WHERE db.is_active AND db.branch_num <> '99' AND claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, db.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, db.branch_num::text) AND is_assessed_war_zone(db.first_level_region)
 ),
 region_act AS (
   SELECT target_id, war_zone,
@@ -93,7 +93,7 @@ region_tgt AS (
     MAX(tmv.target_value) FILTER (WHERE metric_code='delivery') AS delivery_target
   FROM targets t
   JOIN target_metric_values tmv ON tmv.target_id = t.id AND (metric_code='sale' OR metric_code='delivery')
-  WHERE t.breakdown_level = 'war_zone' AND is_assessed_war_zone(t.war_zone)
+  WHERE t.breakdown_level = 'war_zone' AND (t.branch_num = 'ALL' OR claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, t.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, t.branch_num::text)) AND is_assessed_war_zone(t.war_zone)
   GROUP BY t.parent_target_id, t.war_zone
 ),
 sub_region_act AS (
@@ -114,7 +114,7 @@ sub_region_tgt AS (
     MAX(tmv.target_value) FILTER (WHERE metric_code='delivery') AS delivery_target
   FROM targets t
   JOIN target_metric_values tmv ON tmv.target_id = t.id AND (metric_code='sale' OR metric_code='delivery')
-  WHERE t.breakdown_level = 'region_l2' AND is_assessed_war_zone(t.war_zone)
+  WHERE t.breakdown_level = 'region_l2' AND (t.branch_num = 'ALL' OR claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, t.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, t.branch_num::text)) AND is_assessed_war_zone(t.war_zone)
   GROUP BY t.parent_target_id, t.war_zone, t.region_l2
 )
 SELECT
