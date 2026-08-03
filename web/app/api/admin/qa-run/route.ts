@@ -7,7 +7,7 @@ import { runQaChecks } from '@/lib/qa-runner';
 import { runC0 } from '@/lib/qa/c0';
 import { duckQuery } from '@/lib/qa/duck';
 import { notifyWecom } from '@/lib/notify';
-import { countRetailApi, decodeCompanyId } from '@/lib/collect';
+import { countRetailApi, decodeCompanyId, getDateOffsetChina } from '@/lib/collect';
 import { countDeliveryApi } from '@/lib/collect-delivery';
 import { countWholesaleApi } from '@/lib/collect-wholesale';
 import detailSources from '../../../../../services/semantic-generator/src/detail-sources.json';
@@ -53,9 +53,9 @@ export async function POST(req: NextRequest) {
       const authToken = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
 
       for (let i = C0_DAYS - 1; i >= 0; i--) {
-        const d = new Date(); d.setDate(d.getDate() - i);
-        const dayIso = d.toISOString().slice(0, 10);
+        const dayIso = getDateOffsetChina(-i);
         const dayCompact = dayIso.replace(/-/g, '');
+        const checkName = `${src.name}:${dayIso}`;
         let apiCount = -1;
         let libCount = 0;
         try {
@@ -74,8 +74,8 @@ export async function POST(req: NextRequest) {
           }
         } catch (e) { apiCount = -1; }
         const r = await runC0(src, dayIso, apiCount, libCount);
-        results.push({ ...r, run_id: runId, trigger, check_name: src.name });
-        await client.database.from('qa_logs').insert([{ ...r, run_id: runId, trigger, check_name: src.name }]).then((x) => x.error && console.error('[qa-run] qa_logs 写入失败', x.error));
+        results.push({ ...r, run_id: runId, trigger, check_name: checkName });
+        await client.database.from('qa_logs').insert([{ ...r, run_id: runId, trigger, check_name: checkName }]).then((x) => x.error && console.error('[qa-run] qa_logs 写入失败', x.error));
       }
     } catch (e) {
       results.push({ run_id: runId, trigger, check_type: 'C0', check_name: src.name, status: 'error', diff: null, detail: [{ error: String(e instanceof Error ? e.message : e) }] });

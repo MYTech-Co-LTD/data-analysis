@@ -197,7 +197,7 @@ export function getDateOffsetChina(offsetDays: number): string {
 // 仅查 count（不采集），scheduler 对账驱动用：返 API 指定 dates 的总数
 export async function countRetailApi(authToken: string, branchNums: number[], branchNumsStr: string, dates: string[]): Promise<number> {
   const countResult = await callLemengApi(ENDPOINT_RETAIL_COUNT, authToken, buildBody(branchNums, dates, 1, 200), branchNumsStr);
-  return (countResult.ok && countResult.data?.code === 0) ? (countResult.data.result || 0) : 0;
+  return (countResult.ok && countResult.data?.code === 0) ? (countResult.data.result || 0) : -1;
 }
 
 // ===== 单次采集 + 转换 =====
