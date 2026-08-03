@@ -3,7 +3,7 @@
 // 商品 TOP 4 独立看板：销售组（月度+日）+ 出库组（月度+日）。
 // 每看板独立卡片：表头 + TOP20 + 3 行合计（TOP20小计/总合计/占比）。
 // 命名：月榜用目标日期范围（{startM}月{startD}日-{endM}月{endD}日），日榜用选中日（{M}月{D}号/日）。
-// 销售看板 4 列（序号/商品/金额/毛利），出库看板 5 列（+毛利率）。
+// 销售看板 5 列（序号/商品/金额/毛利/毛利率），出库看板 5 列（同构）。
 // 日榜日期选择器放日榜卡片标题旁，销售/出库共用 day state（改一个两个都变）。
 // DESIGN.md：tabular-nums + 类 Excel 交叉表 + chart-actions 三动作 + 点商品弹详情抽屉。
 import { useRef, useState } from "react";
@@ -52,6 +52,7 @@ const SALE_COLS: ColDef[] = [
   { key: "item_name", label: "商品名称", align: "left" },
   { key: "amount", label: "销售金额", align: "right" },
   { key: "profit", label: "销售毛利", align: "right" },
+  { key: "margin", label: "毛利率", align: "right" },
 ];
 const OUTBOUND_COLS: ColDef[] = [
   { key: "idx", label: "序号", align: "left", width: "w-8" },
@@ -338,12 +339,13 @@ export function SaleTopBoards({
   const [drawer, setDrawer] = useState<string | null>(null);
 
   const handleExcel = () => {
-    const head = ["排名", "商品", "金额", "毛利"];
+    const head = ["排名", "商品", "金额", "毛利", "毛利率"];
     const monthBody = monthBoard.rows.map((r, i) => [
       i + 1,
       r.item_name,
       r.amount,
       r.profit,
+      r.amount > 0 && r.profit > 0 ? fmtPct(r.profit / r.amount) : "-",
     ]);
     exportExcel(
       [
