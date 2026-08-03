@@ -68,7 +68,8 @@ export async function POST(req: NextRequest) {
         let companyId = 'unknown';
         try { companyId = decodeCompanyId(authToken); } catch {}
 
-        for (let i = C0_DAYS - 1; i >= 0; i--) {
+        // C0 窗口 = [昨天-(C0_DAYS-1), 昨天]：不含今天（今天数据未采集完，count<api 恒误报 missing）
+        for (let i = C0_DAYS; i >= 1; i--) {
           const dayIso = getDateOffsetChina(-i);
           const dayCompact = dayIso.replace(/-/g, '');
           const checkName = `${src.name}:${companyId}:${dayIso}`;

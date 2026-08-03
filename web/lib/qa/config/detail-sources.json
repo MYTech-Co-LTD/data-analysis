@@ -21,7 +21,7 @@
     "function_slug": "collect-delivery",
     "glob": "s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet",
     "glob_date_format": "compact",
-    "natural_key": ["pos_order_num", "item_num", "response_branch_num"],
+    "natural_key": ["pos_order_num", "item_num", "response_branch_num", "out_amount", "lot_number"],
     "agg_table": "report_daily_delivery",
     "agg_key": ["system_book_code", "branch_num", "biz_date", "category_group"],
     "agg_metric": [
@@ -38,7 +38,7 @@
     "function_slug": "collect-wholesale",
     "glob": "s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet",
     "glob_date_format": "compact",
-    "natural_key": ["pos_order_num", "item_num", "client_code"],
+    "natural_key": ["pos_order_num", "item_num", "client_code", "wholesale_num", "lot_number"],
     "agg_table": "report_daily_wholesale",
     "agg_key": ["system_book_code", "branch_num", "biz_date", "category_group"],
     "agg_metric": [
