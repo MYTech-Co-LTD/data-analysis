@@ -149,9 +149,11 @@ export interface DeliveryCollectResult {
 export interface DeliveryCollectOptions { mode?: 'full' | 'incremental'; watermarkLastCount?: number; }
 
 // 仅查 count（不采集），scheduler 对账驱动用
+// ⚠️ 乐檬返 code 是字符串 "0"/"-1"（见 collectDeliveryOnce 的 String(code) 注释）——必须 String 比较，
+//    严格 `=== 0` 恒 false 致 count 恒失败（实测 2026-08-03：旧代码一直静默返 0，reconcile 用 lib>=0 掩盖）
 export async function countDeliveryApi(authToken: string, distributionBranch: number, branchNumsStr: string, dtFrom: string, dtTo: string): Promise<number> {
   const r = await callLemengApi(ENDPOINT_DETAIL, authToken, buildBody(distributionBranch, dtFrom, dtTo, 0, 1), branchNumsStr);
-  return (r.ok && r.data?.code === 0) ? (r.data?.data?.count || 0) : -1;
+  return (r.ok && String(r.data?.code) === '0') ? (r.data?.data?.count || 0) : -1;
 }
 
 // 单次采集：首页拿 count + 预热 → offset 分页拉全 → 落 Parquet

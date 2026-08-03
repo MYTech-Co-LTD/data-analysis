@@ -40,6 +40,13 @@ describe('runC0', () => {
     expect(r.status).toBe('error');
     expect(r.diff).toBeNull();
     expect(r.detail![0]).toMatchObject({ verdict: 'error' });
-    expect(C0_EPSILON).toBe(0.1);
+    expect(C0_EPSILON).toBe(0);  // 分毫不差：精确匹配
+  });
+
+  it('missing: 库比源少 1 行也 fail（分毫不差）', async () => {
+    const r = await runC0(src, '2026-07-28', 100, 99);
+    expect(r.status).toBe('fail');
+    expect(r.diff).toBe(-1);
+    expect(r.detail![0]).toMatchObject({ verdict: 'missing' });
   });
 });
