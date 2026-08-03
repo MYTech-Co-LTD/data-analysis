@@ -195,6 +195,7 @@ app.post("/transform", async (req, res) => {
       source = 'unknown',
       partition_by = [],
       dedupe_key = [],
+      dedupe_exclude = [],
       required_fields = [],
       output_format = 'parquet',
       compression = 'zstd',
@@ -235,9 +236,14 @@ app.post("/transform", async (req, res) => {
     }
 
     // 去重：dedupe_key=['*'] 按整行去重(SELECT DISTINCT *)，仅去除完全相同的真重复；
+    //       dedupe_exclude 配合 ['*'] 先排除列再 DISTINCT（如 lemeng 分页每次重生成 id → EXCLUDE(id) 才是真实业务行）；
     //       否则按指定字段 DISTINCT ON；dedupe_key=[] 不去重
     if (dedupe_key.length > 0 && dedupe_key[0] === '*') {
-      await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM temp_raw");
+      if (dedupe_exclude.length > 0) {
+        await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * EXCLUDE(${dedupe_exclude.join(', ')}) FROM temp_raw`);
+      } else {
+        await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM temp_raw");
+      }
     } else if (dedupe_key.length > 0) {
       const keyCols = dedupe_key.join(', ');
       await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT ON (${keyCols}) * FROM temp_raw ORDER BY ${keyCols}`);
@@ -337,6 +343,7 @@ app.post("/merge", async (req, res) => {
       source = 'unknown',
       partition_by = [],
       dedupe_key = [],
+      dedupe_exclude = [],
       required_fields = [],
       output_format = 'parquet',
       compression = 'zstd',
@@ -400,8 +407,13 @@ app.post("/merge", async (req, res) => {
     }
 
     // 5. 去重：dedupe_key=['*'] 按整行去重(SELECT DISTINCT *)，仅去除完全相同的真重复
+    //    dedupe_exclude 配合 ['*'] 先排除列再 DISTINCT（lemeng 分页 id 每次重生成 → EXCLUDE(id)）
     if (dedupe_key.length > 0 && dedupe_key[0] === '*') {
-      await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM combined");
+      if (dedupe_exclude.length > 0) {
+        await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * EXCLUDE(${dedupe_exclude.join(', ')}) FROM combined`);
+      } else {
+        await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM combined");
+      }
     } else if (dedupe_key.length > 0) {
       const keyCols = dedupe_key.join(', ');
       await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT ON (${keyCols}) * FROM combined ORDER BY ${keyCols}`);

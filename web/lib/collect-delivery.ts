@@ -246,7 +246,7 @@ export async function collectDeliveryOnce(
         const duckRes = await fetch(`${DUCKDB_URL}${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY },
-          body: JSON.stringify({ records: recs, config: { date: bizday, source: 'lemeng', partition_by: [], dedupe_key: ['*'], required_fields: ['pos_order_num', 'item_num', 'response_branch_num'], output_format: 'parquet', compression: 'zstd', base_path: `lemeng/transfer_detail/${companyId}/${bizday}` } })
+          body: JSON.stringify({ records: recs, config: { date: bizday, source: 'lemeng', partition_by: [], dedupe_key: ['*'], dedupe_exclude: ['id'], required_fields: ['pos_order_num', 'item_num', 'response_branch_num'], output_format: 'parquet', compression: 'zstd', base_path: `lemeng/transfer_detail/${companyId}/${bizday}` } })
         });
         if (!duckRes.ok) throw new Error(`DuckDB ${action} failed (${bizday}): ${duckRes.status} ${await duckRes.text()}`);
         const dj = await duckRes.json();
