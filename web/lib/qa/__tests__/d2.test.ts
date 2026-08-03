@@ -19,4 +19,11 @@ describe('runD2', () => {
     const db = { rpc: async () => ({ data: undefined, error: { message: 'boom' } }) } as any;
     await expect(runD2(db, retail)).rejects.toThrow('qa_d2_dup_rows');
   });
+
+  it('兼容 rpc 适配器裸数组返回（SETOF RPC 的 PostgREST 裸数组形态）', async () => {
+    const retail = detailSources.find((s) => s.name === 'retail')!;
+    const db = { rpc: async () => [{ dup_key: '3120|1|2026-07-28', cnt: 2 }] } as any;
+    const { dupRows } = await runD2(db, retail);
+    expect(dupRows).toEqual([{ dup_key: '3120|1|2026-07-28', cnt: 2 }]);
+  });
 });

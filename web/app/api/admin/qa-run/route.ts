@@ -31,9 +31,14 @@ export async function POST(req: NextRequest) {
 
   const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
   const db = {
-    rpc: (fn: string, body: Record<string, unknown>) => fetch(`${INSFORGE_API_BASE}/rpc/${fn}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
-    }).then((r) => r.json()),
+    rpc: async (fn: string, body: Record<string, unknown>) => {
+      const r = await fetch(`${INSFORGE_API_BASE}/rpc/${fn}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
+      });
+      const json = await r.json();
+      if (!r.ok) return { error: json };
+      return { data: json };
+    },
     from: (t: string) => client.database.from(t),
   } as any;
   const duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY, sql);
