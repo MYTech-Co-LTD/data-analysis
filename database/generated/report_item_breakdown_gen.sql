@@ -51,7 +51,7 @@ SELECT COALESCE(cte0.target_id, cte1.target_id) AS target_id,
   cte1.delivery_amount AS delivery_amount,
   CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN cte1.delivery_profit END AS delivery_profit,
   cte1.wholesale_amount AS wholesale_amount,
-  cte1.wholesale_profit AS wholesale_profit,
+  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN cte1.wholesale_profit END AS wholesale_profit,
   COALESCE((COALESCE(cte1.delivery_amount, 0) + COALESCE(cte1.wholesale_amount, 0)), 0) AS outbound_amount,
   CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE((COALESCE(cte1.delivery_profit, 0) + COALESCE(cte1.wholesale_profit, 0)), 0) END AS outbound_profit
 FROM cte0
