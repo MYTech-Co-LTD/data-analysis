@@ -7,6 +7,7 @@ import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 interface BrandMetricTableProps {
   rows: BrandMetricRow[];
   targetMonth?: number;
+  isMobile?: boolean;
 }
 
 // 金额万化（≥10000 → X.X万 else 整数），¥ 前缀；NULL → "—"
@@ -32,7 +33,7 @@ function rateColor(r: number | null): string {
 
 // 品牌×指标表：3 行（熊喵/品品甜/合计）。完成率三色，合计行高亮。
 // 镜像 category-summary.tsx 结构/样式 + chart-actions 导出。
-export function BrandMetricTable({ rows, targetMonth }: BrandMetricTableProps) {
+export function BrandMetricTable({ rows, targetMonth, isMobile = false }: BrandMetricTableProps) {
   const tableRef = useRef<HTMLDivElement>(null);
   const title = `${targetMonth ?? ""}月品牌×指标`;
 
@@ -80,10 +81,11 @@ export function BrandMetricTable({ rows, targetMonth }: BrandMetricTableProps) {
           onExcel={handleExcel}
           onImage={handleImage}
           onShare={handleShare}
+          isMobile={isMobile}
         />
       </div>
       <div ref={tableRef} className="overflow-x-auto">
-        <table className="w-full min-w-[640px] text-xs">
+        <table className="w-full text-xs">
           <thead className="bg-slate-50 text-slate-500">
             <tr className="sticky top-0 z-10 bg-slate-50">
               <th className="px-3 py-2 text-left font-medium">品牌</th>

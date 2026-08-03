@@ -21,6 +21,7 @@ interface WholesaleDailyTableProps {
   startDate: string;
   endDate: string;
   targetId: number;
+  isMobile?: boolean;
 }
 
 // 金额格式化：≥10000 用「X.X万」，否则整数，¥ 前缀（与 item-top-boards 对齐）
@@ -47,6 +48,7 @@ export function WholesaleDailyTable({
   startDate,
   endDate,
   targetId,
+  isMobile = false,
 }: WholesaleDailyTableProps) {
   const tableRef = useRef<HTMLDivElement>(null);
 
@@ -140,9 +142,9 @@ export function WholesaleDailyTable({
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-700">{title}</h3>
-        <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} />
+        <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} isMobile={isMobile} />
       </div>
-      <div ref={tableRef} className="max-h-[28rem] overflow-auto">
+      <div ref={tableRef} className="overflow-x-auto">
         <table className="w-full text-xs tabular-nums">
           <thead className="bg-slate-50 text-slate-500">
             <tr className="sticky top-0 z-10 bg-slate-50">
@@ -208,7 +210,7 @@ export function WholesaleDailyTable({
                             暂无客户明细
                           </div>
                         ) : (
-                          <table className="ml-6 w-[calc(100%-1.5rem)] text-xs tabular-nums">
+                          <table className="ml-4 w-full text-xs tabular-nums">
                             <thead className="text-[11px] text-slate-500">
                               <tr className="border-b border-slate-200">
                                 <th className="px-2 py-1.5 text-left font-medium">
