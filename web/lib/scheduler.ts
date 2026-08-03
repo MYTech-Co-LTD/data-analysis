@@ -12,7 +12,7 @@ import { collectBranches } from './collect-branches';
 import { notifyWecom } from './notify';
 import { runServiceDownBucket, runCollectTokenBucket, runHourlyBucket, runDailyBucket } from './monitor/runtime';
 import { runQaChecks } from './qa-runner';
-import detailSources from '../../services/semantic-generator/src/detail-sources.json';
+import detailSources from './qa/config/detail-sources.json';
 import { duckQuery } from './qa/duck';
 import { buildDayGlob } from './qa/d1';
 import type { DetailSource } from './qa/types';

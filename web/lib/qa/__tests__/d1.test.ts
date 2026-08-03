@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildD1Sql, buildDayGlob } from '../d1';
-import detailSources from '../../../../services/semantic-generator/src/detail-sources.json';
+import detailSources from '../config/detail-sources.json';
 import type { DetailSource } from '../types';
 
 describe('buildD1Sql', () => {

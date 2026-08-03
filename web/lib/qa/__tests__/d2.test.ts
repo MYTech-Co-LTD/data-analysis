@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { runD2 } from '../d2';
-import detailSources from '../../../../services/semantic-generator/src/detail-sources.json';
+import detailSources from '../config/detail-sources.json';
 import type { DetailSource } from '../types';
 
 describe('runD2', () => {

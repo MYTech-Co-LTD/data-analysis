@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runQaChecks } from '../qa-runner';
-import detailSources from '../../../services/semantic-generator/src/detail-sources.json';
+import detailSources from '../qa/config/detail-sources.json';
 
 function makeDb(overrides: Record<string, unknown> = {}) {
   const inserted: unknown[] = [];

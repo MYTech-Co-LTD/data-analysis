@@ -10,7 +10,7 @@ import { notifyWecom } from '@/lib/notify';
 import { countRetailApi, decodeCompanyId, getDateOffsetChina } from '@/lib/collect';
 import { countDeliveryApi } from '@/lib/collect-delivery';
 import { countWholesaleApi } from '@/lib/collect-wholesale';
-import detailSources from '../../../../../services/semantic-generator/src/detail-sources.json';
+import detailSources from '@/lib/qa/config/detail-sources.json';
 import type { DetailSource, CheckResult } from '@/lib/qa/types';
 
 const DUCKDB_URL = process.env.DUCKDB_URL || 'http://duckdb:9000';

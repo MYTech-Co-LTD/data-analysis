@@ -3,8 +3,8 @@
 // 依赖注入 db(postgrest)/duck(duckdb HTTP)，web route 与 scheduler 共用。
 import { runD1 } from './qa/d1';
 import { runD2 } from './qa/d2';
-import detailSources from '../../services/semantic-generator/src/detail-sources.json';
-import qaChecks from '../../services/semantic-generator/src/qa-checks.json';
+import detailSources from './qa/config/detail-sources.json';
+import qaChecks from './qa/config/qa-checks.json';
 import type { DetailSource, ViewAssertion, CheckResult, CheckType, QaTrigger } from './qa/types';
 
 const DUCK_TOLERANCE = 0.01;
