@@ -60,7 +60,21 @@ LEFT JOIN read_parquet('s3://lemeng-datasource/dims/dim_item.parquet', filename=
 WHERE substr(t.order_time,1,4)||substr(t.order_time,6,2)||substr(t.order_time,9,2) >= '${dayFrom}'
   AND t.item_num IS NOT NULL AND di.item_num IS NULL`);
       }
-      const unmapped = (await duck(branches.join('\nUNION\n'))) as { item_num: string; pos_item_name: string }[];
+      let unmapped: { item_num: string; pos_item_name: string }[] = [];
+      try {
+        unmapped = (await duck(branches.join('\nUNION\n'))) as { item_num: string; pos_item_name: string }[];
+      } catch (e) {
+        // 品牌无 delivery/wholesale 数据源（如 64188 只是外部客户，调拨/批发只采 3120）→ 无可查，记 PASS
+        const msg = String(e instanceof Error ? e.message : e);
+        if (msg.includes('No files found')) {
+          results.push({
+            run_id: runId, trigger, check_type: 'C5', check_name: `item_master:${companyId}`,
+            status: 'pass', diff: 0, detail: null,
+          });
+          continue;
+        }
+        throw e;
+      }
 
       if (unmapped.length) {
         // 自动修复：触发商品档案采集 → 重算受影响日聚合
