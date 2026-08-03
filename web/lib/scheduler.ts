@@ -11,6 +11,10 @@ import { collectItems, CollectItemsResult } from './collect-items';
 import { collectBranches } from './collect-branches';
 import { notifyWecom } from './notify';
 import { runServiceDownBucket, runCollectTokenBucket, runHourlyBucket, runDailyBucket } from './monitor/runtime';
+import { runQaChecks } from './qa-runner';
+import detailSources from '../../services/semantic-generator/src/detail-sources.json';
+import { duckQuery } from './qa/duck';
+import type { DetailSource } from './qa/types';
 
 const INSFORGE_API_BASE = process.env.INSFORGE_API_BASE!;
 const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
@@ -90,6 +94,7 @@ export async function ensureSchedulerInitialized(): Promise<boolean> {
   // 通讯录全量兜底（平台基础设施，独立于 collect_tasks；先注册，不依赖采集任务查询结果/是否为空）
   registerDailyReconcileJob();
   registerDailySourceReconcileJob();
+  registerDailyQaJob();
   registerContactSyncJob();
   registerCarryDimsJob();
   registerDimCustomerJob();
@@ -218,6 +223,27 @@ async function triggerCompute(client: any, dates: string[], taskId: string) {
       console.log(`[scheduler] /compute ${r.type} ${r.dateFrom}~${r.dateTo}: ${rowsWritten} rows`);
     }
   }
+}
+
+// L4 数据质量巡检执行器（Task 9）：DB(postgrest rpc+from) + duck(duckdb HTTP) 双适配器，
+// 调 runQaChecks 跑 D1/D2/C2；失败推企微告警。trigger: 'cron' 每日 09:15 全量 / 'collect' 采集后按源 D1。
+async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFrom?: string, dateTo?: string) {
+  const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
+  const db = {
+    rpc: (fn: string, body: Record<string, unknown>) => fetch(`${POSTGREST_URL}/rpc/${fn}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
+    }).then((r) => r.json()),
+    from: (t: string) => client.database.from(t),
+  } as any;
+  const duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql);
+  const runId = `${trigger}-${Date.now()}`;
+  const results = await runQaChecks({ runId, trigger, db, duck, checks, dateFrom, dateTo });
+  const failed = results.filter((r) => r.status !== 'pass');
+  if (failed.length) {
+    await notifyWecom('⚠️ 每日数据质量巡检异常', `${failed.length}/${results.length} 项失败:\n${failed.slice(0, 10).map((r) => `${r.check_type}:${r.check_name} ${r.status}`).join('\n')}`).catch(() => {});
+  }
+  console.log(`[scheduler] __qa_${trigger}: ${results.length} 检查, 失败 ${failed.length}`);
+  return results;
 }
 
 /**
@@ -591,6 +617,15 @@ async function executeTask(task: {
       await triggerCompute(client, dates, task.id);
     }
 
+    // L4 采集后即时 D1 去重守护（当日增量后查唯一性，轻量）；QA 失败不阻塞采集流程
+    try {
+      const src = (detailSources as DetailSource[]).find((s) => s.function_slug === task.function_slug);
+      if (src) {
+        const todayCompact = getDateOffsetChina(0).replace(/-/g, '');
+        await runDailyQa('collect', [`D1:${src.name}`, `D2:${src.name}`], todayCompact, todayCompact);
+      }
+    } catch (e: any) { console.error('[scheduler] 采集后 QA 失败:', e?.message ?? e); }
+
     const finalStatus = lastResult.error ? 'partial' : 'success';
     await writeLog(
       client,
@@ -838,6 +873,26 @@ function registerDailySourceReconcileJob() {
   }, { timezone: 'Asia/Shanghai' });
   scheduledJobs.set(JOB_KEY, job);
   console.log('[scheduler] 注册每日源对账 (7 9 * * *, Asia/Shanghai)');
+}
+
+/**
+ * 每日数据质量巡检（09:15）：全量跑 D1/D2/C2，错开 09:07 源对账。
+ * L4 spec：每日全量 QA 定时（Task 9）。
+ */
+function registerDailyQaJob() {
+  const JOB_KEY = "__qa_full";
+  if (scheduledJobs.has(JOB_KEY)) return;
+  const CRON = "15 9 * * *";   // 09:15，错开 09:07 源对账
+  if (!cron.validate(CRON)) return;
+  const job = cron.schedule(CRON, async () => {
+    if (runningTasks.has(JOB_KEY)) return;
+    runningTasks.add(JOB_KEY);
+    try { await runDailyQa('cron'); }
+    catch (e: any) { console.error('[scheduler] __qa_full 异常:', e?.message ?? e); }
+    finally { runningTasks.delete(JOB_KEY); }
+  }, { timezone: 'Asia/Shanghai' });
+  scheduledJobs.set(JOB_KEY, job);
+  console.log('[scheduler] 注册每日数据质量巡检 (15 9 * * *, Asia/Shanghai)');
 }
 
 function registerWeeklyReconcileJob() {
