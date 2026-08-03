@@ -1,6 +1,7 @@
 import { Metric, MetricSource, ViewConfig } from '../types';
 import { astToSql, derivedExpr, classifyAst, type Ast, type AstCtx } from '../ast';
 import { statusInClause } from '../sql-util';
+import { permFilterFact, permFilterTarget } from './perm.js';
 
 /**
  * Tier1 生成器（AST 化版）
@@ -154,6 +155,7 @@ export function generateTier1View(
       const joins: string[] = [];
       const where: string[] = [];
       if (g.filter) where.push(g.filter);
+      where.push(permFilterFact('s'));
       if (useTargetWindow) {
         joins.push(`JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND ${dateUpper}`);
       }
@@ -301,6 +303,7 @@ export function generateTier1View(
       const dimAlias = config.dim_grain?.table.split(' ')[1];
       const grainCol = config.dim_grain ? `${dimAlias}.${config.dim_grain.key}` : `s.${dimKey}`;
       if (g.filter) where.push(g.filter);
+      where.push(permFilterFact('s'));
       if (config.dim_grain) {
         if (config.dim_grain.lateral_pick) {
           // 跨账套回退匹配：本账套优先、跨品牌回退（如 64188 批发卖 3120 货），LIMIT 1 防 item_num 重叠翻倍
@@ -356,7 +359,7 @@ export function generateTier1View(
   SELECT t.parent_target_id AS target_id, t.system_book_code,
     SUM(tmv.target_value) AS ${tleaf.metric_code}
   FROM targets t JOIN target_metric_values tmv ON tmv.target_id=t.id
-  WHERE t.breakdown_level='${config.target_breakdown ?? 'store'}' AND ${metricFilter || 'true'}${assessedCond}
+  WHERE t.breakdown_level='${config.target_breakdown ?? 'store'}' AND ${metricFilter || 'true'} AND ${permFilterTarget('t')}${assessedCond}
   GROUP BY t.parent_target_id, t.system_book_code
 )`);
     cteOf.set(tleaf.metric_code, cteName);
