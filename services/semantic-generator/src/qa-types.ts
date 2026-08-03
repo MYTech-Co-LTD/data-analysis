@@ -1,7 +1,7 @@
 // 语义层数据质量守护配置类型（L4，spec 2026-08-03-data-accuracy-semantic-layer-design）
 // detail-sources.json / qa-checks.json 的结构契约
 
-export type CheckType = 'C0' | 'C1' | 'C2' | 'C3' | 'C4' | 'D1' | 'D2';
+export type CheckType = 'C0' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'D1' | 'D2';
 export type QaTrigger = 'cron' | 'collect' | 'deploy' | 'manual';
 
 /** 明细源注册：D1 主键唯一性 / D2 聚合PK重复 / C1 明细↔聚合 的配置来源 */

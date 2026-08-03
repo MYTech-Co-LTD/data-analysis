@@ -3,6 +3,7 @@
 // 依赖注入 db(postgrest)/duck(duckdb HTTP)，web route 与 scheduler 共用。
 import { runD1 } from './qa/d1';
 import { runD2 } from './qa/d2';
+import { runItemMasterCheck } from './qa/item-master';
 import detailSources from './qa/config/detail-sources.json';
 import qaChecks from './qa/config/qa-checks.json';
 import type { DetailSource, ViewAssertion, CheckResult, CheckType, QaTrigger } from './qa/types';
@@ -107,6 +108,9 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
       await record('C2', a.view, 'error', null, [{ error: String(e instanceof Error ? e.message : e) }]);
     }
   }
+
+  // C5 商品主数据完整性：发现 delivery/wholesale 里不在 dim_item 的商品 → 自动触发商品采集 + 重算
+  results.push(...await runItemMasterCheck({ db: opts.db, duck: opts.duck, runId: opts.runId, trigger: opts.trigger, checks: opts.checks }));
 
   return results;
 }
