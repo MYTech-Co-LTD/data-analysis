@@ -9,7 +9,7 @@ WITH target_base AS (
     (t.end_date - t.start_date + 1) AS total_days,
     GREATEST(LEAST(current_date, t.end_date) - t.start_date + 1, 0) AS days_elapsed
   FROM targets t
-  WHERE t.status IN ('active', 'closed') AND t.target_level = 'total' AND t.category IS NULL
+  WHERE t.status IN ('active') AND t.target_level = 'total' AND t.category IS NULL
 ),
 outbound_targets AS (
   SELECT

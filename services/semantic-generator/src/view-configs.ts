@@ -1,6 +1,13 @@
 import type { ViewConfig } from './types.js';
 
 /**
+ * 目标窗口语义（2026-08-03 机制定稿）：视图只算 ACTIVE total 目标（target_status:'active'）。
+ * 已结束目标由 close_target 固化进 target_snapshots（report_achievement_v 读快照），生成视图不再重算——
+ * 否则每次查询都对所有 active+closed 目标实时聚合，既浪费又会让定格目标随源数据漂移。
+ * 配置 target_status='active' → tgt CTE `status IN ('active')`。
+ */
+
+/**
  * 品牌×指标表视图配置（对应 report_brand_metric_v 113）
  * 迁移 P1：用生成器产出 report_brand_metric_gen
  *
@@ -22,7 +29,7 @@ export const brandMetricView: ViewConfig = {
   dim_code: 'brand',
   levels: ['brand'],
   target_metric_codes: ['sale_target'],
-  scope: { target_window: true, assessed_war_zone: true, target_status: ['active', 'closed'] },
+  scope: { target_window: true, assessed_war_zone: true, target_status: 'active' },
   total_row: true,
   dim_table: 'dim_brand',
   aliases: {
@@ -53,7 +60,7 @@ export const categorySummaryView: ViewConfig = {
   metrics: ['outbound_amount', 'outbound_profit'],  // derived 指标（delivery + wholesale）
   levels: [],
   target_metric_codes: [],
-  scope: { target_window: true, target_status: ['active', 'closed'] },
+  scope: { target_window: true, target_status: 'active' },
   total_row: true,
   target_breakdown: 'category',
   categories: ['水果', '标品', '耗材'],  // 类别值列表（配置驱动，不硬编码）
@@ -96,7 +103,7 @@ export const regionBreakdownView: ViewConfig = {
   dim_code: 'branch',
   levels: ['store', 'sub_region', 'region'],
   target_metric_codes: ['sale_target', 'delivery_target'],
-  scope: { target_window: true, assessed_war_zone: true, target_status: ['active', 'closed'] },
+  scope: { target_window: true, assessed_war_zone: true, target_status: 'active' },
   aliases: {
     sale_amount: 'sale_actual',
     distribution_amount: 'delivery_actual',
@@ -174,7 +181,7 @@ export const itemBreakdownView: ViewConfig = {
   dim_code: 'item',
   levels: ['item'],
   target_metric_codes: [],  // 无 target
-  scope: { target_window: true, target_status: ['active', 'closed'] },
+  scope: { target_window: true, target_status: 'active' },
   source_override: {
     sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' },
     sale_profit: { table: 'report_daily_item_sales', column: 'sale_profit' },
@@ -210,7 +217,7 @@ export const wholesaleCustomerView: ViewConfig = {
   dim_code: 'customer',
   levels: ['customer'],
   target_metric_codes: [],
-  scope: { target_window: true, target_status: ['active', 'closed'] },
+  scope: { target_window: true, target_status: 'active' },
   source_override: {
     wholesale_amount: { table: 'report_daily_wholesale_customer', column: 'wholesale_amount' },
     wholesale_profit: { table: 'report_daily_wholesale_customer', column: 'wholesale_profit' },
@@ -249,7 +256,7 @@ export const supplyChainOutboundView: ViewConfig = {
   dim_code: 'branch',
   levels: ['store', 'sub_region', 'region'],
   target_metric_codes: [],   // 无 target（纯 actual）
-  scope: { target_window: true, assessed_war_zone: true, target_status: ['active', 'closed'] },
+  scope: { target_window: true, assessed_war_zone: true, target_status: 'active' },
   total_row: true,
   hierarchy: [
     {
@@ -319,7 +326,7 @@ export const wholesaleDailyView: ViewConfig = {
   dim_code: 'date',
   levels: [],                // date 无层级
   target_metric_codes: [],
-  scope: { target_window: true, target_status: ['active', 'closed'] },  // date grain 自动用 latest_day 上限
+  scope: { target_window: true, target_status: 'active' },  // date grain 自动用 latest_day 上限
   total_row: false,
 };
 
@@ -347,7 +354,7 @@ export const wholesaleDailyCustomerView: ViewConfig = {
   dim_code: 'customer',
   levels: ['customer'],
   target_metric_codes: [],
-  scope: { target_window: true, target_status: ['active', 'closed'] },
+  scope: { target_window: true, target_status: 'active' },
   extra_grain: ['s.biz_date'],   // 双 grain：customer × biz_date
   carry_cols: ['client_name'],   // 携带客户名（MAX，非 grain）
   total_row: false,
