@@ -182,7 +182,13 @@ describe('权限收口：hierarchy 行级过滤注入', () => {
 });
 
 describe('权限收口契约：所有提交产物必含行级过滤', () => {
-  const files = readdirSync(GEN_DIR).filter(f => f.endsWith('.sql'));
+  // *_qa.sql 为 C2 管理端内部对账视图（QA runner 以 admin 鉴权查询，需比较全量视图 SUM vs 参考重算），
+  // 若加 JWT 行级过滤会把 view_sum 变成 JWT 作用域导致对账失效——设计上豁免行级过滤，扫描排除。
+  const files = readdirSync(GEN_DIR).filter(f => f.endsWith('.sql') && !f.endsWith('_qa.sql'));
+
+  it('_qa 对账视图（管理端内部）不要求行级过滤', () => {
+    expect(readdirSync(GEN_DIR).some(f => f.endsWith('_qa.sql'))).toBe(true);
+  });
   // item 粒度聚合表无 branch_num 列，仅 brands 过滤（perm_skip_branch=true）
   const skipBranch = new Set(['report_item_breakdown_gen.sql']);
 
