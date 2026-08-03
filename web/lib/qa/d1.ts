@@ -21,7 +21,7 @@ export function buildD1Sql(src: DetailSource, dateFrom: string, dateTo: string, 
   ${src.detail_date_expr} AS bizday,
   COUNT(*) AS total_rows,
   COUNT(DISTINCT CONCAT_WS('\\x1F', ${keyExpr})) AS distinct_rows
-FROM read_parquet('${globOverride ?? src.glob}', filename=true)
+FROM read_parquet('${globOverride ?? src.glob}', filename=true, union_by_name=true)
 WHERE ${src.detail_date_expr} BETWEEN '${dateFrom}' AND '${dateTo}'
 GROUP BY 1, 2
 HAVING COUNT(*) > COUNT(DISTINCT CONCAT_WS('\\x1F', ${keyExpr}))`;
