@@ -1,0 +1,50 @@
+[
+  {
+    "name": "retail",
+    "function_slug": "collect-lemeng",
+    "glob": "s3://lemeng-datasource/lemeng/retail_detail/*/*-*-*/all.parquet",
+    "natural_key": ["branch_num", "order_no", "order_detail_num"],
+    "agg_table": "report_daily_sales",
+    "agg_key": ["system_book_code", "branch_num", "biz_date"],
+    "agg_metric": [
+      { "detail": "sale_money", "agg": "total_sale" },
+      { "detail": "profit", "agg": "total_profit" }
+    ],
+    "brand_expr": "regexp_extract(filename,'retail_detail/([0-9]+)/',1)",
+    "detail_date_expr": "replace(order_detail_bizday,'-','')",
+    "api_count": { "fn": "countRetailApi", "dates_iso": true },
+    "tolerance": 0.01
+  },
+  {
+    "name": "delivery",
+    "function_slug": "collect-delivery",
+    "glob": "s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet",
+    "natural_key": ["pos_order_num", "item_num", "response_branch_num"],
+    "agg_table": "report_daily_delivery",
+    "agg_key": ["system_book_code", "branch_num", "biz_date"],
+    "agg_metric": [
+      { "detail": "out_money", "agg": "out_money" },
+      { "detail": "profit_money", "agg": "profit_money" }
+    ],
+    "brand_expr": "regexp_extract(filename,'transfer_detail/([0-9]+)/',1)",
+    "detail_date_expr": "substr(order_time,1,4)||substr(order_time,6,2)||substr(order_time,9,2)",
+    "api_count": { "fn": "countDeliveryApi", "dates_iso": false },
+    "tolerance": 0.01
+  },
+  {
+    "name": "wholesale",
+    "function_slug": "collect-wholesale",
+    "glob": "s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet",
+    "natural_key": ["pos_order_num", "item_num", "client_code"],
+    "agg_table": "report_daily_wholesale",
+    "agg_key": ["system_book_code", "branch_num", "biz_date"],
+    "agg_metric": [
+      { "detail": "wholesale_money", "agg": "wholesale_money" },
+      { "detail": "wholesale_profit", "agg": "wholesale_profit" }
+    ],
+    "brand_expr": "regexp_extract(filename,'wholesale_detail/([0-9]+)/',1)",
+    "detail_date_expr": "substr(audit_time,1,4)||substr(audit_time,6,2)||substr(audit_time,9,2)",
+    "api_count": { "fn": "countWholesaleApi", "dates_iso": false },
+    "tolerance": 0.01
+  }
+]
