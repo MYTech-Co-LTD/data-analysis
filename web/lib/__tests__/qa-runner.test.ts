@@ -1,0 +1,52 @@
+import { describe, it, expect, vi } from 'vitest';
+import { runQaChecks } from '../qa-runner';
+import detailSources from '../../../services/semantic-generator/src/detail-sources.json';
+
+function makeDb(overrides: Record<string, unknown> = {}) {
+  const inserted: unknown[] = [];
+  const db = {
+    rpc: vi.fn(async () => ({ data: [] })),
+    from: vi.fn((t: string) => ({
+      select: vi.fn(async () => ({ data: [], error: null })),
+      insert: vi.fn(async (rows: unknown[]) => { inserted.push(...(rows as unknown[])); return { data: rows, error: null }; }),
+    })),
+    _inserted: inserted,
+    ...overrides,
+  };
+  return db as any;
+}
+
+describe('runQaChecks', () => {
+  it('D1 全部通过时记 pass，写 qa_logs', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-1', trigger: 'cron', db, duck });
+    expect(results.filter((r) => r.check_type === 'D1' && r.status === 'pass').length).toBe(3);
+    expect(results.filter((r) => r.check_type === 'D2' && r.status === 'pass').length).toBe(3);
+    expect(db._inserted.length).toBeGreaterThan(0);
+  });
+
+  it('D1 有重复行记 fail 且 diff=重复行数', async () => {
+    const retail = detailSources.find((s) => s.name === 'retail')!;
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    // duck 返回零售重复行（仅当 sql 含 retail）
+    duck.mockImplementation(async (sql: string) =>
+      sql.includes('retail_detail')
+        ? [{ system_book_code: '3120', bizday: '20260728', total_rows: 120, distinct_rows: 2 }]
+        : []);
+    const results = await runQaChecks({ runId: 'test-2', trigger: 'manual', db, duck, checks: ['D1:retail'] });
+    const d1 = results.find((r) => r.check_type === 'D1');
+    expect(d1?.status).toBe('fail');
+    expect(d1?.diff).toBe(1);
+  });
+
+  it('checks 过滤生效', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-3', trigger: 'cron', db, duck, checks: ['D2:retail'] });
+    expect(results.length).toBe(1);
+    expect(results[0].check_type).toBe('D2');
+    expect(results[0].check_name).toBe('retail');
+  });
+});

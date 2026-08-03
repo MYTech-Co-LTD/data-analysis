@@ -1,0 +1,106 @@
+// web/lib/qa-runner.ts
+// 语义层数据质量守护 QA 运行器（L4）：编排 D1/D2/C2 检查，写 qa_logs。
+// 依赖注入 db(postgrest)/duck(duckdb HTTP)，web route 与 scheduler 共用。
+import { runD1 } from './qa/d1';
+import { runD2 } from './qa/d2';
+import detailSources from '../../services/semantic-generator/src/detail-sources.json';
+import qaChecks from '../../services/semantic-generator/src/qa-checks.json';
+import type { DetailSource, ViewAssertion, CheckResult, CheckType, QaTrigger } from './qa/types';
+
+const DUCK_TOLERANCE = 0.01;
+
+function compactDaysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+export interface RunQaOpts {
+  runId: string;
+  trigger: QaTrigger;
+  db: {
+    rpc(fn: string, body: Record<string, unknown>): Promise<{ data?: unknown[]; error?: unknown }>;
+    from(t: string): {
+      select(cols?: string): Promise<{ data?: unknown[]; error?: unknown }>;
+      insert(rows: unknown[]): Promise<{ data?: unknown[]; error?: unknown }>;
+    };
+  };
+  duck: (sql: string) => Promise<Record<string, unknown>[]>;
+  checks?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+}
+
+function want(checks: string[] | undefined, kind: CheckType, name: string): boolean {
+  if (!checks || checks.length === 0) return true;
+  const key = `${kind}:${name}`;
+  return checks.includes(key);
+}
+
+export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
+  const dateFrom = opts.dateFrom ?? compactDaysAgo(6);
+  const dateTo = opts.dateTo ?? compactDaysAgo(0);
+  const results: CheckResult[] = [];
+
+  const record = async (check_type: CheckType, check_name: string, status: CheckResult['status'], diff: number | null, detail: unknown[] | null) => {
+    const row: CheckResult = { run_id: opts.runId, trigger: opts.trigger, check_type, check_name, status, diff, detail };
+    results.push(row);
+    try {
+      const ins = await opts.db.from('qa_logs').insert([row]);
+      if (ins.error) console.error('[qa-runner] qa_logs 写入失败:', JSON.stringify(ins.error));
+    } catch (e) {
+      console.error('[qa-runner] qa_logs 写入异常:', String(e instanceof Error ? e.message : e));
+    }
+  };
+
+  // D1 明细主键唯一性
+  for (const src of detailSources as DetailSource[]) {
+    if (!want(opts.checks, 'D1', src.name)) continue;
+    try {
+      const { dupRows } = await runD1(opts.duck, src, dateFrom, dateTo);
+      if (dupRows.length) {
+        await record('D1', src.name, 'fail', dupRows.length, dupRows.slice(0, 20));
+      } else {
+        await record('D1', src.name, 'pass', 0, null);
+      }
+    } catch (e) {
+      await record('D1', src.name, 'error', null, [{ error: String(e instanceof Error ? e.message : e) }]);
+    }
+  }
+
+  // D2 聚合 PK 重复
+  for (const src of detailSources as DetailSource[]) {
+    if (!want(opts.checks, 'D2', src.name)) continue;
+    try {
+      const { dupRows } = await runD2(opts.db, src);
+      if (dupRows.length) {
+        await record('D2', src.name, 'fail', dupRows.length, dupRows.slice(0, 20));
+      } else {
+        await record('D2', src.name, 'pass', 0, null);
+      }
+    } catch (e) {
+      await record('D2', src.name, 'error', null, [{ error: String(e instanceof Error ? e.message : e) }]);
+    }
+  }
+
+  // C2 视图↔聚合表断言（查生成的 _qa 视图）
+  for (const a of qaChecks as ViewAssertion[]) {
+    if (!want(opts.checks, 'C2', a.view)) continue;
+    try {
+      const res = await opts.db.from(`${a.view}_qa`).select('metric,view_sum,ref_sum,diff');
+      const rows = (res.data ?? []) as { metric: string; view_sum: number; ref_sum: number; diff: number }[];
+      const bad = rows.filter((r) => Math.abs(r.diff) > a.tolerance);
+      if (bad.length) {
+        await record('C2', a.view, 'fail', bad.length, bad.slice(0, 20));
+      } else {
+        await record('C2', a.view, 'pass', 0, null);
+      }
+    } catch (e) {
+      await record('C2', a.view, 'error', null, [{ error: String(e instanceof Error ? e.message : e) }]);
+    }
+  }
+
+  return results;
+}
+
+export const qaDuckTolerance = DUCK_TOLERANCE;
