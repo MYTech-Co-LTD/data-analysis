@@ -28,7 +28,7 @@ export function TargetList({ targets }: { targets: TargetSummary[] }) {
           key={t.target_id}
           href={`/reports/targets/${t.target_id}`}
           prefetch={false}
-          className="group flex items-center justify-between rounded-lg border border-slate-200 bg-white px-5 py-4 transition hover:border-blue-400 hover:shadow-sm"
+          className="group flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-4 transition hover:border-blue-400 hover:shadow-sm"
         >
           <div className="min-w-0">
             <div className="flex items-center gap-2">
