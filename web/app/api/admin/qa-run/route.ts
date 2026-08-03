@@ -17,6 +17,8 @@ const DUCKDB_URL = process.env.DUCKDB_URL || 'http://duckdb:9000';
 const AGENT_API_KEY = process.env.AGENT_API_KEY!;
 const INSFORGE_API_BASE = process.env.INSFORGE_API_BASE!;
 const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
+// PostgREST 直连（gateway 不代理 /rpc，固化 RPC 直连，同 web/lib/scheduler.ts:23）
+const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 const C0_DAYS = 7;
 
 export async function POST(req: NextRequest) {
@@ -32,7 +34,7 @@ export async function POST(req: NextRequest) {
   const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
   const db = {
     rpc: async (fn: string, body: Record<string, unknown>) => {
-      const r = await fetch(`${INSFORGE_API_BASE}/rpc/${fn}`, {
+      const r = await fetch(`${POSTGREST_URL}/rpc/${fn}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
       });
       const json = await r.json();

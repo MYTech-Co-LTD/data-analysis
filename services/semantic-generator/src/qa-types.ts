@@ -9,6 +9,7 @@ export interface DetailSource {
   name: string;                          // 'retail' | 'delivery' | 'wholesale'
   function_slug: string;                 // 对应采集 function（C0 参数查找用）
   glob: string;                          // 严格 all.parquet glob
+  glob_date_format: 'iso' | 'compact';   // 日期目录格式：retail=YYYY-MM-DD(iso)，delivery/wholesale=YYYYMMDD(compact)
   natural_key: string[];                 // D1 用（业务键，禁用 id）
   agg_table: string;                     // C1/D2 用
   agg_key: string[];                     // D2 用（聚合表 PK 列）

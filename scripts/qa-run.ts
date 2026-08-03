@@ -22,17 +22,27 @@ function loadPg(): any {
 }
 const pg = loadPg();
 
+// 配置 JSON 用 createRequire 加载（同 pg 惯例；tsx/node 原生支持 JSON require），
+// 用于构建合法检查键集合（--check= 全不匹配时防 CLI 假绿 PASS 0/0）。
+const detailSources = require('../services/semantic-generator/src/detail-sources.json') as Array<{ name: string }>;
+const qaChecks = require('../services/semantic-generator/src/qa-checks.json') as Array<{ view: string }>;
+const validCheckKeys = new Set<string>([
+  ...detailSources.map((s) => `D1:${s.name}`),
+  ...detailSources.map((s) => `D2:${s.name}`),
+  ...qaChecks.map((c) => `C2:${c.view}`),
+]);
+
 function arg(key: string): string | undefined {
   const a = process.argv.find((x) => x.startsWith(`--${key}=`));
   return a ? a.slice(key.length + 3) : undefined;
 }
 
-// 与 web/lib/qa-runner.ts 内部 compactDaysAgo 同口径（UTC→YYYYMMDD），
-// 使 --days=N 真正控制检查窗口（runner 默认固定近 7 天）
+// 与 web/lib/qa-runner.ts 内部 compactDaysAgo 同口径（中国时区 UTC+8 → YYYYMMDD），
+// 使 --days=N 真正控制检查窗口（runner 默认固定近 7 天），窗口边界与平台 China-date 约定对齐。
 function compactDaysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10).replace(/-/g, '');
+  const china = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  china.setDate(china.getDate() - days);
+  return china.toISOString().slice(0, 10).replace(/-/g, '');
 }
 
 async function main() {
@@ -44,7 +54,18 @@ async function main() {
   if (!Number.isFinite(daysRaw) || daysRaw < 1) { console.error(`--days 无效（${arg('days') ?? '空'}），用默认 7`); process.exitCode = 2; return; }
   const days = daysRaw;
   const checksArg = arg('check');
-  const checks = checksArg ? checksArg.split(',') : undefined;
+  // 逗号两侧去空白 + 过滤空项：--check=D1:retail, D2:retail 不再静默丢掉第二个
+  const checks = checksArg
+    ? checksArg.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+    : undefined;
+
+  // 防 CLI 假绿：--check= 给了但无一匹配已知键（D1/D2/C2）→ 本来要跑 0 项，直接报配置错误退出 2
+  if (checks && checks.length > 0 && checks.every((c) => !validCheckKeys.has(c))) {
+    console.error(`未匹配任何已知检查键: ${checks.join(', ')}`);
+    console.error(`合法键示例: ${Array.from(validCheckKeys).join(', ')}`);
+    process.exitCode = 2;
+    return;
+  }
 
   const client = new pg.Client({ connectionString: url });
   await client.connect();
@@ -75,7 +96,8 @@ async function main() {
   } as any;
 
   const duck = (sql: string) => duckQuery(duckUrl, apiKey, sql);
-  const runId = `cli-${Date.now()}`;
+  // 随机后缀防同毫秒 run_id 撞 qa_logs UNIQUE 约束
+  const runId = `cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const results = await runQaChecks({
     runId,
     trigger: 'manual',

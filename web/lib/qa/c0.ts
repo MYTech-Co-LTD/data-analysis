@@ -25,11 +25,16 @@ export async function runC0(
   let diff: number | null = null;
   let detail: unknown[] | null = null;
   if (apiCount >= 0) {
-    const low = Math.floor(apiCount * (1 - C0_EPSILON));
-    const high = Math.ceil(apiCount * (1 + C0_EPSILON));
-    if (libCount < low) { status = 'fail'; detail = [{ day, api: apiCount, lib: libCount, verdict: 'missing' }]; diff = libCount - apiCount; }
-    else if (libCount > high) { status = 'fail'; detail = [{ day, api: apiCount, lib: libCount, verdict: 'dup-suspect' }]; diff = libCount - apiCount; }
-    else { diff = libCount - apiCount; }
+    // 零量缺漏守卫：apiCount=1 时 low=floor(0.9)=0，lib=0 会漏过 low 判定滑成 pass；
+    // 完全未采集 = C0 首要要抓的场景，须在 ε 带比较前显式判 fail。
+    if (libCount === 0 && apiCount > 0) { status = 'fail'; detail = [{ day, api: apiCount, lib: libCount, verdict: 'missing' }]; diff = libCount - apiCount; }
+    else {
+      const low = Math.floor(apiCount * (1 - C0_EPSILON));
+      const high = Math.ceil(apiCount * (1 + C0_EPSILON));
+      if (libCount < low) { status = 'fail'; detail = [{ day, api: apiCount, lib: libCount, verdict: 'missing' }]; diff = libCount - apiCount; }
+      else if (libCount > high) { status = 'fail'; detail = [{ day, api: apiCount, lib: libCount, verdict: 'dup-suspect' }]; diff = libCount - apiCount; }
+      else { diff = libCount - apiCount; }
+    }
   } else {
     detail = [{ day, api: apiCount, lib: libCount, verdict: 'error' }];
   }

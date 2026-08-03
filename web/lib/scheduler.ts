@@ -14,6 +14,7 @@ import { runServiceDownBucket, runCollectTokenBucket, runHourlyBucket, runDailyB
 import { runQaChecks } from './qa-runner';
 import detailSources from '../../services/semantic-generator/src/detail-sources.json';
 import { duckQuery } from './qa/duck';
+import { buildDayGlob } from './qa/d1';
 import type { DetailSource } from './qa/types';
 
 const INSFORGE_API_BASE = process.env.INSFORGE_API_BASE!;
@@ -227,7 +228,7 @@ async function triggerCompute(client: any, dates: string[], taskId: string) {
 
 // L4 数据质量巡检执行器（Task 9）：DB(postgrest rpc+from) + duck(duckdb HTTP) 双适配器，
 // 调 runQaChecks 跑 D1/D2/C2；失败推企微告警。trigger: 'cron' 每日 09:15 全量 / 'collect' 采集后按源 D1。
-async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFrom?: string, dateTo?: string) {
+async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFrom?: string, dateTo?: string, d1Globs?: Record<string, string>) {
   const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
   const db = {
     rpc: async (fn: string, body: Record<string, unknown>) => {
@@ -241,8 +242,9 @@ async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFr
     from: (t: string) => client.database.from(t),
   } as any;
   const duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql);
-  const runId = `${trigger}-${Date.now()}`;
-  const results = await runQaChecks({ runId, trigger, db, duck, checks, dateFrom, dateTo });
+  // 随机后缀防同毫秒 run_id 撞 qa_logs 的 UNIQUE 约束（采集后 hook 与每日 09:15 可能同毫秒）
+  const runId = `${trigger}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const results = await runQaChecks({ runId, trigger, db, duck, checks, dateFrom, dateTo, d1Globs });
   const failed = results.filter((r) => r.status !== 'pass');
   if (failed.length) {
     await notifyWecom('⚠️ 每日数据质量巡检异常', `${failed.length}/${results.length} 项失败:\n${failed.slice(0, 10).map((r) => `${r.check_type}:${r.check_name} ${r.status}`).join('\n')}`).catch(() => {});
@@ -627,7 +629,9 @@ async function executeTask(task: {
       const src = (detailSources as DetailSource[]).find((s) => s.function_slug === task.function_slug);
       if (src) {
         const todayCompact = getDateOffsetChina(0).replace(/-/g, '');
-        await runDailyQa('collect', [`D1:${src.name}`, `D2:${src.name}`], todayCompact, todayCompact);
+        // D1 只扫当日分区（buildDayGlob 按源目录格式把日期段替换成具体日），避免每 5 分钟全库重扫
+        const dayGlob = buildDayGlob(src, todayCompact);
+        await runDailyQa('collect', [`D1:${src.name}`, `D2:${src.name}`], todayCompact, todayCompact, { [src.name]: dayGlob });
       }
     } catch (e: any) { console.error('[scheduler] 采集后 QA 失败:', e?.message ?? e); }
 

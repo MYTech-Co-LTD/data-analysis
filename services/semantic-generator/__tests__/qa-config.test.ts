@@ -9,6 +9,7 @@ function isDetailSource(x: any): x is DetailSource {
     && x.glob.endsWith('all.parquet') && typeof x.agg_table === 'string'
     && Array.isArray(x.agg_key) && Array.isArray(x.agg_metric)
     && typeof x.brand_expr === 'string' && typeof x.detail_date_expr === 'string'
+    && (x.glob_date_format === 'iso' || x.glob_date_format === 'compact')
     && typeof x.tolerance === 'number';
 }
 

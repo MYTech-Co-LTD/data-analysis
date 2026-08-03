@@ -21,6 +21,13 @@ describe('runC0', () => {
     expect(r.detail![0]).toEqual({ day: '2026-07-28', api: 100, lib: 80, verdict: 'missing' });
   });
 
+  it('zero-lib guard: apiCount=1 且 lib=0（完全未采集）→ fail missing（low=floor(0.9)=0 会滑成 pass 的边界）', async () => {
+    const r = await runC0(src, '2026-07-28', 1, 0);
+    expect(r.status).toBe('fail');
+    expect(r.diff).toBe(-1);
+    expect(r.detail![0]).toEqual({ day: '2026-07-28', api: 1, lib: 0, verdict: 'missing' });
+  });
+
   it('dup-suspect: 库>源×(1+ε) → fail（疑重）', async () => {
     const r = await runC0(src, '2026-07-28', 100, 200);
     expect(r.status).toBe('fail');

@@ -10,9 +10,11 @@ import type { DetailSource, ViewAssertion, CheckResult, CheckType, QaTrigger } f
 const DUCK_TOLERANCE = 0.01;
 
 function compactDaysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10).replace(/-/g, '');
+  // 按平台中国时区口径（getDateOffsetChina 同款：UTC+8 后取日），
+  // 使 runner 默认窗口与采集/after-collect 的 China-date 约定对齐（UTC 会偏一天边界）。
+  const china = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  china.setDate(china.getDate() - days);
+  return china.toISOString().slice(0, 10).replace(/-/g, '');
 }
 
 export interface RunQaOpts {
@@ -29,6 +31,8 @@ export interface RunQaOpts {
   checks?: string[];
   dateFrom?: string;
   dateTo?: string;
+  /** 按源名覆盖 D1 glob（采集后日窗口用：只扫当日分区，避免全库重扫）；不传则用 src.glob 全量 */
+  d1Globs?: Record<string, string>;
 }
 
 function want(checks: string[] | undefined, kind: CheckType, name: string): boolean {
@@ -57,7 +61,7 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
   for (const src of detailSources as DetailSource[]) {
     if (!want(opts.checks, 'D1', src.name)) continue;
     try {
-      const { dupRows } = await runD1(opts.duck, src, dateFrom, dateTo);
+      const { dupRows } = await runD1(opts.duck, src, dateFrom, dateTo, opts.d1Globs?.[src.name]);
       if (dupRows.length) {
         await record('D1', src.name, 'fail', dupRows.length, dupRows.slice(0, 20));
       } else {
