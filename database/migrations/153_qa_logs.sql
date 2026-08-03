@@ -34,12 +34,15 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'qa_d2_dup_rows: forbidden table %', p_table;
   END IF;
-  key_list := array_to_string(p_keys, ', ');
+  SELECT string_agg(quote_ident(k), ', ') INTO key_list FROM unnest(p_keys) AS k;
+  IF key_list IS NULL THEN
+    RAISE EXCEPTION 'qa_d2_dup_rows: empty p_keys';
+  END IF;
   RETURN QUERY EXECUTE format(
     'SELECT concat_ws(''|'', %s) AS dup_key, COUNT(*) AS cnt FROM %I GROUP BY %s HAVING COUNT(*) > 1',
     key_list, p_table, key_list
   );
-END; $$ LANGUAGE plpgsql SECURITY DEFINER;
+END; $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 GRANT EXECUTE ON FUNCTION qa_d2_dup_rows(TEXT, TEXT[]) TO anon;
 GRANT EXECUTE ON FUNCTION qa_d2_dup_rows(TEXT, TEXT[]) TO authenticated;
