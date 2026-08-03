@@ -14,6 +14,7 @@ import type { ViewConfig } from './types.js';
 export interface GenResult {
   produced: string[];
   explainFailures: string[];
+  assertionFailures: string[];   // L4 C2：视图↔聚合对账断言 diff>容差
 }
 
 export interface GenOpts {
@@ -28,6 +29,7 @@ export async function runGenerator(opts: GenOpts): Promise<GenResult> {
 
   const produced: string[] = [];
   const explainFailures: string[] = [];
+  const assertionFailures: string[] = [];
 
   mkdirSync(opts.outDir, { recursive: true });
 
@@ -66,12 +68,31 @@ export async function runGenerator(opts: GenOpts): Promise<GenResult> {
         const qaFile = join(opts.outDir, `${config.view_name}_qa.sql`);
         writeFileSync(qaFile, qaSql + '\n');
       }
+
+      // L4 C2：gen 后立即跑断言（视图↔聚合表 SUM 对账），防上线即回归
+      if (viewAssertions.length) {
+        try {
+          // 先建 _qa 视图（runGenerator 顶部只建了主视图，_qa 未入 DB）
+          await opts.client.query(generateQaView(viewAssertions));
+          const qaRows = await opts.client.query(
+            `SELECT metric, view_sum, ref_sum, diff FROM ${config.view_name}_qa WHERE ABS(diff) > $1`,
+            [0.01],
+          );
+          for (const row of qaRows.rows) {
+            assertionFailures.push(
+              `${config.view_name}.${row.metric}: 视图 ${row.view_sum} vs 上游 ${row.ref_sum} (diff ${row.diff})`,
+            );
+          }
+        } catch (e) {
+          assertionFailures.push(`${config.view_name}_qa 断言查询失败: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     } catch (err) {
       explainFailures.push(`${config.view_name}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  return { produced, explainFailures };
+  return { produced, explainFailures, assertionFailures };
 }
 
 // CLI 入口：npm run gen-views
@@ -87,11 +108,12 @@ async function main() {
     try {
       const { brandMetricView, categorySummaryView, regionBreakdownView, itemBreakdownView, wholesaleCustomerView, supplyChainOutboundView, wholesaleDailyView, wholesaleDailyCustomerView } = await import('./view-configs.js');
       const r = await runGenerator({ client, viewConfigs: [brandMetricView, categorySummaryView, regionBreakdownView, itemBreakdownView, wholesaleCustomerView, supplyChainOutboundView, wholesaleDailyView, wholesaleDailyCustomerView], outDir: '../../database/generated' });
-      console.log(`✅ 生成器完成：产出 ${r.produced.length} 个视图，EXPLAIN 失败 ${r.explainFailures.length} 个`);
+      console.log(`✅ 生成器完成：产出 ${r.produced.length} 个视图，EXPLAIN 失败 ${r.explainFailures.length} 个，断言失败 ${r.assertionFailures.length} 个`);
       if (r.produced.length) console.log('  产出:', r.produced.join(', '));
-      if (r.explainFailures.length) {
+      const allFails = [...r.explainFailures, ...r.assertionFailures];
+      if (allFails.length) {
         console.error('  失败:');
-        r.explainFailures.forEach(f => console.error('   -', f));
+        allFails.forEach((f) => console.error('   -', f));
         process.exit(1);
       }
     } finally {
