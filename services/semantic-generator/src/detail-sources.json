@@ -21,7 +21,7 @@
     "glob": "s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet",
     "natural_key": ["pos_order_num", "item_num", "response_branch_num"],
     "agg_table": "report_daily_delivery",
-    "agg_key": ["system_book_code", "branch_num", "biz_date"],
+    "agg_key": ["system_book_code", "branch_num", "biz_date", "category_group"],
     "agg_metric": [
       { "detail": "out_money", "agg": "out_money" },
       { "detail": "profit_money", "agg": "profit_money" }
@@ -37,7 +37,7 @@
     "glob": "s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet",
     "natural_key": ["pos_order_num", "item_num", "client_code"],
     "agg_table": "report_daily_wholesale",
-    "agg_key": ["system_book_code", "branch_num", "biz_date"],
+    "agg_key": ["system_book_code", "branch_num", "biz_date", "category_group"],
     "agg_metric": [
       { "detail": "wholesale_money", "agg": "wholesale_money" },
       { "detail": "wholesale_profit", "agg": "wholesale_profit" }

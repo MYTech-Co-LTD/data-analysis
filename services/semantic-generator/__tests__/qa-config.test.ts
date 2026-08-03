@@ -26,8 +26,8 @@ describe('qa 配置', () => {
   it('detail-sources: 聚合列能对上真实聚合表列名（手滑写错会在 C1 对账暴露）', () => {
     const aggCols: Record<string, string[]> = {
       report_daily_sales: ['system_book_code', 'branch_num', 'biz_date', 'total_sale', 'total_profit'],
-      report_daily_delivery: ['system_book_code', 'branch_num', 'biz_date', 'out_money', 'profit_money'],
-      report_daily_wholesale: ['system_book_code', 'branch_num', 'biz_date', 'wholesale_money', 'wholesale_profit'],
+      report_daily_delivery: ['system_book_code', 'branch_num', 'biz_date', 'category_group', 'out_money', 'profit_money'],
+      report_daily_wholesale: ['system_book_code', 'branch_num', 'biz_date', 'category_group', 'wholesale_money', 'wholesale_profit'],
     };
     for (const s of detailSources) {
       const cols = aggCols[s.agg_table];
