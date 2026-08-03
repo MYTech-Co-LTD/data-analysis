@@ -1,4 +1,4 @@
-DROP VIEW IF EXISTS report_supply_chain_outbound_gen;
+DROP VIEW IF EXISTS report_supply_chain_outbound_gen CASCADE;
 CREATE VIEW report_supply_chain_outbound_gen AS
 WITH tgt AS (
   SELECT id AS target_id, start_date, end_date,

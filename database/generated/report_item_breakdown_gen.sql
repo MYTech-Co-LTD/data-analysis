@@ -1,4 +1,4 @@
-DROP VIEW IF EXISTS report_item_breakdown_gen;
+DROP VIEW IF EXISTS report_item_breakdown_gen CASCADE;
 CREATE VIEW report_item_breakdown_gen AS
 WITH tgt AS (
   SELECT id AS target_id, start_date, end_date,

@@ -496,7 +496,7 @@ export function generateTier1View(
     }
   }
 
-  let sql = `DROP VIEW IF EXISTS ${view_name};
+  let sql = `DROP VIEW IF EXISTS ${view_name} CASCADE;
 CREATE VIEW ${view_name} AS
 ${cteList.length ? `WITH ${cteList.join(',\n')}\n` : ''}`;
 

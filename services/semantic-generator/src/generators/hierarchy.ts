@@ -566,7 +566,7 @@ function generateCategoryView(
     'remaining_daily_profit_target'
   ];
 
-  return `DROP VIEW IF EXISTS ${view_name};
+  return `DROP VIEW IF EXISTS ${view_name} CASCADE;
 CREATE VIEW ${view_name} AS
 WITH ${cteList.join(',\n')}
 SELECT ${finalCols.join(', ')} FROM category_level
@@ -698,7 +698,7 @@ function buildFinalSelect(
   }
 
   const finalSelect = levelSelects.join('\nUNION ALL\n');
-  return `DROP VIEW IF EXISTS ${view_name};
+  return `DROP VIEW IF EXISTS ${view_name} CASCADE;
 CREATE VIEW ${view_name} AS
 WITH ${cteList.join(',\n')}
 ${finalSelect};`;

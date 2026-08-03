@@ -35,11 +35,14 @@ done
 shopt -u nullglob
 
 # 生成器产物（services/semantic-generator 产出，DROP+CREATE 幂等）
+# ⚠️ 必须按字节序(LC_ALL=C)执行：base 视图文件先于其 _qa 对账视图（'.' < '_'），
+#    否则 locale 排序把 _qa 放前，_qa 依赖基视图会阻塞基视图 DROP VIEW IF EXISTS。
 GENERATED_DIR="$ROOT/database/generated"
 if [ -d "$GENERATED_DIR" ]; then
-  echo "▶ 执行生成器产物（${GENERATED_DIR}）..."
+  echo "▶ 执行生成器产物（${GENERATED_DIR}，字节序 base<qa）..."
   shopt -s nullglob
-  for sql in "$GENERATED_DIR"/*.sql; do
+  mapfile -t generated_files < <(printf '%s\n' "$GENERATED_DIR"/*.sql | LC_ALL=C sort)
+  for sql in "${generated_files[@]}"; do
     name="$(basename "$sql")"
     echo "  · $name"
     docker compose exec -T postgres psql -v ON_ERROR_STOP=1 \

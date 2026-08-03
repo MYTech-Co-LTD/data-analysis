@@ -1,4 +1,4 @@
-DROP VIEW IF EXISTS report_category_summary_gen;
+DROP VIEW IF EXISTS report_category_summary_gen CASCADE;
 CREATE VIEW report_category_summary_gen AS
 WITH target_base AS (
   SELECT
