@@ -247,11 +247,13 @@ export const wholesaleCustomerView: ViewConfig = {
  * 供应链出库三级层级视图（看板1）
  * 生成 report_supply_chain_outbound_gen，三级 region(战区) -> sub_region(二级区域) -> store(门店)
  *
- * 口径：
- * - 纯 actual（无 target 对比）：delivery_amount/profit/margin + daily_delivery_amount/profit/margin
- * - delivery 口径 = report_daily_delivery（纯配送，不含品品甜批发）
- * - scope: active+closed total target 日期窗口 + is_assessed_war_zone 考核战区过滤
- * - daily_delivery_* = biz_date=latest_day 当天值（filter AST，T2 新增）
+ * 口径（2026-08-04 改为 distribution，对齐 region_breakdown 配送报表）：
+ * - 纯 actual（无 target 对比）：distribution_amount/profit/margin + daily_distribution_amount/profit/margin
+ * - distribution 口径 = delivery + wholesale_pp（熊喵配送 report_daily_delivery + 品牌甜门店批发
+ *   report_daily_wholesale_customer WHERE sbc=64188），含品品甜；列别名保留 delivery_* 前端无感
+ * - scope: active total target 日期窗口 + is_assessed_war_zone 考核战区过滤（品品甜仅考核门店）
+ * - daily_distribution_* = biz_date=latest_day 当天值（filter AST，迁移 164 新增）
+ * - 改前为纯 delivery 口径（不含品品甜），与旁边 region_breakdown（已 distribution）口径不一致——本视图补齐
  *
  * hierarchy 结构照 regionBreakdownView（region/sub_region/store 三级 + columns 映射），
  * 但 target_metric_codes=[]（无目标对比）-> target CTE 不生成，target_breakdown 占位不读。
@@ -259,13 +261,22 @@ export const wholesaleCustomerView: ViewConfig = {
 export const supplyChainOutboundView: ViewConfig = {
   view_name: 'report_supply_chain_outbound_gen',
   metrics: [
-    'delivery_amount',          // 周期配送金额（纯 delivery，不含品品甜）
-    'delivery_profit',          // 周期配送毛利（脱敏）
-    'delivery_margin',          // 周期毛利率 = delivery_profit / delivery_amount
-    'daily_delivery_amount',   // 当天配送金额（T2 新增，filter AST）
-    'daily_delivery_profit',    // 当天配送毛利（T2 新增，脱敏）
-    'daily_delivery_margin',    // 当天毛利率（T2 新增，op / 重算）
+    'distribution_amount',        // 周期配送金额（delivery+wholesale_pp，含品品甜）→ alias delivery_amount
+    'distribution_profit',        // 周期配送毛利（脱敏）→ alias delivery_profit
+    'distribution_margin',        // 周期毛利率 = distribution_profit/distribution_amount → alias delivery_margin
+    'daily_distribution_amount',  // 当天配送金额（含品品甜，迁移164）→ alias daily_delivery_amount
+    'daily_distribution_profit',  // 当天配送毛利（脱敏）→ alias daily_delivery_profit
+    'daily_distribution_margin',  // 当天毛利率（op / 重算）→ alias daily_delivery_margin
   ],
+  // 列别名映射回 delivery_*：前端 supply-chain-outbound.ts 强依赖这些列名，保持零改动
+  aliases: {
+    distribution_amount: 'delivery_amount',
+    distribution_profit: 'delivery_profit',
+    distribution_margin: 'delivery_margin',
+    daily_distribution_amount: 'daily_delivery_amount',
+    daily_distribution_profit: 'daily_delivery_profit',
+    daily_distribution_margin: 'daily_delivery_margin',
+  },
   dim_code: 'branch',
   levels: ['store', 'sub_region', 'region'],
   target_metric_codes: [],   // 无 target（纯 actual）
