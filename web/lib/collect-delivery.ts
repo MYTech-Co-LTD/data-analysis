@@ -145,6 +145,7 @@ export function getTodayChina(): string {
 
 export interface DeliveryCollectResult {
   records: any[]; apiTotal: number; storagePath: string; error: string; newApiTotal: number; skipped: boolean;
+  dedupViolations?: { bizday: string; total: number; distinct: number }[]; // 即时去重守卫：写后 total>distinct 的天
 }
 export interface DeliveryCollectOptions { mode?: 'full' | 'incremental'; watermarkLastCount?: number; }
 
@@ -154,6 +155,23 @@ export interface DeliveryCollectOptions { mode?: 'full' | 'incremental'; waterma
 export async function countDeliveryApi(authToken: string, distributionBranch: number, branchNumsStr: string, dtFrom: string, dtTo: string): Promise<number> {
   const r = await callLemengApi(ENDPOINT_DETAIL, authToken, buildBody(distributionBranch, dtFrom, dtTo, 0, 1), branchNumsStr);
   return (r.ok && String(r.data?.code) === '0') ? (r.data?.data?.count || 0) : -1;
+}
+
+// 业务自然键（须与 duckdb dedupe_key、D1 detail-sources.json natural_key 三处保持一致）
+const NATURAL_KEY = ['pos_order_num', 'item_num', 'response_branch_num', 'out_amount', 'lot_number'] as const;
+
+// 即时去重守卫：写完 parquet 后查 total vs distinct(NATURAL_KEY)，防 /merge 跨次去重失效堆积重复。
+// 不依赖 lemeng API count（分页故障会同步污染源 count，C0 对此盲），直接查 parquet 主键唯一性。
+async function verifyDedup(bizday: string, companyId: string): Promise<{ total: number; distinct: number } | null> {
+  const path = `s3://lemeng-datasource/lemeng/transfer_detail/${companyId}/${bizday}/all.parquet`;
+  const keyCols = NATURAL_KEY.map(k => `CAST(${k} AS VARCHAR)`).join(",'\\x1F',");
+  const sql = `SELECT COUNT(*) total, COUNT(DISTINCT CONCAT_WS('\\x1F', ${keyCols})) distinct FROM read_parquet('${path}', union_by_name=true)`;
+  try {
+    const r = await fetch(`${DUCKDB_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY }, body: JSON.stringify({ sql }) });
+    const j = await r.json();
+    if (!j.success || !j.data?.length) return null;
+    return { total: Number(j.data[0].total), distinct: Number(j.data[0].distinct) };
+  } catch { return null; }
 }
 
 // 单次采集：首页拿 count + 预热 → offset 分页拉全 → 落 Parquet
@@ -224,7 +242,7 @@ export async function collectDeliveryOnce(
       // 按【业务自然键】去重（与 D1 natural_key 一致）——除 id 外整行去重在字段微差/schema 漂移时失效
       const seen = new Set<string>();
       const flat = flatRaw.filter(r => {
-        const key = [r.pos_order_num, r.item_num, r.response_branch_num, r.out_amount, r.lot_number].join('');
+        const key = NATURAL_KEY.map((k: any) => r[k]).join('');
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -248,13 +266,21 @@ export async function collectDeliveryOnce(
         const duckRes = await fetch(`${DUCKDB_URL}${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY },
-          body: JSON.stringify({ records: recs, config: { date: bizday, source: 'lemeng', partition_by: [], dedupe_key: ['pos_order_num', 'item_num', 'response_branch_num', 'out_amount', 'lot_number'], required_fields: ['pos_order_num', 'item_num', 'response_branch_num'], output_format: 'parquet', compression: 'zstd', base_path: `lemeng/transfer_detail/${companyId}/${bizday}` } })
+          body: JSON.stringify({ records: recs, config: { date: bizday, source: 'lemeng', partition_by: [], dedupe_key: [...NATURAL_KEY], required_fields: ['pos_order_num', 'item_num', 'response_branch_num'], output_format: 'parquet', compression: 'zstd', base_path: `lemeng/transfer_detail/${companyId}/${bizday}` } })
         });
         if (!duckRes.ok) throw new Error(`DuckDB ${action} failed (${bizday}): ${duckRes.status} ${await duckRes.text()}`);
         const dj = await duckRes.json();
         if (!dj.success) throw new Error(dj.error || `${action} failed (${bizday})`);
         if (dj.combined_file) lastPath = dj.combined_file;
         if (dj.invalid_records > 0 || dj.duplicates_removed > 0) console.warn(`[collect-delivery] ${bizday} quality: ${dj.invalid_records} invalid, ${dj.duplicates_removed} dup`);
+      }
+      // 即时去重守卫：逐天查 parquet total vs distinct(NATURAL_KEY)，重复则记入 dedupViolations 供 scheduler 告警+重采
+      for (const bizday of Object.keys(byBizday)) {
+        const v = await verifyDedup(bizday, companyId);
+        if (v && v.total > v.distinct) {
+          (result.dedupViolations ||= []).push({ bizday, total: v.total, distinct: v.distinct });
+          console.warn(`[collect-delivery] ${bizday} 去重失效: total=${v.total} distinct=${v.distinct}（重复 ${v.total - v.distinct}）`);
+        }
       }
       result.storagePath = lastPath;
       console.log(`[collect-delivery] Parquet ${action} success: ${result.storagePath}`);

@@ -426,6 +426,17 @@ async function executeTask(task: {
         }
       }
 
+      // 即时去重守卫：dedupViolations 非空 → /merge 跨次去重失效，full 重采修复(natural_key DISTINCT ON 覆盖) + 告警
+      if (lastResult.dedupViolations?.length) {
+        const violated = lastResult.dedupViolations.map(v => `${v.bizday}:${v.total}/${v.distinct}`).join(', ');
+        console.warn(`[scheduler] ${task.name} 去重失效(${violated})，full 重采修复`);
+        const fix = await collectDeliveryOnce(authToken, distributionBranch, branchNumsStr, dates.from, dates.to, limit, { mode: 'full' });
+        const stillBad = fix.dedupViolations?.length ? fix.dedupViolations.map(v => `${v.bizday}:${v.total}/${v.distinct}`).join(',') : '';
+        await notifyWecom(stillBad ? '❌ 配送明细去重失效(重采仍异常)' : '⚠️ 配送明细去重失效(已full重采修复)',
+          `**任务**: ${task.name}\n**范围**: ${dates.from}~${dates.to}\n**失效**: ${violated}${stillBad ? `\n**重采后仍异常**: ${stillBad}（需人工排查）` : ''}`);
+        lastResult = fix;
+      }
+
       // 更新水位线（同 retail：仅落盘成功才推进）
       const finishedAt = new Date();
       const nowMs = finishedAt.getTime();
@@ -504,6 +515,16 @@ async function executeTask(task: {
             lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): 缺 ${missing}`;
           }
         }
+      }
+      // 即时去重守卫：dedupViolations 非空 → /merge 跨次去重失效，full 重采修复(natural_key DISTINCT ON 覆盖) + 告警
+      if (lastResult.dedupViolations?.length) {
+        const violated = lastResult.dedupViolations.map(v => `${v.bizday}:${v.total}/${v.distinct}`).join(', ');
+        console.warn(`[scheduler] ${task.name} 去重失效(${violated})，full 重采修复`);
+        const fix = await collectWholesaleOnce(authToken, branchNumsStr, dates.from, dates.to, limit, { mode: 'full' });
+        const stillBad = fix.dedupViolations?.length ? fix.dedupViolations.map(v => `${v.bizday}:${v.total}/${v.distinct}`).join(',') : '';
+        await notifyWecom(stillBad ? '❌ 批发明细去重失效(重采仍异常)' : '⚠️ 批发明细去重失效(已full重采修复)',
+          `**任务**: ${task.name}\n**范围**: ${dates.from}~${dates.to}\n**失效**: ${violated}${stillBad ? `\n**重采后仍异常**: ${stillBad}（需人工排查）` : ''}`);
+        lastResult = fix;
       }
       const finishedAt = new Date();
       const nowMs = finishedAt.getTime();
