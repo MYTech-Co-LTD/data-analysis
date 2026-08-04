@@ -4,6 +4,7 @@
 import { runD1 } from './qa/d1';
 import { runD2 } from './qa/d2';
 import { runItemMasterCheck } from './qa/item-master';
+import { runBranchWarzoneCheck } from './qa/branch-warzone';
 import detailSources from './qa/config/detail-sources.json';
 import qaChecks from './qa/config/qa-checks.json';
 import type { DetailSource, ViewAssertion, CheckResult, CheckType, QaTrigger } from './qa/types';
@@ -111,6 +112,9 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
 
   // C5 商品主数据完整性：发现 delivery/wholesale 里不在 dim_item 的商品 → 自动触发商品采集 + 重算
   results.push(...await runItemMasterCheck({ db: opts.db, duck: opts.duck, runId: opts.runId, trigger: opts.trigger, checks: opts.checks }));
+
+  // C5 门店战区完整性：近 N 天有销售但被排除出考核战区的门店（first_level_region 空/非考核）→ fail 告警
+  results.push(...await runBranchWarzoneCheck({ db: opts.db, runId: opts.runId, trigger: opts.trigger, checks: opts.checks }));
 
   return results;
 }
