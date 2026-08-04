@@ -58,20 +58,27 @@ export function TargetList({ targets }: { targets: TargetSummary[] }) {
             </div>
           </div>
           <div className="ml-4 shrink-0 text-right tabular-nums">
-            <div className="text-[11px] text-slate-400">进度</div>
-            <div
-              className={`text-xl font-semibold ${rateColor(
-                t.sample_progress_rate,
-              )}`}
-            >
-              {fmtPct(t.sample_progress_rate)}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-400">
-              达成{" "}
-              <span className="text-slate-600">
-                {fmtPct(t.sample_achievement_rate)}
-              </span>
-            </div>
+            {t.status === "active" ? (
+              <>
+                <div className="text-[11px] text-slate-400">进度</div>
+                <div className={`text-xl font-semibold ${rateColor(t.sample_progress_rate)}`}>
+                  {fmtPct(t.sample_progress_rate)}
+                </div>
+                <div className="mt-0.5 text-xs text-slate-400">
+                  达成{" "}
+                  <span className="text-slate-600">
+                    {fmtPct(t.sample_achievement_rate)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-[11px] text-slate-400">达成</div>
+                <div className={`text-xl font-semibold ${rateColor(t.sample_achievement_rate)}`}>
+                  {fmtPct(t.sample_achievement_rate)}
+                </div>
+              </>
+            )}
           </div>
         </Link>
       ))}
