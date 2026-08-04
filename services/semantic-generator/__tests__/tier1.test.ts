@@ -296,6 +296,42 @@ describe('Tier1 dim_grain', () => {
     expect(sql).not.toMatch(/JOIN dim_item di ON di\.system_book_code=s\.system_book_code/);
   });
 
+  it('dim_grain_override 按 source 覆盖（sale 用 item_num lateral，outbound 用 pos_item_code lateral）', () => {
+    const config: ViewConfig = {
+      view_name: 'test_dim_grain_override',
+      metrics: ['sale_amount', 'delivery_amount'],
+      dim_code: 'item',
+      levels: ['item'],
+      target_metric_codes: [],
+      scope: { target_window: true },
+      source_override: {
+        sale_amount: { table: 'report_daily_item_sales', column: 'sale_amount' },
+        delivery_amount: { table: 'report_daily_item_outbound', column: 'delivery_amount' },
+      },
+      dim_grain: {
+        table: 'dim_item di',
+        on: 'di.system_book_code=s.system_book_code AND di.item_num=s.item_num',
+        key: 'item_code',
+        extra: ['item_name'],
+        lateral_pick: { match: 'item_num = s.item_num', prefer_own: 'system_book_code = s.system_book_code' },
+      },
+      dim_grain_override: {
+        'report_daily_item_outbound': {
+          table: 'dim_item di',
+          on: 'di.item_code = s.pos_item_code',
+          key: 'item_code',
+          extra: ['item_name'],
+          lateral_pick: { match: 'item_code = s.pos_item_code', prefer_own: 'system_book_code = s.system_book_code' },
+        },
+      },
+    };
+    const sql = generateTier1View(config, mockMetrics, mockSources);
+    // sale CTE 用默认 dim_grain（item_num lateral）
+    expect(sql).toContain('WHERE item_num = s.item_num');
+    // outbound CTE 用 override（pos_item_code lateral）
+    expect(sql).toContain('WHERE item_code = s.pos_item_code');
+  });
+
   it('未设 lateral_pick 时仍发普通 join（回归）', () => {
     const config: ViewConfig = {
       view_name: 'test_no_lateral',

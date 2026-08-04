@@ -197,6 +197,19 @@ export const itemBreakdownView: ViewConfig = {
     extra: ['item_name', 'category_name', 'top_category', 'item_brand', 'category_group'],
     lateral_pick: { match: 'item_num = s.item_num', prefer_own: 'system_book_code = s.system_book_code' },
   },
+  // outbound 用 pos_item_code（货来源编码）join，替代 item_num + 本账套优先。
+  // 原因：110 把批发按收货方分配 sbc（64188），但 item_num 是发货方货号（3120）。
+  //   item_num 跨品牌不唯一（3120/64188 各有 597 但不同商品），本账套优先会误选 64188 的同名不同商品（如 597=云威月饼）。
+  //   pos_item_code 是货来源 item_code（parquet 全非空），按它 join 正确归到货来源商品。
+  dim_grain_override: {
+    'report_daily_item_outbound': {
+      table: 'dim_item di',
+      on: 'di.item_code = s.pos_item_code',
+      key: 'item_code',
+      extra: ['item_name', 'category_name', 'top_category', 'item_brand', 'category_group'],
+      lateral_pick: { match: 'item_code = s.pos_item_code', prefer_own: 'system_book_code = s.system_book_code' },
+    },
+  },
   perm_skip_branch: true,  // item 粒度聚合表无 branch_num 列（仅 brands 过滤）
 };
 

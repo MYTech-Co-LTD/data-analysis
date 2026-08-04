@@ -76,6 +76,13 @@ export interface ViewConfig {
     extra?: string[];    // ['item_name','category_name',...]（非分组 dim 列，从 dim 表带出）
     lateral_pick?: { match: string; prefer_own: string };  // 跨账套回退匹配（本账套优先+跨品牌回退，LIMIT 1）
   };
+  // per-source dim_grain 覆盖（key=source table）：不同 source 用不同 dim join。
+  // 用途：outbound 的 64188 批发（110 按收货方分配 sbc，item_num 是发货方货号）需按 pos_item_code（货来源编码）join，
+  //   不能用 item_num + 本账套优先（64188 有同名 item_num 不同商品时会归错）。sale 用默认 dim_grain。
+  dim_grain_override?: Record<string, {
+    table: string; on: string; key: string; extra?: string[];
+    lateral_pick?: { match: string; prefer_own: string };
+  }>;
   carry_cols?: string[];  // 源表列，actual CTE 里 MAX(s.${col}) AS ${col} 带出（client_name/system_book_code）
   extra_grain?: string[];  // 额外 GROUP BY 的 fact 表列（如 ['s.biz_date']），实现双 grain（如 日期×客户）。带 s. 前缀；final SELECT 去 s. 作列名
   extra_join?: {

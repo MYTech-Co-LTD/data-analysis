@@ -265,6 +265,8 @@ export function generateTier1View(
     // 原有逻辑：单表单 CTE
     for (const g of actualGroups.values()) {
       const cteName = `cte${cteIdx++}`;
+      // per-source dim_grain 覆盖：outbound 用 pos_item_code join（货来源编码），sale 用默认 item_num lateral
+      const dg = config.dim_grain_override?.[g.table] ?? config.dim_grain;
       const cols = g.metrics.map(m => {
         const src = sources.find(s => s.metric_code === m.metric_code)!;
         const ov = config.source_override?.[m.metric_code];
@@ -283,9 +285,9 @@ export function generateTier1View(
         }
       }
       // dim_grain：extra 列追加（非分组 dim 列，功能依赖于 grain key，MAX 安全）
-      if (config.dim_grain?.extra) {
-        const alias = config.dim_grain.table.split(' ')[1]; // 'di'
-        for (const ex of config.dim_grain.extra) {
+      if (dg?.extra) {
+        const alias = dg.table.split(' ')[1]; // 'di'
+        for (const ex of dg.extra) {
           cols.push(`MAX(${alias}.${ex}) AS ${ex}`);
         }
       }
@@ -300,19 +302,19 @@ export function generateTier1View(
       const joins: string[] = [];
       const where: string[] = [];
       // dim_grain：actual CTE 加 dim join + grain 变换（替换 s.${dimKey}）
-      const dimAlias = config.dim_grain?.table.split(' ')[1];
-      const grainCol = config.dim_grain ? `${dimAlias}.${config.dim_grain.key}` : `s.${dimKey}`;
+      const dimAlias = dg?.table.split(' ')[1];
+      const grainCol = dg ? `${dimAlias}.${dg.key}` : `s.${dimKey}`;
       if (g.filter) where.push(g.filter);
       where.push(permFilterFact('s', config.perm_skip_branch ?? false));
-      if (config.dim_grain) {
-        if (config.dim_grain.lateral_pick) {
+      if (dg) {
+        if (dg.lateral_pick) {
           // 跨账套回退匹配：本账套优先、跨品牌回退（如 64188 批发卖 3120 货），LIMIT 1 防 item_num 重叠翻倍
-          const lpTbl = config.dim_grain.table.split(' ')[0]; // 'dim_item'
-          const lpAlias = config.dim_grain.table.split(' ')[1]; // 'di'
-          const lp = config.dim_grain.lateral_pick;
+          const lpTbl = dg.table.split(' ')[0]; // 'dim_item'
+          const lpAlias = dg.table.split(' ')[1]; // 'di'
+          const lp = dg.lateral_pick;
           joins.push(`JOIN LATERAL (SELECT * FROM ${lpTbl} WHERE ${lp.match} ORDER BY (${lp.prefer_own}) DESC LIMIT 1) ${lpAlias} ON true`);
         } else {
-          joins.push(`JOIN ${config.dim_grain.table} ON ${config.dim_grain.on}`);
+          joins.push(`JOIN ${dg.table} ON ${dg.on}`);
         }
       }
       let selectDims = grainCol;
