@@ -819,12 +819,14 @@ function registerDailyReconcileJob() {
     try {
       console.log("[scheduler] ⏰ 每日02:00 明细对账触发（3天窗口）");
       const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
-      const { data: tasks, error } = await client.database.from("collect_tasks")
+      const { data: allTasks, error } = await client.database.from("collect_tasks")
         .select("id, name, source_id, function_slug, schedule_cron, params")
-        .eq("enabled", true)
-        .eq("function_slug", "collect-lemeng");
+        .eq("enabled", true);
       if (error) throw new Error(`查询采集任务失败: ${error.message}`);
-      for (const task of (tasks ?? [])) {
+      // 三个明细源均纳入对账（retail/delivery/wholesale）；executeTask 内按 task_type 走各自 reconcile 分支
+      const RECONCILE_SLUGS = ["collect-lemeng", "collect-delivery", "collect-wholesale"];
+      const tasks = (allTasks ?? []).filter((t: any) => RECONCILE_SLUGS.includes(t.function_slug));
+      for (const task of tasks) {
         try { await executeTask(task, { reconcile: true }); }
         catch (e: any) { console.error(`[scheduler] 02:00对账 ${task.name} 异常:`, e?.message ?? e); }
       }

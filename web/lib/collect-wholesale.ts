@@ -212,10 +212,10 @@ export async function collectWholesaleOnce(
     try {
       const flatRaw = flattenRecords(result.records);
       // 去重：lemeng wholesale API 分页故障会重复返回同一条业务记录（每次生成新 id），
-      // 按【除 id 外全部字段】去重——id 是 lemeng 侧每次请求新生成的行 id，非业务键
+      // 按【业务自然键】去重（与 D1 natural_key 一致）——除 id 外整行去重在字段微差/schema 漂移时失效
       const seen = new Set<string>();
       const flat = flatRaw.filter(r => {
-        const key = JSON.stringify(r, (k, v) => (k === 'id' ? undefined : v));
+        const key = [r.pos_order_num, r.item_num, r.client_code, r.wholesale_num, r.lot_number].join('');
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -239,7 +239,7 @@ export async function collectWholesaleOnce(
         const duckRes = await fetch(`${DUCKDB_URL}${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY },
-          body: JSON.stringify({ records: recs, config: { date: bizday, source: 'lemeng', partition_by: [], dedupe_key: ['*'], dedupe_exclude: ['id'], required_fields: ['pos_order_num', 'item_num', 'branch_num'], output_format: 'parquet', compression: 'zstd', base_path: `lemeng/wholesale_detail/${companyId}/${bizday}` } })
+          body: JSON.stringify({ records: recs, config: { date: bizday, source: 'lemeng', partition_by: [], dedupe_key: ['pos_order_num', 'item_num', 'client_code', 'wholesale_num', 'lot_number'], required_fields: ['pos_order_num', 'item_num', 'branch_num'], output_format: 'parquet', compression: 'zstd', base_path: `lemeng/wholesale_detail/${companyId}/${bizday}` } })
         });
         if (!duckRes.ok) throw new Error(`DuckDB ${action} failed (${bizday}): ${duckRes.status} ${await duckRes.text()}`);
         const dj = await duckRes.json();
