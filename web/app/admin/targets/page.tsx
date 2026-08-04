@@ -9,15 +9,22 @@ export default function TargetsPage() {
   const [loading, setLoading] = useState(true);
   const [show, setShow] = useState(false);
   const load = async () => {
-    const r = await fetch('/api/admin/targets'); const j = await r.json();
-    const raw = (j.data || []).filter((t: any) => t.target_level !== 'breakdown' || t.parent_target_id === null);
-    const map = new Map<number, any>();
-    for (const r of raw) {
-      if (!map.has(r.target_id)) map.set(r.target_id, { id: r.target_id, name: r.name, sbc: r.system_book_code, start: r.start_date, end: r.end_date, status: r.status, metrics: {} });
-      map.get(r.target_id)!.metrics[r.metric_code] = { value: Number(r.target_value), rate: r.achievement_rate };
+    try {
+      const r = await fetch('/api/admin/targets', { cache: 'no-store' });
+      const j = await r.json();
+      const raw = (j.data || []).filter((t: any) => t.target_level !== 'breakdown' || t.parent_target_id === null);
+      const map = new Map<number, any>();
+      for (const row of raw) {
+        if (!map.has(row.target_id)) map.set(row.target_id, { id: row.target_id, name: row.name, sbc: row.system_book_code, start: row.start_date, end: row.end_date, status: row.status, metrics: {} });
+        map.get(row.target_id)!.metrics[row.metric_code] = { value: Number(row.target_value), rate: row.achievement_rate };
+      }
+      setList([...map.values()]);
+    } catch (e) {
+      console.error('目标列表加载失败:', e);
+      setList([]);
+    } finally {
+      setLoading(false);
     }
-    setList([...map.values()]);
-    setLoading(false);
   };
   useEffect(() => { load(); }, []);
 
