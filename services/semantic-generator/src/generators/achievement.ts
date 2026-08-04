@@ -43,7 +43,7 @@ ${dataStatusCases.join('\n')} ELSE 'not_ready' END AS data_status,
   t.total_days, t.days_elapsed,
   CASE WHEN mv.target_value > 0 AND t.status = 'closed' THEN sn.achievement_rate
 ${rateCases.join('\n')} END AS achievement_rate,
-  round(EXTRACT(day FROM current_date)::numeric / EXTRACT(day FROM (date_trunc('month', current_date) + interval '1 month' - interval '1 day'))::numeric, 4) AS progress_rate
+  CASE WHEN t.total_days > 0 THEN round(t.days_elapsed::numeric / t.total_days, 4) ELSE NULL END AS progress_rate
 FROM tgt t
 JOIN target_metric_values mv ON mv.target_id = t.id
 JOIN metric_definitions md ON md.metric_code = mv.metric_code

@@ -101,7 +101,7 @@ SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_a
        WHEN mv.target_value > 0 AND md.metric_code = 'delivery' AND md.data_ready AND delivery.actual_value IS NOT NULL THEN round((delivery.actual_value / mv.target_value)::numeric, 4)
        WHEN mv.target_value > 0 AND md.metric_code = 'outbound_amt' AND md.data_ready AND outbound_amt.actual_value IS NOT NULL THEN round((outbound_amt.actual_value / mv.target_value)::numeric, 4)
        WHEN mv.target_value > 0 AND md.metric_code = 'outbound_profit' AND md.data_ready AND outbound_profit.actual_value IS NOT NULL THEN round((outbound_profit.actual_value / mv.target_value)::numeric, 4) END AS achievement_rate,
-  round(EXTRACT(day FROM current_date)::numeric / EXTRACT(day FROM (date_trunc('month', current_date) + interval '1 month' - interval '1 day'))::numeric, 4) AS progress_rate
+  CASE WHEN t.total_days > 0 THEN round(t.days_elapsed::numeric / t.total_days, 4) ELSE NULL END AS progress_rate
 FROM tgt t
 JOIN target_metric_values mv ON mv.target_id = t.id
 JOIN metric_definitions md ON md.metric_code = mv.metric_code
