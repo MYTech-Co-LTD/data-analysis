@@ -160,12 +160,12 @@ const NATURAL_KEY = ['pos_order_num', 'item_num', 'client_code', 'wholesale_num'
 async function verifyDedup(bizday: string, companyId: string): Promise<{ total: number; distinct: number } | null> {
   const path = `s3://lemeng-datasource/lemeng/wholesale_detail/${companyId}/${bizday}/all.parquet`;
   const keyCols = NATURAL_KEY.map(k => `CAST(${k} AS VARCHAR)`).join(",'\\x1F',");
-  const sql = `SELECT COUNT(*) total, COUNT(DISTINCT CONCAT_WS('\\x1F', ${keyCols})) distinct FROM read_parquet('${path}', union_by_name=true)`;
+  const sql = `SELECT COUNT(*) total, COUNT(DISTINCT CONCAT_WS('\\x1F', ${keyCols})) dk FROM read_parquet('${path}', union_by_name=true)`;
   try {
     const r = await fetch(`${DUCKDB_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY }, body: JSON.stringify({ sql }) });
     const j = await r.json();
     if (!j.success || !j.data?.length) return null;
-    return { total: Number(j.data[0].total), distinct: Number(j.data[0].distinct) };
+    return { total: Number(j.data[0].total), distinct: Number(j.data[0].dk) };
   } catch { return null; }
 }
 
