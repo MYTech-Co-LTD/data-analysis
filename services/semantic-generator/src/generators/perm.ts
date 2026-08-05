@@ -22,3 +22,11 @@ export function permFilterFact(alias: string, skipBranch = false): string {
 export function permFilterTarget(alias: string): string {
   return `(${alias}.branch_num = 'ALL' OR ${permFilterFact(alias)})`;
 }
+
+/** FULL JOIN 行过滤：两侧 COALESCE（report_daily_delivery d FULL JOIN report_daily_wholesale w
+ *  等场景，d 或 w 侧可能 NULL，用 COALESCE 取非空侧值过滤） */
+export function permFilterFullJoin(aliasA: string, aliasB: string): string {
+  const brand = `claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, COALESCE(${aliasA}.system_book_code, ${aliasB}.system_book_code))`;
+  const branch = `claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, COALESCE(${aliasA}.branch_num, ${aliasB}.branch_num)::text)`;
+  return `${brand} AND ${branch}`;
+}
