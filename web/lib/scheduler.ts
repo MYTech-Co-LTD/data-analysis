@@ -252,8 +252,10 @@ async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFr
   const runId = `${trigger}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const results = await runQaChecks({ runId, trigger, db, duck, checks, dateFrom, dateTo, d1Globs });
   // C0 源API count ↔ 明细 count（分毫不差：库==源）——每日 job 也要验证「采集=源」，不只手动
+  // autoBackfill=true：默认 7 天窗口内任一天 missing（库<源）→ 当日 full 重采收敛 ≤3（缺失日自动补采），
+  // 与采集后即时 QA（runPostCollectQa）同策略，确保每日 09:15 能自愈漏采而非只告警。
   if (!checks || checks.some((c) => c.startsWith('C0:'))) {
-    results.push(...await runC0Checks({ client, duck, runId, trigger, checks }));
+    results.push(...await runC0Checks({ client, duck, runId, trigger, checks, autoBackfill: true }));
   }
   const failed = results.filter((r) => r.status !== 'pass');
   if (failed.length) {
