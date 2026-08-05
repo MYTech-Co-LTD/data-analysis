@@ -14,6 +14,19 @@
 export async function register() {
   if (process.env.NEXT_RUNTIME !== 'nodejs') return;
 
+  // F7 E2E：MSW_ENABLED=1（Playwright webServer env）时，在 dev server 进程内
+  // 启动 MSW node，拦截 RSC server 端 DB fetch（report_*_gen → 400），
+  // 让 F1 降级 E2E 真正验证（不依赖 dev 网关对 /api/database/* 的偶然行为）。
+  // 动态 import：生产构建不设 MSW_ENABLED，msw 不会被加载（且是 devDependency）。
+  if (process.env.MSW_ENABLED === '1') {
+    try {
+      const { startMsw } = await import('./msw/server');
+      startMsw();
+    } catch (err) {
+      console.error('[instrumentation] MSW 启动失败（不影响调度器）:', err);
+    }
+  }
+
   initSchedulerWithRetry().catch((err) => {
     console.error('[instrumentation] 调度器初始化失败:', err);
   });
