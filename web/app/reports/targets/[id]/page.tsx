@@ -17,6 +17,7 @@ import { type GetterResult } from "@/lib/report-center/types";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PartialDegradeBanner } from "@/components/report-center/partial-degrade-banner";
+import { PermissionBanner } from "@/components/report-center/permission-banner";
 import { DesktopDashboard } from "./desktop";
 import { MobileDashboard } from "./mobile";
 
@@ -73,6 +74,7 @@ export default async function TargetDashboard({
     const fallback = (
       <div className={isMobile ? "p-4" : "p-6"}>
         <PartialDegradeBanner failCount={7} total={7} />
+        <PermissionBanner />
       </div>
     );
     return isMobile ? (
@@ -183,8 +185,13 @@ export default async function TargetDashboard({
   // 提取月份
   const targetMonth = new Date(t.start_date).getMonth() + 1;
 
-  const banner =
-    failCount > 0 ? <PartialDegradeBanner failCount={failCount} total={7} /> : null;
+  const banner = (
+    <>
+      {failCount > 0 && <PartialDegradeBanner failCount={failCount} total={7} />}
+      {/* F2.2：限门店用户（如店长）RLS 裁剪提示——内部 fetch /api/me 自判显隐 */}
+      <PermissionBanner />
+    </>
+  );
 
   // F1.3：透传 GetterResult（不再解包 .rows），组件级 status='error' 显示模块失败占位。
   // itemTop 整对象传（ItemBreakdownResult 含 4 board + status/error）。
