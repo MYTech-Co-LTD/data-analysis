@@ -1,0 +1,178 @@
+// web/lib/__tests__/collect-stall.test.ts
+// 采集停 evaluator 单测：mock getCollectTasks（last_run_at 新旧 + 不同 cron），
+// 断言 firing/不 firing + 阈值（stallMinutesFor）正确。
+import { describe, it, expect } from 'vitest';
+import { collectStallEvaluator, evalCollectStall, stallMinutesFor } from '../monitor/evaluators/collect-stall';
+import type { EvalDeps, MonitorRule } from '../monitor/types';
+
+const NOW = new Date('2026-08-05T12:00:00Z');
+
+type CollectTask = { id: string; name: string; schedule_cron: string; enabled: boolean; last_run_at: string | null };
+
+function makeTask(over: Partial<CollectTask> = {}): CollectTask {
+  return {
+    id: 'task-1',
+    name: '测试采集任务',
+    schedule_cron: '*/5 * * * *',
+    enabled: true,
+    last_run_at: '2026-08-05T11:50:00Z', // 10 分钟前（默认新鲜）
+    ...over,
+  };
+}
+
+function makeDeps(tasks: CollectTask[]): EvalDeps {
+  return {
+    now: NOW,
+    probe: async () => ({ ok: true, latencyMs: 1 }),
+    getCredentialToken: async () => null,
+    getCollectLogs: async () => [],
+    getCollectTasks: async () => tasks,
+  };
+}
+
+function makeRule(taskId: string, threshold: Record<string, any> = {}): MonitorRule {
+  return {
+    id: 1,
+    name: '采集停止·测试',
+    check_type: 'collect_stall',
+    target: taskId,
+    threshold,
+    severity: 'high',
+    touser: null,
+    template: '任务「{task_name}」采集已停止 {elapsed_minutes} 分钟',
+    suppress_window_seconds: 1800,
+    enabled: true,
+  };
+}
+
+describe('stallMinutesFor 阈值推导', () => {
+  it('分钟级 cron（*/5、3-59/5、*）→ 15 分钟', () => {
+    expect(stallMinutesFor('*/5 * * * *')).toBe(15);
+    expect(stallMinutesFor('3-59/5 * * * *')).toBe(15);
+    expect(stallMinutesFor('* * * * *')).toBe(15);
+  });
+
+  it('日任务 cron（0 3 * * * / 0 4 * * *）→ 26 小时', () => {
+    expect(stallMinutesFor('0 3 * * *')).toBe(26 * 60);
+    expect(stallMinutesFor('0 4 * * *')).toBe(26 * 60);
+  });
+
+  it('小时任务（0 * * * *）按非分钟级 → 26 小时', () => {
+    expect(stallMinutesFor('0 * * * *')).toBe(26 * 60);
+  });
+
+  it('空/脏 cron 容错', () => {
+    expect(stallMinutesFor('')).toBe(26 * 60);
+    expect(stallMinutesFor('   ')).toBe(26 * 60);
+  });
+});
+
+describe('collectStallEvaluator 全量扫描', () => {
+  it('分钟级任务陈旧（>15 分钟）→ firing，elapsed/threshold/reason 正确', async () => {
+    const tasks = [makeTask({ last_run_at: '2026-08-05T11:40:00Z' })]; // 20 分钟前
+    const hits = await collectStallEvaluator(makeDeps(tasks));
+
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({
+      firing: true,
+      taskId: 'task-1',
+      elapsedMinutes: 20,
+      thresholdMinutes: 15,
+    });
+    expect(hits[0].reason).toContain('采集已停止 20 分钟');
+    expect(hits[0].reason).toContain('阈值 15 分钟');
+  });
+
+  it('分钟级任务新鲜（<=15 分钟）→ 不 firing', async () => {
+    const tasks = [makeTask({ last_run_at: '2026-08-05T11:50:00Z' })]; // 10 分钟前
+    const hits = await collectStallEvaluator(makeDeps(tasks));
+    expect(hits).toHaveLength(0);
+  });
+
+  it('禁用任务陈旧 → 跳过（不 firing）', async () => {
+    const tasks = [makeTask({ enabled: false, last_run_at: '2026-08-05T10:00:00Z' })]; // 2h 前
+    const hits = await collectStallEvaluator(makeDeps(tasks));
+    expect(hits).toHaveLength(0);
+  });
+
+  it('从未运行（last_run_at 为空）→ 跳过（不 firing）', async () => {
+    const tasks = [makeTask({ last_run_at: null })];
+    const hits = await collectStallEvaluator(makeDeps(tasks));
+    expect(hits).toHaveLength(0);
+  });
+
+  it('日任务 2 小时未跑（未超 26h）→ 不 firing', async () => {
+    const tasks = [makeTask({ schedule_cron: '0 3 * * *', last_run_at: '2026-08-05T10:00:00Z' })]; // 2h 前
+    const hits = await collectStallEvaluator(makeDeps(tasks));
+    expect(hits).toHaveLength(0);
+  });
+
+  it('日任务 30 小时未跑（超 26h）→ firing', async () => {
+    const tasks = [makeTask({ schedule_cron: '0 3 * * *', last_run_at: '2026-08-04T06:00:00Z' })]; // 30h 前
+    const hits = await collectStallEvaluator(makeDeps(tasks));
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatchObject({ elapsedMinutes: 30 * 60, thresholdMinutes: 26 * 60 });
+  });
+
+  it('多个任务混合：只返回陈旧项', async () => {
+    const tasks = [
+      makeTask({ id: 't-stale', last_run_at: '2026-08-05T11:00:00Z' }), // 60 分钟前 → 陈旧
+      makeTask({ id: 't-fresh', last_run_at: '2026-08-05T11:55:00Z' }), // 5 分钟前 → 新鲜
+      makeTask({ id: 't-disabled', enabled: false, last_run_at: '2026-08-05T09:00:00Z' }), // 禁用
+    ];
+    const hits = await collectStallEvaluator(makeDeps(tasks));
+    expect(hits.map((h) => h.taskId)).toEqual(['t-stale']);
+  });
+});
+
+describe('evalCollectStall engine 适配（per-rule）', () => {
+  it('rule 命中陈旧任务 → firing true + alert_key collect_stall:<task_id>', async () => {
+    const tasks = [makeTask({ last_run_at: '2026-08-05T11:40:00Z' })]; // 20 分钟前
+    const r = await evalCollectStall(makeRule('task-1'), makeDeps(tasks));
+
+    expect(r.firing).toBe(true);
+    expect(r.alert_key).toBe('collect_stall:task-1');
+    expect(r.context).toMatchObject({
+      task_id: 'task-1',
+      elapsed_minutes: 20,
+      threshold_minutes: 15,
+      last_run_at: '2026-08-05T11:40:00Z',
+    });
+    expect(r.context.reason).toContain('采集已停止 20 分钟');
+  });
+
+  it('rule 命中新鲜任务 → firing false', async () => {
+    const tasks = [makeTask({ last_run_at: '2026-08-05T11:50:00Z' })]; // 10 分钟前
+    const r = await evalCollectStall(makeRule('task-1'), makeDeps(tasks));
+    expect(r.firing).toBe(false);
+    expect(r.alert_key).toBe('collect_stall:task-1');
+  });
+
+  it('rule.target 缺省 → firing false + 明确 reason', async () => {
+    const r = await evalCollectStall(makeRule(''), makeDeps([makeTask()]));
+    expect(r.firing).toBe(false);
+    expect(r.context.reason).toBe('rule 缺 target(task_id)');
+  });
+
+  it('rule 命中禁用任务 → firing false', async () => {
+    const tasks = [makeTask({ enabled: false, last_run_at: '2026-08-05T10:00:00Z' })];
+    const r = await evalCollectStall(makeRule('task-1'), makeDeps(tasks));
+    expect(r.firing).toBe(false);
+  });
+
+  it('rule.threshold.stall_minutes 覆盖默认阈值（放宽）→ 不 firing', async () => {
+    // 20 分钟前、分钟级任务：默认阈值 15 → 会 firing；覆盖为 60 → 不 firing
+    const tasks = [makeTask({ last_run_at: '2026-08-05T11:40:00Z' })];
+    const r = await evalCollectStall(makeRule('task-1', { stall_minutes: 60 }), makeDeps(tasks));
+    expect(r.firing).toBe(false);
+  });
+
+  it('rule.threshold.stall_minutes 覆盖默认阈值（收紧）→ firing + threshold_minutes 用覆盖值', async () => {
+    // 10 分钟前、分钟级任务：默认阈值 15 → 不 firing；覆盖为 5 → firing
+    const tasks = [makeTask({ last_run_at: '2026-08-05T11:50:00Z' })];
+    const r = await evalCollectStall(makeRule('task-1', { stall_minutes: 5 }), makeDeps(tasks));
+    expect(r.firing).toBe(true);
+    expect(r.context.threshold_minutes).toBe(5);
+    expect(r.context.elapsed_minutes).toBe(10);
+  });
+});

@@ -55,6 +55,13 @@ function buildDeps(): EvalDeps {
       if (error) throw new Error(`getCollectLogs: ${error.message}`);
       return (data ?? []) as Array<{ status: string; started_at: string; error_message: string | null }>;
     },
+    getCollectTasks: async () => {
+      const { data, error } = await client.database
+        .from('collect_tasks')
+        .select('id, name, schedule_cron, enabled, last_run_at');
+      if (error) throw new Error(`getCollectTasks: ${error.message}`);
+      return (data ?? []) as Array<{ id: string; name: string; schedule_cron: string; enabled: boolean; last_run_at: string | null }>;
+    },
   };
 }
 
@@ -69,7 +76,7 @@ export async function runServiceDownBucket() {
 
 export async function runCollectTokenBucket() {
   try {
-    await runScan(new SdkStore(newClient()), ['collect_fail', 'request_fail', 'token_expire'] as CheckType[], buildDeps(), EVALUATORS);
+    await runScan(new SdkStore(newClient()), ['collect_stall', 'collect_fail', 'request_fail', 'token_expire'] as CheckType[], buildDeps(), EVALUATORS);
   } catch (e: any) {
     console.error('[monitor] collect/token bucket 异常:', e?.message ?? e);
   }

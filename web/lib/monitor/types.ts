@@ -5,6 +5,7 @@ export type CheckType =
   | 'service_down'
   | 'token_expire'
   | 'collect_fail'
+  | 'collect_stall'
   | 'request_fail'
   | 'data_freshness'
   | 'data_integrity'
@@ -43,6 +44,8 @@ export interface EvalDeps {
   getCredentialToken: (sourceId: string) => Promise<string | null>;
   // collect_fail 用：取某采集任务最近 limit 条 collect_logs（最新在前）
   getCollectLogs: (taskId: string, limit: number) => Promise<Array<{ status: string; started_at: string; error_message: string | null }>>;
+  // collect_stall 用：取全部采集任务（last_run_at 心跳陈旧检测）
+  getCollectTasks: () => Promise<Array<{ id: string; name: string; schedule_cron: string; enabled: boolean; last_run_at: string | null }>>;
 }
 
 export interface ProbeOutcome {

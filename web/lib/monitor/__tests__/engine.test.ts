@@ -15,7 +15,7 @@ const baseRule = (over: Partial<MonitorRule> = {}): MonitorRule => ({
   severity: 'high', touser: '@default', template: '{svc} down', suppress_window_seconds: 1800, enabled: true, ...over,
 });
 
-const fakeDeps = (): EvalDeps => ({ now: new Date('2026-07-08T10:00:00Z'), probe: async () => ({ ok: false, latencyMs: 1, error: 'x' }), getCredentialToken: async () => null, getCollectLogs: async () => [] });
+const fakeDeps = (): EvalDeps => ({ now: new Date('2026-07-08T10:00:00Z'), probe: async () => ({ ok: false, latencyMs: 1, error: 'x' }), getCredentialToken: async () => null, getCollectLogs: async () => [], getCollectTasks: async () => [] });
 
 describe('runScan', () => {
   it('firing → 写 active + 发通知', async () => {

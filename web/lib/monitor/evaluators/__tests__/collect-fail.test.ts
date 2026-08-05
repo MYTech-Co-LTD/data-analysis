@@ -16,6 +16,7 @@ const deps = (logs: Array<{ status: string; error_message?: string }>): EvalDeps
   probe: async () => ({ ok: true, latencyMs: 1 }),
   getCredentialToken: async () => null,
   getCollectLogs: async () => logs.map(l => ({ status: l.status, started_at: '', error_message: l.error_message ?? null })),
+  getCollectTasks: async () => [],
 });
 
 describe('evalCollectFail', () => {

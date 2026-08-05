@@ -13,6 +13,7 @@ const deps = (ok: boolean, extra: Partial<ProbeOutcome> = {}): EvalDeps => ({
   probe: async () => ({ ok, latencyMs: 5, status: ok ? 200 : undefined, ...extra } as ProbeOutcome),
   getCredentialToken: async () => null,
   getCollectLogs: async () => [],
+  getCollectTasks: async () => [],
 });
 
 describe('evalServiceDown', () => {
