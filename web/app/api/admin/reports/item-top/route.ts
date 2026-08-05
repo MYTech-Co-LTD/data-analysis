@@ -4,8 +4,11 @@
 // 直接 getClient()：user-facing report，按调用方 cookie 的 JWT 走 authenticated RLS。
 //
 // 返回 TopBoard{ rows: TOP20, totalAmount, totalProfit }，前端合计行用 totals。
+// Task 8 Critical: 复用 toBoard（已修脱敏：profit NULL 透传，全 null→totalProfit=null，
+// 不再被 Number(null||0) 压成 0 误导无成本权限用户看到「¥0 合计」/「¥0 行毛利」）。
 import { NextRequest, NextResponse } from "next/server";
 import { getClient } from "@/lib/api";
+import { toBoard } from "@/lib/report-center/item-breakdown";
 
 export async function POST(req: NextRequest) {
   const b = await req.json();
@@ -32,27 +35,16 @@ export async function POST(req: NextRequest) {
   }
 
   // RPC 返 7 列：(item_code, item_name, category_name, sale_amount, sale_profit, outbound_amount, outbound_profit)
-  const all = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    item_code: String(r.item_code ?? ""),
-    item_name: String(r.item_name ?? ""),
-    category_name: r.category_name == null ? null : String(r.category_name),
-    amount: Number(r[amtKey] ?? 0),
-    profit: Number(r[profitKey] ?? 0),
-  }));
-  const totalAmount = all.reduce((s, r) => s + r.amount, 0);
-  const totalProfit = all.reduce((s, r) => s + r.profit, 0);
-  all.sort((a, b) => b.amount - a.amount);
-  const rows = all.slice(0, 20).map((r) => ({
-    item_code: r.item_code,
-    item_name: r.item_name,
-    category_name: r.category_name,
-    amount: r.amount,
-    profit: r.profit,
-    pct: totalAmount > 0 ? r.amount / totalAmount : 0,
-  }));
+  // Task 8 Critical: 复用 toBoard 排序+TOP20+totals，杜绝 inline profit 累加与 toBoard 脱敏逻辑 drift。
+  // toBoard 已处理脱敏：全 null→totalProfit=null 透传，部分 null→只累加非 null，row.profit=null 透传。
+  const board = toBoard(
+    (data ?? []) as Array<Record<string, unknown>>,
+    amtKey,
+    profitKey,
+  );
 
   return NextResponse.json({
     ok: true,
-    board: { rows, totalAmount, totalProfit },
+    board,
   });
 }
