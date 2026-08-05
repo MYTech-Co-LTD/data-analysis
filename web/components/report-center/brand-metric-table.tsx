@@ -1,9 +1,23 @@
 "use client";
 
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { BrandMetricRow } from "@/lib/report-center/brand-metric";
 import type { GetterResult } from "@/lib/report-center/types";
+import {
+  isSuspiciousAmount,
+  isSuspiciousProfit,
+  isSuspiciousRate,
+  isSuspiciousMargin,
+  suspiciousClass,
+  suspiciousTitle,
+  amountsClose,
+  ratesClose,
+  numMatch,
+  sumField,
+  sumNullable,
+} from "@/lib/report-center/guard";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { TotalAnomalyBadge } from "./data-guard-badges";
 import { MaskedBadge } from "./masked-badge";
 import { ModuleError, formatModuleError } from "./module-error";
 import { useCanSeeCost } from "./use-can-see-cost";
@@ -43,6 +57,41 @@ export function BrandMetricTable({ result, targetMonth, isMobile = false }: Bran
   const title = `${targetMonth ?? ""}月品牌×指标`;
   // F2.3: can_see_cost=false 时 profit/margin 列头挂脱敏角标（NULL 透传由 fmtCurrency/fmtRate 兜「—」）
   const costMasked = !useCanSeeCost();
+
+  // F3 合计自洽：前端重算非「合计」行 SUM vs 视图 system_book_code='合计' 行，不一致 → 角标
+  const detailRows = useMemo(
+    () => rows.filter((r) => r.system_book_code !== "合计"),
+    [rows],
+  );
+  const frontTotals = useMemo(() => {
+    const saleTarget = sumField(detailRows, (r) => r.sale_target);
+    const saleAmount = sumField(detailRows, (r) => r.sale_amount);
+    const deliveryAmount = sumField(detailRows, (r) => r.delivery_amount);
+    const deliveryProfit = sumNullable(detailRows, (r) => r.delivery_profit);
+    return {
+      saleTarget,
+      saleAmount,
+      deliveryAmount,
+      deliveryProfit,
+      saleRate: saleTarget > 0 ? saleAmount / saleTarget : null,
+      deliveryMargin:
+        deliveryAmount > 0 && deliveryProfit != null
+          ? deliveryProfit / deliveryAmount
+          : null,
+    };
+  }, [detailRows]);
+  const totalAnomaly = useMemo(() => {
+    const vr = rows.find((r) => r.system_book_code === "合计");
+    if (!vr || detailRows.length === 0) return false;
+    return !(
+      numMatch(frontTotals.saleTarget, vr.sale_target, 1, amountsClose) &&
+      numMatch(frontTotals.saleAmount, vr.sale_amount, 1, amountsClose) &&
+      numMatch(frontTotals.deliveryAmount, vr.delivery_amount, 1, amountsClose) &&
+      numMatch(frontTotals.deliveryProfit, vr.delivery_profit, 1, amountsClose) &&
+      numMatch(frontTotals.saleRate, vr.sale_rate, 1e-3, ratesClose) &&
+      numMatch(frontTotals.deliveryMargin, vr.delivery_margin, 1e-3, ratesClose)
+    );
+  }, [rows, detailRows, frontTotals]);
 
   const handleExcel = () => {
     const head = [
@@ -131,32 +180,46 @@ export function BrandMetricTable({ result, targetMonth, isMobile = false }: Bran
               const brandCell = isTotal
                 ? "合计"
                 : (r.brand_name ?? r.system_book_code);
+              // F4: 该行各字段是否「可疑」
+              const s = {
+                saleTarget: isSuspiciousAmount(r.sale_target),
+                saleAmount: isSuspiciousAmount(r.sale_amount),
+                saleRate: isSuspiciousRate(r.sale_rate),
+                deliveryAmount: isSuspiciousAmount(r.delivery_amount),
+                deliveryProfit: isSuspiciousProfit(r.delivery_profit),
+                deliveryMargin: isSuspiciousMargin(r.delivery_margin),
+              };
               return (
                 <tr
                   key={`${r.target_id}-${r.system_book_code}`}
                   className={isTotal ? "bg-slate-50 font-medium" : "hover:bg-slate-50"}
                 >
-                  <td className="px-3 py-2 text-slate-700">{brandCell}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  <td className="px-3 py-2 text-slate-700">
+                    {brandCell}
+                    {isTotal && totalAnomaly && <TotalAnomalyBadge />}
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleTarget, "text-slate-700")}`} title={suspiciousTitle(s.saleTarget)}>
                     {fmtCurrency(r.sale_target)}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleAmount, "text-slate-700")}`} title={suspiciousTitle(s.saleAmount)}>
                     {fmtCurrency(r.sale_amount)}
                   </td>
                   <td
-                    className={`px-3 py-2 text-right tabular-nums ${rateColor(
-                      r.sale_rate
+                    className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(
+                      s.saleRate,
+                      rateColor(r.sale_rate)
                     )}`}
+                    title={suspiciousTitle(s.saleRate)}
                   >
                     {fmtRate(r.sale_rate)}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryAmount, "text-slate-700")}`} title={suspiciousTitle(s.deliveryAmount)}>
                     {fmtCurrency(r.delivery_amount)}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryProfit, "text-slate-700")}`} title={suspiciousTitle(s.deliveryProfit)}>
                     {fmtCurrency(r.delivery_profit)}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-700">
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryMargin, "text-slate-700")}`} title={suspiciousTitle(s.deliveryMargin)}>
                     {fmtRate(r.delivery_margin)}
                   </td>
                 </tr>

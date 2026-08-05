@@ -2,8 +2,10 @@
 
 import { METRICS, METRIC_ORDER, MetricCode } from "@/lib/report-center/metric-source";
 import { statusToZh } from "@/lib/report-center/status-i18n";
+import { isSuspiciousRate, suspiciousClass } from "@/lib/report-center/guard";
 import type { TargetKpiRow } from "@/lib/report-center/targets";
 import type { GetterResult } from "@/lib/report-center/types";
+import { SuspiciousBadge } from "./data-guard-badges";
 import { ModuleError, formatModuleError } from "./module-error";
 
 interface KpiRow {
@@ -134,13 +136,26 @@ export function KpiCards({
                 {isMobile ? statusToZh(r.data_status) : r.data_status}
               </span>
             </div>
-            <div
-              className={`mt-1 text-2xl font-semibold tabular-nums ${rateColor(
-                r.achievement_rate ?? 0,
-              )}`}
-            >
-              {((r.achievement_rate ?? 0) * 100).toFixed(1)}%
-            </div>
+            {(() => {
+              // F4: 达成率可疑（负值/越界>1.5/非数值）→ 标红 + 「可疑」徽标；非数值显示「—」
+              const susp = isSuspiciousRate(r.achievement_rate);
+              const rateDisplay =
+                r.achievement_rate == null ||
+                !Number.isFinite(r.achievement_rate)
+                  ? "—"
+                  : `${(r.achievement_rate * 100).toFixed(1)}%`;
+              return (
+                <div
+                  className={`mt-1 flex items-baseline gap-1 text-2xl font-semibold tabular-nums ${suspiciousClass(
+                    susp,
+                    rateColor(r.achievement_rate ?? 0),
+                  )}`}
+                >
+                  {rateDisplay}
+                  {susp && <SuspiciousBadge />}
+                </div>
+              );
+            })()}
             <div className="mt-1 text-xs tabular-nums text-slate-400">
               {fmtWan(r.actual_value ?? 0)} / {fmtWan(r.target_value)} · 进度{" "}
               {(progress * 100).toFixed(0)}%

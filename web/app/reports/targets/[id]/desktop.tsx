@@ -20,25 +20,7 @@ import type {
 } from "@/lib/report-center/item-breakdown";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import type { WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
-
-function fmtFresh(s: string | null) {
-  if (!s) return "—";
-  try {
-    return new Date(s)
-      .toLocaleString("zh-CN", {
-        timeZone: "Asia/Shanghai",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      })
-      .replace(/\//g, "-");
-  } catch {
-    return s.slice(0, 16).replace("T", " ");
-  }
-}
+import { formatFreshnessChina } from "@/lib/report-center/freshness";
 
 export function DesktopDashboard({
   target,
@@ -49,6 +31,7 @@ export function DesktopDashboard({
   progress,
   targetMonth,
   freshness,
+  freshnessFailed,
   targetId,
   itemTop,
   supplyChain,
@@ -62,6 +45,7 @@ export function DesktopDashboard({
   progress: number;
   targetMonth: number;
   freshness: string | null;
+  freshnessFailed: boolean;
   targetId: number;
   itemTop: ItemBreakdownResult;
   supplyChain: GetterResult<SupplyChainOutboundRow>;
@@ -101,7 +85,9 @@ export function DesktopDashboard({
         </div>
         <div className="mt-0.5 text-xs tabular-nums text-slate-400">
           {target.start_date} ~ {target.end_date} · 数据更新{" "}
-          {fmtFresh(freshness)}
+          {freshnessFailed
+            ? "更新时间获取失败"
+            : (formatFreshnessChina(freshness) ?? "—")}
         </div>
       </div>
 

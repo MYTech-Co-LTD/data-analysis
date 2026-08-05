@@ -11,7 +11,19 @@ import { useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import type { GetterResult } from "@/lib/report-center/types";
+import {
+  isSuspiciousAmount,
+  isSuspiciousProfit,
+  isSuspiciousMargin,
+  suspiciousClass,
+  suspiciousTitle,
+  amountsClose,
+  numMatch,
+  sumField,
+  sumNullable,
+} from "@/lib/report-center/guard";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { TotalAnomalyBadge } from "./data-guard-badges";
 import { MaskedBadge } from "./masked-badge";
 import { ModuleError, formatModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
@@ -187,6 +199,38 @@ export function SupplyChainOutboundTable({
     };
   }, [rows]);
 
+  // F3 合计自洽（层级视图无合计行）：用 level='store' 行 SUM 作基准，校验 = 各 region 行之和
+  const totalAnomaly = useMemo(() => {
+    const regionRows = rows.filter((r) => r.level === "region");
+    const storeRows = rows.filter((r) => r.level === "store");
+    if (regionRows.length === 0 || storeRows.length === 0) return false;
+    const amountM = numMatch(
+      sumField(storeRows, (r) => r.delivery_amount),
+      sumField(regionRows, (r) => r.delivery_amount),
+      1,
+      amountsClose,
+    );
+    const dailyAmountM = numMatch(
+      sumField(storeRows, (r) => r.daily_delivery_amount),
+      sumField(regionRows, (r) => r.daily_delivery_amount),
+      1,
+      amountsClose,
+    );
+    const profitM = numMatch(
+      sumNullable(storeRows, (r) => r.delivery_profit),
+      sumNullable(regionRows, (r) => r.delivery_profit),
+      1,
+      amountsClose,
+    );
+    const dailyProfitM = numMatch(
+      sumNullable(storeRows, (r) => r.daily_delivery_profit),
+      sumNullable(regionRows, (r) => r.daily_delivery_profit),
+      1,
+      amountsClose,
+    );
+    return !(amountM && dailyAmountM && profitM && dailyProfitM);
+  }, [rows]);
+
   const title = fmtRangeTitle(startDate, endDate, "供应链出库数据报表");
 
   // 移动端：点行末 ▸ 看该行全字段（6 列 label-value）
@@ -197,14 +241,14 @@ export function SupplyChainOutboundTable({
       d.level === "store" &&
       d.delivery_margin != null &&
       d.delivery_margin < LOW_MARGIN_THRESHOLD;
-    const numColor = lowMargin ? "text-red-600" : undefined;
+    const numColor = lowMargin ? "text-red-600" : "text-slate-800";
     return [
-      { label: "出库金额", value: fmtCurrency(d.delivery_amount), color: numColor },
-      { label: "出库毛利", value: fmtProfit(d.delivery_profit), color: numColor },
-      { label: "毛利率", value: fmtMargin(d.delivery_margin), color: numColor },
-      { label: "当天出库金额", value: fmtCurrency(d.daily_delivery_amount), color: numColor },
-      { label: "当天出库毛利", value: fmtProfit(d.daily_delivery_profit), color: numColor },
-      { label: "当天毛利率", value: fmtMargin(d.daily_delivery_margin), color: numColor },
+      { label: "出库金额", value: fmtCurrency(d.delivery_amount), color: suspiciousClass(isSuspiciousAmount(d.delivery_amount), numColor) },
+      { label: "出库毛利", value: fmtProfit(d.delivery_profit), color: suspiciousClass(isSuspiciousProfit(d.delivery_profit), numColor) },
+      { label: "毛利率", value: fmtMargin(d.delivery_margin), color: suspiciousClass(isSuspiciousMargin(d.delivery_margin), numColor) },
+      { label: "当天出库金额", value: fmtCurrency(d.daily_delivery_amount), color: suspiciousClass(isSuspiciousAmount(d.daily_delivery_amount), numColor) },
+      { label: "当天出库毛利", value: fmtProfit(d.daily_delivery_profit), color: suspiciousClass(isSuspiciousProfit(d.daily_delivery_profit), numColor) },
+      { label: "当天毛利率", value: fmtMargin(d.daily_delivery_margin), color: suspiciousClass(isSuspiciousMargin(d.daily_delivery_margin), numColor) },
     ];
   }
 
@@ -328,6 +372,15 @@ export function SupplyChainOutboundTable({
                   node.data.delivery_margin < LOW_MARGIN_THRESHOLD;
                 const rowBg = lowMargin ? "bg-red-50" : "hover:bg-slate-50";
                 const numColor = lowMargin ? "text-red-600" : "text-slate-700";
+                // F4: 该行各字段是否「可疑」
+                const s = {
+                  amount: isSuspiciousAmount(node.data.delivery_amount),
+                  profit: isSuspiciousProfit(node.data.delivery_profit),
+                  margin: isSuspiciousMargin(node.data.delivery_margin),
+                  dailyAmount: isSuspiciousAmount(node.data.daily_delivery_amount),
+                  dailyProfit: isSuspiciousProfit(node.data.daily_delivery_profit),
+                  dailyMargin: isSuspiciousMargin(node.data.daily_delivery_margin),
+                };
                 return (
                   <tr
                     key={`${node.level}-${node.data.parent_code || "root"}-${node.code}`}
@@ -354,22 +407,22 @@ export function SupplyChainOutboundTable({
                         {node.name}
                       </span>
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.amount, numColor)}`} title={suspiciousTitle(s.amount)}>
                       {fmtCurrency(node.data.delivery_amount)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profit, numColor)}`} title={suspiciousTitle(s.profit)}>
                       {fmtProfit(node.data.delivery_profit)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.margin, numColor)}`} title={suspiciousTitle(s.margin)}>
                       {fmtMargin(node.data.delivery_margin)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyAmount, numColor)}`} title={suspiciousTitle(s.dailyAmount)}>
                       {fmtCurrency(node.data.daily_delivery_amount)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyProfit, numColor)}`} title={suspiciousTitle(s.dailyProfit)}>
                       {fmtProfit(node.data.daily_delivery_profit)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyMargin, numColor)}`} title={suspiciousTitle(s.dailyMargin)}>
                       {fmtMargin(node.data.daily_delivery_margin)}
                     </td>
                   </tr>
@@ -378,7 +431,9 @@ export function SupplyChainOutboundTable({
             </tbody>
             <tfoot>
               <tr className="border-t border-slate-200 bg-slate-50/50 font-medium text-slate-700">
-                <td className="px-3 py-2 text-left">合计</td>
+                <td className="px-3 py-2 text-left">
+                  合计{totalAnomaly && <TotalAnomalyBadge />}
+                </td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   {fmtCurrency(totals.amount)}
                 </td>
@@ -438,6 +493,11 @@ export function SupplyChainOutboundTable({
                   node.data.delivery_margin != null &&
                   node.data.delivery_margin < LOW_MARGIN_THRESHOLD;
                 const numColor = lowMargin ? "text-red-600" : "text-slate-700";
+                const s = {
+                  amount: isSuspiciousAmount(node.data.delivery_amount),
+                  margin: isSuspiciousMargin(node.data.delivery_margin),
+                  dailyAmount: isSuspiciousAmount(node.data.daily_delivery_amount),
+                };
                 return (
                   <tr
                     key={`${node.level}-${node.data.parent_code || "root"}-${node.code}`}
@@ -463,13 +523,13 @@ export function SupplyChainOutboundTable({
                         </span>
                       </div>
                     </td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.amount, numColor)}`} title={suspiciousTitle(s.amount)}>
                       {fmtCurrency(node.data.delivery_amount)}
                     </td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.margin, numColor)}`} title={suspiciousTitle(s.margin)}>
                       {fmtMargin(node.data.delivery_margin)}
                     </td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.dailyAmount, numColor)}`} title={suspiciousTitle(s.dailyAmount)}>
                       {fmtCurrency(node.data.daily_delivery_amount)}
                     </td>
                     <td className="px-1 py-2 text-right">

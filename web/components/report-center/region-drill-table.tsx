@@ -5,7 +5,18 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 import type { GetterResult } from "@/lib/report-center/types";
 import { actualRatio, targetRatio, formatRatio } from "@/lib/report-center/ratio";
+import {
+  isSuspiciousAmount,
+  isSuspiciousRate,
+  isSuspiciousMargin,
+  suspiciousClass,
+  suspiciousTitle,
+  amountsClose,
+  numMatch,
+  sumField,
+} from "@/lib/report-center/guard";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { TotalAnomalyBadge } from "./data-guard-badges";
 import { ModuleError, formatModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 
@@ -98,23 +109,42 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
     return out;
   }, [tree, expandedNodes]);
 
+  // F3 合计自洽（层级视图无合计行）：用 level='store' 行 SUM 作基准，校验 = 各 region 行之和
+  const totalAnomaly = useMemo(() => {
+    const regionRows = rows.filter((r) => r.level === "region");
+    const storeRows = rows.filter((r) => r.level === "store");
+    if (regionRows.length === 0 || storeRows.length === 0) return false;
+    const s = (rs: RegionBreakdownRow[], pick: (r: RegionBreakdownRow) => number) =>
+      sumField(rs, pick);
+    return !(
+      numMatch(s(storeRows, (r) => r.sale_target), s(regionRows, (r) => r.sale_target), 1, amountsClose) &&
+      numMatch(s(storeRows, (r) => r.sale_actual), s(regionRows, (r) => r.sale_actual), 1, amountsClose) &&
+      numMatch(s(storeRows, (r) => r.delivery_target), s(regionRows, (r) => r.delivery_target), 1, amountsClose) &&
+      numMatch(s(storeRows, (r) => r.delivery_actual), s(regionRows, (r) => r.delivery_actual), 1, amountsClose) &&
+      numMatch(s(storeRows, (r) => r.daily_sale), s(regionRows, (r) => r.daily_sale), 1, amountsClose) &&
+      numMatch(s(storeRows, (r) => r.daily_delivery), s(regionRows, (r) => r.daily_delivery), 1, amountsClose) &&
+      numMatch(s(storeRows, (r) => r.remaining_daily_sale_target), s(regionRows, (r) => r.remaining_daily_sale_target), 1, amountsClose) &&
+      numMatch(s(storeRows, (r) => r.remaining_daily_delivery_target), s(regionRows, (r) => r.remaining_daily_delivery_target), 1, amountsClose)
+    );
+  }, [rows]);
+
   // 移动端：点行末 ▸ 看该行全字段（13 列 label-value）
   const [detailNode, setDetailNode] = useState<TreeNode | null>(null);
 
   function buildRegionFields(d: RegionBreakdownRow): DetailField[] {
     return [
-      { label: "月销售目标", value: fmtCurrency(d.sale_target) },
-      { label: "月销售金额", value: fmtCurrency(d.sale_actual) },
-      { label: "月销售完成率", value: fmtRate(d.sale_rate), color: rateColor(d.sale_rate, progress) },
-      { label: "月配送目标", value: fmtCurrency(d.delivery_target) },
-      { label: "月配送金额", value: fmtCurrency(d.delivery_actual) },
-      { label: "月配送完成率", value: fmtRate(d.delivery_rate), color: rateColor(d.delivery_rate, progress) },
-      { label: "当天销售金额", value: fmtCurrency(d.daily_sale) },
-      { label: "当天配送金额", value: fmtCurrency(d.daily_delivery) },
-      { label: "剩余日均销售目标", value: fmtCurrency(d.remaining_daily_sale_target) },
-      { label: "剩余日均配送目标", value: fmtCurrency(d.remaining_daily_delivery_target) },
-      { label: "配销比目标", value: formatRatio(targetRatio(d.delivery_target, d.sale_target)) },
-      { label: "配销比", value: formatRatio(actualRatio(d.delivery_actual, d.sale_actual)) },
+      { label: "月销售目标", value: fmtCurrency(d.sale_target), color: suspiciousClass(isSuspiciousAmount(d.sale_target), "text-slate-800") },
+      { label: "月销售金额", value: fmtCurrency(d.sale_actual), color: suspiciousClass(isSuspiciousAmount(d.sale_actual), "text-slate-800") },
+      { label: "月销售完成率", value: fmtRate(d.sale_rate), color: suspiciousClass(isSuspiciousRate(d.sale_rate), rateColor(d.sale_rate, progress)) },
+      { label: "月配送目标", value: fmtCurrency(d.delivery_target), color: suspiciousClass(isSuspiciousAmount(d.delivery_target), "text-slate-800") },
+      { label: "月配送金额", value: fmtCurrency(d.delivery_actual), color: suspiciousClass(isSuspiciousAmount(d.delivery_actual), "text-slate-800") },
+      { label: "月配送完成率", value: fmtRate(d.delivery_rate), color: suspiciousClass(isSuspiciousRate(d.delivery_rate), rateColor(d.delivery_rate, progress)) },
+      { label: "当天销售金额", value: fmtCurrency(d.daily_sale), color: suspiciousClass(isSuspiciousAmount(d.daily_sale), "text-slate-800") },
+      { label: "当天配送金额", value: fmtCurrency(d.daily_delivery), color: suspiciousClass(isSuspiciousAmount(d.daily_delivery), "text-slate-800") },
+      { label: "剩余日均销售目标", value: fmtCurrency(d.remaining_daily_sale_target), color: suspiciousClass(isSuspiciousAmount(d.remaining_daily_sale_target), "text-slate-800") },
+      { label: "剩余日均配送目标", value: fmtCurrency(d.remaining_daily_delivery_target), color: suspiciousClass(isSuspiciousAmount(d.remaining_daily_delivery_target), "text-slate-800") },
+      { label: "配销比目标", value: formatRatio(targetRatio(d.delivery_target, d.sale_target)), color: suspiciousClass(isSuspiciousMargin(targetRatio(d.delivery_target, d.sale_target)), "text-slate-800") },
+      { label: "配销比", value: formatRatio(actualRatio(d.delivery_actual, d.sale_actual)), color: suspiciousClass(isSuspiciousMargin(actualRatio(d.delivery_actual, d.sale_actual)), "text-slate-800") },
     ];
   }
 
@@ -150,7 +180,10 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-medium text-slate-700">{targetMonth}月门店零售/配送数据报表</h3>
+        <h3 className="text-sm font-medium text-slate-700">
+          {targetMonth}月门店零售/配送数据报表
+          {totalAnomaly && <TotalAnomalyBadge />}
+        </h3>
         <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} isMobile={isMobile} />
       </div>
 
@@ -183,6 +216,22 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
                 const hasChildren = node.children.length > 0;
                 const isExpanded = expandedNodes.has(node.code);
                 const indent = depth * 24;
+                // F4: 该行各字段是否「可疑」
+                const d = node.data;
+                const s = {
+                  saleTarget: isSuspiciousAmount(d.sale_target),
+                  saleActual: isSuspiciousAmount(d.sale_actual),
+                  saleRate: isSuspiciousRate(d.sale_rate),
+                  deliveryTarget: isSuspiciousAmount(d.delivery_target),
+                  deliveryActual: isSuspiciousAmount(d.delivery_actual),
+                  deliveryRate: isSuspiciousRate(d.delivery_rate),
+                  dailySale: isSuspiciousAmount(d.daily_sale),
+                  dailyDelivery: isSuspiciousAmount(d.daily_delivery),
+                  remainingSale: isSuspiciousAmount(d.remaining_daily_sale_target),
+                  remainingDelivery: isSuspiciousAmount(d.remaining_daily_delivery_target),
+                  ratioTarget: isSuspiciousMargin(targetRatio(d.delivery_target, d.sale_target)),
+                  ratioActual: isSuspiciousMargin(actualRatio(d.delivery_actual, d.sale_actual)),
+                };
                 return (
                   <tr key={`${node.level}-${node.data.parent_code || 'root'}-${node.code}`} className="hover:bg-slate-50">
                     <td
@@ -197,18 +246,18 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
                       )}
                       <span className={depth === 0 ? "font-semibold" : ""}>{node.name}</span>
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.sale_target)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.sale_actual)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${rateColor(node.data.sale_rate, progress)}`}>{fmtRate(node.data.sale_rate)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.delivery_target)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.delivery_actual)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${rateColor(node.data.delivery_rate, progress)}`}>{fmtRate(node.data.delivery_rate)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.daily_sale)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.daily_delivery)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.remaining_daily_sale_target)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.remaining_daily_delivery_target)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-400">{formatRatio(targetRatio(node.data.delivery_target, node.data.sale_target))}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-700">{formatRatio(actualRatio(node.data.delivery_actual, node.data.sale_actual))}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleTarget, "text-slate-700")}`} title={suspiciousTitle(s.saleTarget)}>{fmtCurrency(node.data.sale_target)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleActual, "text-slate-700")}`} title={suspiciousTitle(s.saleActual)}>{fmtCurrency(node.data.sale_actual)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleRate, rateColor(node.data.sale_rate, progress))}`} title={suspiciousTitle(s.saleRate)}>{fmtRate(node.data.sale_rate)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryTarget, "text-slate-700")}`} title={suspiciousTitle(s.deliveryTarget)}>{fmtCurrency(node.data.delivery_target)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryActual, "text-slate-700")}`} title={suspiciousTitle(s.deliveryActual)}>{fmtCurrency(node.data.delivery_actual)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryRate, rateColor(node.data.delivery_rate, progress))}`} title={suspiciousTitle(s.deliveryRate)}>{fmtRate(node.data.delivery_rate)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailySale, "text-slate-700")}`} title={suspiciousTitle(s.dailySale)}>{fmtCurrency(node.data.daily_sale)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyDelivery, "text-slate-700")}`} title={suspiciousTitle(s.dailyDelivery)}>{fmtCurrency(node.data.daily_delivery)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.remainingSale, "text-slate-700")}`} title={suspiciousTitle(s.remainingSale)}>{fmtCurrency(node.data.remaining_daily_sale_target)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.remainingDelivery, "text-slate-700")}`} title={suspiciousTitle(s.remainingDelivery)}>{fmtCurrency(node.data.remaining_daily_delivery_target)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.ratioTarget, "text-slate-400")}`} title={suspiciousTitle(s.ratioTarget)}>{formatRatio(targetRatio(node.data.delivery_target, node.data.sale_target))}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.ratioActual, "text-slate-700")}`} title={suspiciousTitle(s.ratioActual)}>{formatRatio(actualRatio(node.data.delivery_actual, node.data.sale_actual))}</td>
                   </tr>
                 );
               })}
@@ -239,6 +288,11 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
                 const hasChildren = node.children.length > 0;
                 const isExpanded = expandedNodes.has(node.code);
                 const indent = depth * 16;
+                const s = {
+                  saleRate: isSuspiciousRate(node.data.sale_rate),
+                  deliveryRate: isSuspiciousRate(node.data.delivery_rate),
+                  dailySale: isSuspiciousAmount(node.data.daily_sale),
+                };
                 return (
                   <tr key={`${node.level}-${node.data.parent_code || 'root'}-${node.code}`}>
                     <td className="px-2 py-2 text-slate-700" style={{ paddingLeft: `${indent + 8}px` }}>
@@ -251,9 +305,9 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
                         <span className={`truncate ${depth === 0 ? "font-semibold" : ""}`}>{node.name}</span>
                       </div>
                     </td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${rateColor(node.data.sale_rate, progress)}`}>{fmtRate(node.data.sale_rate)}</td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${rateColor(node.data.delivery_rate, progress)}`}>{fmtRate(node.data.delivery_rate)}</td>
-                    <td className="px-2 py-2 text-right tabular-nums text-slate-700">{fmtCurrency(node.data.daily_sale)}</td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.saleRate, rateColor(node.data.sale_rate, progress))}`} title={suspiciousTitle(s.saleRate)}>{fmtRate(node.data.sale_rate)}</td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryRate, rateColor(node.data.delivery_rate, progress))}`} title={suspiciousTitle(s.deliveryRate)}>{fmtRate(node.data.delivery_rate)}</td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.dailySale, "text-slate-700")}`} title={suspiciousTitle(s.dailySale)}>{fmtCurrency(node.data.daily_sale)}</td>
                     <td className="px-1 py-2 text-right">
                       <button onClick={() => setDetailNode(node)} aria-label="查看全部字段" className="inline-flex h-8 w-8 items-center justify-center text-slate-400 hover:text-slate-700">
                         <ChevronRight size={16} strokeWidth={1.5} />

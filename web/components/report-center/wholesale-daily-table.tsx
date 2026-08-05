@@ -15,6 +15,13 @@ import type {
   WholesaleDailyCustomerRow,
 } from "@/lib/report-center/wholesale-daily";
 import type { GetterResult } from "@/lib/report-center/types";
+import {
+  isSuspiciousAmount,
+  isSuspiciousProfit,
+  isSuspiciousMargin,
+  suspiciousClass,
+  suspiciousTitle,
+} from "@/lib/report-center/guard";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { MaskedBadge } from "./masked-badge";
 import { ModuleError, formatModuleError } from "./module-error";
@@ -188,6 +195,12 @@ export function WholesaleDailyTable({
                 r.wholesale_ext_margin != null && r.wholesale_ext_margin < 0;
               const rowBg = lowMargin ? "bg-red-50" : "hover:bg-slate-50";
               const numColor = lowMargin ? "text-red-600" : "text-slate-700";
+              // F4: 该日各字段是否「可疑」
+              const s = {
+                amount: isSuspiciousAmount(r.wholesale_ext_amount),
+                profit: isSuspiciousProfit(r.wholesale_ext_profit),
+                margin: isSuspiciousMargin(r.wholesale_ext_margin),
+              };
               const isOpen = expandedDay === r.biz_date;
               const isLoading = loadingDay === r.biz_date;
               const dayCustomers = customers[r.biz_date] ?? [];
@@ -209,13 +222,13 @@ export function WholesaleDailyTable({
                         {r.biz_date}
                       </span>
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.amount, numColor)}`} title={suspiciousTitle(s.amount)}>
                       {fmtCurrency(r.wholesale_ext_amount)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profit, numColor)}`} title={suspiciousTitle(s.profit)}>
                       {fmtProfit(r.wholesale_ext_profit)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${numColor}`}>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.margin, numColor)}`} title={suspiciousTitle(s.margin)}>
                       {fmtMargin(r.wholesale_ext_margin)}
                     </td>
                   </tr>
@@ -257,6 +270,17 @@ export function WholesaleDailyTable({
                                   ? "text-red-600"
                                   : "text-slate-700";
                                 const cBg = cLow ? "bg-red-50/50" : "";
+                                const cs = {
+                                  amount: isSuspiciousAmount(
+                                    c.wholesale_ext_customer_amount,
+                                  ),
+                                  profit: isSuspiciousProfit(
+                                    c.wholesale_ext_customer_profit,
+                                  ),
+                                  margin: isSuspiciousMargin(
+                                    c.wholesale_ext_customer_margin,
+                                  ),
+                                };
                                 return (
                                   <tr key={c.client_code} className={cBg}>
                                     <td
@@ -266,21 +290,24 @@ export function WholesaleDailyTable({
                                       {c.client_name || c.client_code || "-"}
                                     </td>
                                     <td
-                                      className={`px-2 py-1.5 text-right tabular-nums ${cColor}`}
+                                      className={`px-2 py-1.5 text-right tabular-nums ${suspiciousClass(cs.amount, cColor)}`}
+                                      title={suspiciousTitle(cs.amount)}
                                     >
                                       {fmtCurrency(
                                         c.wholesale_ext_customer_amount,
                                       )}
                                     </td>
                                     <td
-                                      className={`px-2 py-1.5 text-right tabular-nums ${cColor}`}
+                                      className={`px-2 py-1.5 text-right tabular-nums ${suspiciousClass(cs.profit, cColor)}`}
+                                      title={suspiciousTitle(cs.profit)}
                                     >
                                       {fmtProfit(
                                         c.wholesale_ext_customer_profit,
                                       )}
                                     </td>
                                     <td
-                                      className={`px-2 py-1.5 text-right tabular-nums ${cColor}`}
+                                      className={`px-2 py-1.5 text-right tabular-nums ${suspiciousClass(cs.margin, cColor)}`}
+                                      title={suspiciousTitle(cs.margin)}
                                     >
                                       {fmtMargin(
                                         c.wholesale_ext_customer_margin,
@@ -302,13 +329,13 @@ export function WholesaleDailyTable({
           <tfoot>
             <tr className="border-t border-slate-200 bg-slate-50/50 font-medium text-slate-700">
               <td className="px-3 py-2 text-left">合计</td>
-              <td className="px-3 py-2 text-right tabular-nums">
+              <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousAmount(totals.amount), "")}`} title={suspiciousTitle(isSuspiciousAmount(totals.amount))}>
                 {fmtCurrency(totals.amount)}
               </td>
-              <td className="px-3 py-2 text-right tabular-nums">
+              <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousProfit(totals.profit), "")}`} title={suspiciousTitle(isSuspiciousProfit(totals.profit))}>
                 {fmtProfit(totals.profit)}
               </td>
-              <td className="px-3 py-2 text-right tabular-nums">
+              <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousMargin(totals.margin), "")}`} title={suspiciousTitle(isSuspiciousMargin(totals.margin))}>
                 {fmtMargin(totals.margin)}
               </td>
             </tr>

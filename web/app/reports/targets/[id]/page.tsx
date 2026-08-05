@@ -18,6 +18,7 @@ import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PartialDegradeBanner } from "@/components/report-center/partial-degrade-banner";
 import { PermissionBanner } from "@/components/report-center/permission-banner";
+import { FreshnessStaleBanner } from "@/components/report-center/freshness-stale-banner";
 import { DesktopDashboard } from "./desktop";
 import { MobileDashboard } from "./mobile";
 
@@ -175,12 +176,18 @@ export default async function TargetDashboard({
     wholesaleDaily,
   ].filter((r) => r?.status === "error").length;
 
-  // 数据新鲜度：3 表最早 /compute 时间（updated_at min）
+  // F5 数据新鲜度：get_data_freshness（3 表最新 /compute 时间的最早）。
+  // RPC 失败/返 error → freshnessFailed=true → 顶部红色横幅「更新时间获取失败」而非「—」。
   let freshness: string | null = null;
+  let freshnessFailed = false;
   try {
     const fr = await client.database.rpc("get_data_freshness");
+    if (fr.error) throw fr.error;
     freshness = fr.data as unknown as string | null;
-  } catch {}
+  } catch (e) {
+    console.error("get_data_freshness failed:", e);
+    freshnessFailed = true;
+  }
 
   // 计算时间进度
   const progress =
@@ -192,6 +199,8 @@ export default async function TargetDashboard({
   const banner = (
     <>
       {failCount > 0 && <PartialDegradeBanner failCount={failCount} total={7} />}
+      {/* F5：数据陈旧（距今>6h）/ 更新时间获取失败 → 红色横幅 */}
+      <FreshnessStaleBanner freshness={freshness} failed={freshnessFailed} />
       {/* F2.2：限门店用户（如店长）RLS 裁剪提示——内部 fetch /api/me 自判显隐 */}
       <PermissionBanner />
     </>
@@ -211,6 +220,7 @@ export default async function TargetDashboard({
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}
+        freshnessFailed={freshnessFailed}
         targetId={targetId}
         itemTop={itemTop}
         supplyChain={supplyChain}
@@ -229,6 +239,7 @@ export default async function TargetDashboard({
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}
+        freshnessFailed={freshnessFailed}
         targetId={targetId}
         itemTop={itemTop}
         supplyChain={supplyChain}
