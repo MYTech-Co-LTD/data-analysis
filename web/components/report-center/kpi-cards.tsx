@@ -2,6 +2,9 @@
 
 import { METRICS, METRIC_ORDER, MetricCode } from "@/lib/report-center/metric-source";
 import { statusToZh } from "@/lib/report-center/status-i18n";
+import type { TargetKpiRow } from "@/lib/report-center/targets";
+import type { GetterResult } from "@/lib/report-center/types";
+import { ModuleError } from "./module-error";
 
 interface KpiRow {
   metric_code: MetricCode;
@@ -71,14 +74,32 @@ function KpiTooltip({ target, actual, rate }: { target: string; actual: string; 
 // 4 指标 KPI 卡行：每卡显示 label / 达成率大数字 / 实际·目标·进度 / 数据状态徽章。
 // 着色按绝对达成率（与 target-list.tsx 一致：≥1 绿/≥0.8 琥珀/<0.8 红），progress 仅作副信息。
 // hover 显示 tooltip：总目标、总完成、完成率。
+// F1.3：props 接 GetterResult<TargetKpiRow>（不再解包 .rows）。
+//   - status==='error' → 渲染"指标加载失败"占位（不渲染空 KPI 卡，避免与 data_status 徽章混淆）
+//   - status==='no-data'/ok 且 rows.length===0 → 空态（暂无指标数据）
+//   - status==='ok' → 正常 4 卡（保留原 data_status 徽章机制）
 export function KpiCards({
-  rows,
+  result,
   isMobile = false,
 }: {
-  rows: KpiRow[];
+  result: GetterResult<TargetKpiRow>;
   isMobile?: boolean;
 }) {
-  if (rows.length === 0) {
+  const { rows, status, error } = result;
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <ModuleError
+          message={`指标加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
+
+  // 视图行透传字段宽，本地 KpiRow 收紧 metric_code 类型（METRIC_ORDER 过滤未知 code）
+  const typedRows: KpiRow[] = rows as unknown as KpiRow[];
+  if (typedRows.length === 0) {
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4 text-center text-slate-400 py-8 text-sm">
         暂无指标数据
@@ -88,7 +109,7 @@ export function KpiCards({
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       {METRIC_ORDER.map((code) => {
-        const r = rows.find((x) => x.metric_code === code);
+        const r = typedRows.find((x) => x.metric_code === code);
         if (!r) return null;
         const meta = METRICS[code];
         const progress = r.progress_rate ?? 0;

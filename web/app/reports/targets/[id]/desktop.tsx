@@ -10,11 +10,13 @@ import { BrandMetricTable } from "@/components/report-center/brand-metric-table"
 import { SaleTopBoards, OutboundTopBoards, useItemDayBoards } from "@/components/report-center/item-top-boards";
 import { SupplyChainOutboundTable } from "@/components/report-center/supply-chain-outbound-table";
 import { WholesaleDailyTable } from "@/components/report-center/wholesale-daily-table";
-import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
-import { CategorySummaryRow } from "@/lib/report-center/category-summary";
-import { BrandMetricRow } from "@/lib/report-center/brand-metric";
+import type { GetterResult } from "@/lib/report-center/types";
+import type { TargetKpiRow } from "@/lib/report-center/targets";
+import type { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
+import type { CategorySummaryRow } from "@/lib/report-center/category-summary";
+import type { BrandMetricRow } from "@/lib/report-center/brand-metric";
 import type {
-  ItemBreakdownTop,
+  ItemBreakdownResult,
 } from "@/lib/report-center/item-breakdown";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import type { WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
@@ -53,17 +55,17 @@ export function DesktopDashboard({
   wholesaleDaily,
 }: {
   target: any;
-  kpi: any[];
-  regionBreakdown: RegionBreakdownRow[];
-  categorySummary: CategorySummaryRow[];
-  brandMetric: BrandMetricRow[];
+  kpi: GetterResult<TargetKpiRow>;
+  regionBreakdown: GetterResult<RegionBreakdownRow>;
+  categorySummary: GetterResult<CategorySummaryRow>;
+  brandMetric: GetterResult<BrandMetricRow>;
   progress: number;
   targetMonth: number;
   freshness: string | null;
   targetId: number;
-  itemTop: ItemBreakdownTop;
-  supplyChain: SupplyChainOutboundRow[];
-  wholesaleDaily: WholesaleDailyRow[];
+  itemTop: ItemBreakdownResult;
+  supplyChain: GetterResult<SupplyChainOutboundRow>;
+  wholesaleDaily: GetterResult<WholesaleDailyRow>;
 }) {
   // 日榜 day state（销售/出库共用，切日并行请求两 metric）
   const { day, saleDay, outboundDay, onDayChange, busy } = useItemDayBoards(
@@ -104,21 +106,21 @@ export function DesktopDashboard({
       </div>
 
       {/* KPI 卡 */}
-      <KpiCards rows={kpi} />
+      <KpiCards result={kpi} />
 
       {/* 品牌×指标 */}
-      <BrandMetricTable rows={brandMetric} targetMonth={targetMonth} />
+      <BrandMetricTable result={brandMetric} targetMonth={targetMonth} />
 
       {/* 门店零售/配送数据报表（战区） */}
       <RegionDrillTable
-        rows={regionBreakdown}
+        result={regionBreakdown}
         targetMonth={targetMonth}
         progress={progress}
       />
 
       {/* 销售商品 TOP（月度+日，2 列并排，日榜带日期选择器） */}
       <SaleTopBoards
-        monthBoard={itemTop.saleMonth}
+        result={itemTop}
         dayBoard={saleDay}
         day={day}
         onDayChange={onDayChange}
@@ -129,18 +131,18 @@ export function DesktopDashboard({
       />
 
       {/* 类别出库报表 */}
-      <CategorySummary rows={categorySummary} targetMonth={targetMonth} targetId={targetId} />
+      <CategorySummary result={categorySummary} targetMonth={targetMonth} targetId={targetId} />
 
       {/* 供应链出库层级 + 外部批发日报（2 看板并排） */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <SupplyChainOutboundTable
-          rows={supplyChain}
+          result={supplyChain}
           startDate={target.start_date}
           endDate={target.end_date}
           targetId={targetId}
         />
         <WholesaleDailyTable
-          rows={wholesaleDaily}
+          result={wholesaleDaily}
           startDate={target.start_date}
           endDate={target.end_date}
           targetId={targetId}
@@ -149,7 +151,7 @@ export function DesktopDashboard({
 
       {/* 出库商品 TOP（月度+日，2 列并排，日榜带日期选择器） */}
       <OutboundTopBoards
-        monthBoard={itemTop.outboundMonth}
+        result={itemTop}
         dayBoard={outboundDay}
         day={day}
         onDayChange={onDayChange}

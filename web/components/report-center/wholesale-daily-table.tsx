@@ -14,10 +14,12 @@ import type {
   WholesaleDailyRow,
   WholesaleDailyCustomerRow,
 } from "@/lib/report-center/wholesale-daily";
+import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { ModuleError } from "./module-error";
 
 interface WholesaleDailyTableProps {
-  rows: WholesaleDailyRow[];
+  result: GetterResult<WholesaleDailyRow>;
   startDate: string;
   endDate: string;
   targetId: number;
@@ -44,12 +46,13 @@ function fmtRangeTitle(start: string, end: string, suffix: string): string {
 }
 
 export function WholesaleDailyTable({
-  rows,
+  result,
   startDate,
   endDate,
   targetId,
   isMobile = false,
 }: WholesaleDailyTableProps) {
+  const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
 
   // 日期下钻状态
@@ -137,6 +140,16 @@ export function WholesaleDailyTable({
       /* clipboard 拒绝时静默 */
     }
   };
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <ModuleError
+          message={`外部批发日报加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">

@@ -2,10 +2,12 @@
 
 import { useRef } from "react";
 import { BrandMetricRow } from "@/lib/report-center/brand-metric";
+import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { ModuleError } from "./module-error";
 
 interface BrandMetricTableProps {
-  rows: BrandMetricRow[];
+  result: GetterResult<BrandMetricRow>;
   targetMonth?: number;
   isMobile?: boolean;
 }
@@ -33,7 +35,8 @@ function rateColor(r: number | null): string {
 
 // 品牌×指标表：3 行（熊喵/品品甜/合计）。完成率三色，合计行高亮。
 // 镜像 category-summary.tsx 结构/样式 + chart-actions 导出。
-export function BrandMetricTable({ rows, targetMonth, isMobile = false }: BrandMetricTableProps) {
+export function BrandMetricTable({ result, targetMonth, isMobile = false }: BrandMetricTableProps) {
+  const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const title = `${targetMonth ?? ""}月品牌×指标`;
 
@@ -72,6 +75,16 @@ export function BrandMetricTable({ rows, targetMonth, isMobile = false }: BrandM
       toast.success("链接已复制");
     } catch {}
   };
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <ModuleError
+          message={`品牌×指标加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">

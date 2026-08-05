@@ -3,12 +3,14 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
+import type { GetterResult } from "@/lib/report-center/types";
 import { actualRatio, targetRatio, formatRatio } from "@/lib/report-center/ratio";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { ModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 
 interface RegionDrillTableProps {
-  rows: RegionBreakdownRow[];
+  result: GetterResult<RegionBreakdownRow>;
   targetMonth: number;
   progress: number; // 时间进度，如 0.677
   isMobile?: boolean;
@@ -38,7 +40,8 @@ interface TreeNode {
   data: RegionBreakdownRow;
 }
 
-export function RegionDrillTable({ rows, targetMonth, progress, isMobile = false }: RegionDrillTableProps) {
+export function RegionDrillTable({ result, targetMonth, progress, isMobile = false }: RegionDrillTableProps) {
+  const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
@@ -133,6 +136,16 @@ export function RegionDrillTable({ rows, targetMonth, progress, isMobile = false
   const handleShare = async () => {
     try { await navigator.clipboard.writeText(window.location.href); const { toast } = await import('sonner'); toast.success('链接已复制'); } catch { /* 剪贴板拒绝时静默 */ }
   };
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <ModuleError
+          message={`门店零售/配送报表加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">

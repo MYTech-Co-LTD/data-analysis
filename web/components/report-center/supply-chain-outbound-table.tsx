@@ -10,11 +10,13 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
+import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { ModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 
 interface SupplyChainOutboundTableProps {
-  rows: SupplyChainOutboundRow[];
+  result: GetterResult<SupplyChainOutboundRow>;
   startDate: string;
   endDate: string;
   targetId: number; // 预留（任务要求 props 含此字段，纯展示组件当前未直接使用）
@@ -52,11 +54,12 @@ interface TreeNode {
 const LOW_MARGIN_THRESHOLD = 0.12;
 
 export function SupplyChainOutboundTable({
-  rows,
+  result,
   startDate,
   endDate,
   isMobile = false,
 }: SupplyChainOutboundTableProps) {
+  const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
 
@@ -261,6 +264,16 @@ export function SupplyChainOutboundTable({
       /* clipboard 拒绝时静默 */
     }
   };
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <ModuleError
+          message={`供应链出库报表加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">

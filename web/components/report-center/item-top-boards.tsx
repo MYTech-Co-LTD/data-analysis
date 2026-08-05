@@ -9,7 +9,8 @@
 import { useRef, useState } from "react";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { ItemDetailDrawer } from "./item-detail-drawer";
-import type { TopBoard } from "@/lib/report-center/item-breakdown";
+import { ModuleError } from "./module-error";
+import type { TopBoard, ItemBreakdownResult } from "@/lib/report-center/item-breakdown";
 
 // 金额格式化：≥10000 用「X.X万」，否则整数，¥ 前缀
 function fmtCurrency(v: number): string {
@@ -317,7 +318,7 @@ export function useItemDayBoards(
 
 /** 销售商品 TOP 组：月度 + 日（2 列并排），日榜带日期选择器 */
 export function SaleTopBoards({
-  monthBoard,
+  result,
   dayBoard,
   day,
   onDayChange,
@@ -326,7 +327,7 @@ export function SaleTopBoards({
   endDate,
   targetId,
 }: {
-  monthBoard: TopBoard;
+  result: ItemBreakdownResult;
   dayBoard: TopBoard;
   day: string;
   onDayChange: (d: string) => void;
@@ -337,6 +338,8 @@ export function SaleTopBoards({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<string | null>(null);
+  const monthBoard = result.saleMonth;
+  const { status, error } = result;
 
   const handleExcel = () => {
     const head = ["排名", "商品", "金额", "毛利", "毛利率"];
@@ -367,6 +370,19 @@ export function SaleTopBoards({
       /* clipboard 拒绝时静默 */
     }
   };
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4" ref={ref}>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-slate-700">销售商品 TOP 榜</h3>
+        </div>
+        <ModuleError
+          message={`销售商品榜加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4" ref={ref}>
@@ -407,7 +423,7 @@ export function SaleTopBoards({
 
 /** 出库商品 TOP 组：月度 + 日（2 列并排），日榜带日期选择器 */
 export function OutboundTopBoards({
-  monthBoard,
+  result,
   dayBoard,
   day,
   onDayChange,
@@ -416,7 +432,7 @@ export function OutboundTopBoards({
   endDate,
   targetId,
 }: {
-  monthBoard: TopBoard;
+  result: ItemBreakdownResult;
   dayBoard: TopBoard;
   day: string;
   onDayChange: (d: string) => void;
@@ -427,6 +443,8 @@ export function OutboundTopBoards({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [drawer, setDrawer] = useState<string | null>(null);
+  const monthBoard = result.outboundMonth;
+  const { status, error } = result;
 
   const handleExcel = () => {
     const head = ["排名", "商品", "金额", "毛利", "毛利率"];
@@ -457,6 +475,19 @@ export function OutboundTopBoards({
       /* clipboard 拒绝时静默 */
     }
   };
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4" ref={ref}>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-slate-700">出库商品 TOP 榜</h3>
+        </div>
+        <ModuleError
+          message={`出库商品榜加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4" ref={ref}>

@@ -3,12 +3,14 @@
 import { useMemo, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { CategorySummaryRow } from "@/lib/report-center/category-summary";
+import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { CategoryItemDrawer } from "./category-item-drawer";
+import { ModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 
 interface CategorySummaryProps {
-  rows: CategorySummaryRow[];
+  result: GetterResult<CategorySummaryRow>;
   targetMonth: number;
   targetId: number;
   isMobile?: boolean;
@@ -29,7 +31,8 @@ function fmtRate(r: number | null): string {
   return r == null ? "—" : `${(r * 100).toFixed(1)}%`;
 }
 
-export function CategorySummary({ rows, targetMonth, targetId, isMobile = false }: CategorySummaryProps) {
+export function CategorySummary({ result, targetMonth, targetId, isMobile = false }: CategorySummaryProps) {
+  const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [drawerCat, setDrawerCat] = useState<string | null>(null);
 
@@ -137,6 +140,16 @@ export function CategorySummary({ rows, targetMonth, targetId, isMobile = false 
       toast.success("链接已复制");
     } catch {}
   };
+
+  if (status === "error") {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4">
+        <ModuleError
+          message={`类别出库报表加载失败${error?.message ? `（${error.message}）` : ""}`}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">

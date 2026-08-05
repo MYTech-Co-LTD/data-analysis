@@ -186,24 +186,24 @@ export default async function TargetDashboard({
   const banner =
     failCount > 0 ? <PartialDegradeBanner failCount={failCount} total={7} /> : null;
 
-  // 组件 props 本 task 不改（Task 6 做）——仍解包 .rows 传组件。
-  // itemTop 仍传整个对象（ItemBreakdownResult extends ItemBreakdownTop，结构兼容，多出来的 status/error 被忽略）。
+  // F1.3：透传 GetterResult（不再解包 .rows），组件级 status='error' 显示模块失败占位。
+  // itemTop 整对象传（ItemBreakdownResult 含 4 board + status/error）。
   const dashboard = isMobile ? (
     <>
       {banner}
       <MobileDashboard
         target={t}
-        kpi={kpi.rows}
-        regionBreakdown={regionBreakdown.rows}
-        categorySummary={categorySummary.rows}
-        brandMetric={brandMetric.rows}
+        kpi={kpi}
+        regionBreakdown={regionBreakdown}
+        categorySummary={categorySummary}
+        brandMetric={brandMetric}
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}
         targetId={targetId}
         itemTop={itemTop}
-        supplyChain={supplyChain.rows}
-        wholesaleDaily={wholesaleDaily.rows}
+        supplyChain={supplyChain}
+        wholesaleDaily={wholesaleDaily}
       />
     </>
   ) : (
@@ -211,17 +211,17 @@ export default async function TargetDashboard({
       {banner}
       <DesktopDashboard
         target={t}
-        kpi={kpi.rows}
-        regionBreakdown={regionBreakdown.rows}
-        categorySummary={categorySummary.rows}
-        brandMetric={brandMetric.rows}
+        kpi={kpi}
+        regionBreakdown={regionBreakdown}
+        categorySummary={categorySummary}
+        brandMetric={brandMetric}
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}
         targetId={targetId}
         itemTop={itemTop}
-        supplyChain={supplyChain.rows}
-        wholesaleDaily={wholesaleDaily.rows}
+        supplyChain={supplyChain}
+        wholesaleDaily={wholesaleDaily}
       />
     </div>
   );
