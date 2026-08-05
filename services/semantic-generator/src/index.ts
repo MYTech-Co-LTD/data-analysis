@@ -15,6 +15,50 @@ export interface GenResult {
   produced: string[];
   explainFailures: string[];
   assertionFailures: string[];   // L4 C2：视图↔聚合对账断言 diff>容差
+  rollupFailures: string[];      // L4 C3：层级视图 rollup 自洽 pivot 校验 diff>容差
+}
+
+// L4 C3：层级视图 rollup 自洽 pivot（同 web/lib/qa/c3-runner.ts 语义——SQL 内联，不跨包 import）。
+// 对 level 列 pivot：SUM(level='region') vs SUM(level='sub_region') vs SUM(level='store')，
+// |diff|>容差 记 mismatch（战区和=小区和=门店和）。生成视图 level 列字面量即契约。
+export const C3_TOLERANCE = 0.01;
+export const C3_ROLLUP_VIEWS: { view: string; metrics: string[] }[] = [
+  { view: 'report_region_breakdown_gen', metrics: ['sale_actual', 'delivery_actual'] },
+  { view: 'report_supply_chain_outbound_gen', metrics: ['delivery_amount'] },
+];
+
+export function buildRollupPivotSql(view: string, metric: string): string {
+  // PG HAVING 不能引用 SELECT 别名（region_total 等），须外包一层子查询再 WHERE 过滤。
+  // 语义同 web/lib/qa/c3-runner.ts（region/sub_region/store SUM 差>容差报 mismatch）。
+  return `SELECT * FROM (
+    SELECT target_id,
+      SUM(CASE WHEN level='region' THEN ${metric} END) AS region_total,
+      SUM(CASE WHEN level='sub_region' THEN ${metric} END) AS sub_region_total,
+      SUM(CASE WHEN level='store' THEN ${metric} END) AS store_total
+    FROM ${view}
+    GROUP BY target_id
+  ) t WHERE ABS(region_total - sub_region_total) > ${C3_TOLERANCE} OR ABS(region_total - store_total) > ${C3_TOLERANCE}`;
+}
+
+// 对已产出视图跑 C3 pivot；返回 rollupFailures 行描述。本次未产出（如单视图测试/EXPLAIN 失败）则跳过。
+export async function runRollupChecks(client: { query: Function }, produced: string[]): Promise<string[]> {
+  const failures: string[] = [];
+  for (const cfg of C3_ROLLUP_VIEWS) {
+    if (!produced.includes(cfg.view)) continue;
+    for (const metric of cfg.metrics) {
+      try {
+        const r = await client.query(buildRollupPivotSql(cfg.view, metric));
+        for (const row of r.rows) {
+          failures.push(
+            `${cfg.view}.${metric} target_id=${row.target_id}: region ${row.region_total} vs sub_region ${row.sub_region_total} vs store ${row.store_total} (rollup 差>${C3_TOLERANCE})`,
+          );
+        }
+      } catch (e) {
+        failures.push(`${cfg.view}.${metric} C3 pivot 查询失败: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+  return failures;
 }
 
 export interface GenOpts {
@@ -92,7 +136,11 @@ export async function runGenerator(opts: GenOpts): Promise<GenResult> {
     }
   }
 
-  return { produced, explainFailures, assertionFailures };
+  // L4 C3：gen 后立即跑层级视图 rollup 自洽 pivot（2 张层级视图，level 列 region/sub_region/store SUM 差>容差 报错），
+  // 防生成器改动导致上下钻对不上（同 C2 即时断言，exit 1 阻断）。
+  const rollupFailures = await runRollupChecks(opts.client, produced);
+
+  return { produced, explainFailures, assertionFailures, rollupFailures };
 }
 
 // CLI 入口：npm run gen-views
@@ -108,9 +156,10 @@ async function main() {
     try {
       const { brandMetricView, categorySummaryView, regionBreakdownView, itemBreakdownView, wholesaleCustomerView, supplyChainOutboundView, wholesaleDailyView, wholesaleDailyCustomerView } = await import('./view-configs.js');
       const r = await runGenerator({ client, viewConfigs: [brandMetricView, categorySummaryView, regionBreakdownView, itemBreakdownView, wholesaleCustomerView, supplyChainOutboundView, wholesaleDailyView, wholesaleDailyCustomerView], outDir: '../../database/generated' });
-      console.log(`✅ 生成器完成：产出 ${r.produced.length} 个视图，EXPLAIN 失败 ${r.explainFailures.length} 个，断言失败 ${r.assertionFailures.length} 个`);
+      console.log(`✅ 生成器完成：产出 ${r.produced.length} 个视图，EXPLAIN 失败 ${r.explainFailures.length} 个，断言失败 ${r.assertionFailures.length} 个，rollup 失败 ${r.rollupFailures.length} 个`);
       if (r.produced.length) console.log('  产出:', r.produced.join(', '));
-      const allFails = [...r.explainFailures, ...r.assertionFailures];
+      if (r.rollupFailures.length === 0) console.log('  C3 rollup 自洽: 通过（region/sub_region/store SUM 差≤0.01）');
+      const allFails = [...r.explainFailures, ...r.assertionFailures, ...r.rollupFailures];
       if (allFails.length) {
         console.error('  失败:');
         allFails.forEach((f) => console.error('   -', f));

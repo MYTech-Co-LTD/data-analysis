@@ -26,18 +26,20 @@ export const C3_ROLLUP_VIEWS: C3ViewConfig[] = [
 ];
 
 /** 构建 rollup pivot SQL。
- *  onlyMismatches=true（C3 用）→ HAVING 只返 |diff|>容差 的 target_id 行（每行=一个 mismatch）；
- *  false（health 面板用）→ 返全部 target_id 行，调用方自行算 max diff / totals。 */
+ *  onlyMismatches=true（C3 用）→ 只返 |diff|>容差 的 target_id 行（每行=一个 mismatch）；
+ *  false（health 面板用）→ 返全部 target_id 行，调用方自行算 max diff / totals。
+ *  2026-08-05 修：PG HAVING 不能引用 SELECT 别名（region_total 等），原 HAVING 写法对真实库必报
+ *  `column "region_total" does not exist`（单测 mock rpc 未抓到）——改外包一层子查询再 WHERE 过滤。 */
 export function buildRollupPivotSql(view: string, metric: string, onlyMismatches = true): string {
-  const having = onlyMismatches
-    ? ` HAVING ABS(region_total - sub_region_total) > ${C3_TOLERANCE} OR ABS(region_total - store_total) > ${C3_TOLERANCE}`
-    : '';
-  return `SELECT target_id,
+  const base = `SELECT target_id,
     SUM(CASE WHEN level='region' THEN ${metric} END) AS region_total,
     SUM(CASE WHEN level='sub_region' THEN ${metric} END) AS sub_region_total,
     SUM(CASE WHEN level='store' THEN ${metric} END) AS store_total
   FROM ${view}
-  GROUP BY target_id${having}`;
+  GROUP BY target_id`;
+  return onlyMismatches
+    ? `SELECT * FROM (${base}) t WHERE ABS(region_total - sub_region_total) > ${C3_TOLERANCE} OR ABS(region_total - store_total) > ${C3_TOLERANCE}`
+    : base;
 }
 
 export interface C3Mismatch {

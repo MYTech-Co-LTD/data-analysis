@@ -22,14 +22,17 @@ describe('buildRollupPivotSql', () => {
     expect(sql).toContain('GROUP BY target_id');
   });
 
-  it('onlyMismatches=true adds HAVING tolerance filter', () => {
+  it('onlyMismatches=true wraps in subquery with WHERE tolerance filter (PG HAVING 禁引别名)', () => {
     const sql = buildRollupPivotSql('v', 'm', true);
-    expect(sql).toContain('HAVING ABS(region_total - sub_region_total) > 0.01 OR ABS(region_total - store_total) > 0.01');
+    expect(sql).toContain('SELECT * FROM (');
+    expect(sql).toContain('WHERE ABS(region_total - sub_region_total) > 0.01 OR ABS(region_total - store_total) > 0.01');
+    expect(sql).not.toContain('HAVING');
   });
 
-  it('onlyMismatches=false omits HAVING (health panel wants all rows)', () => {
+  it('onlyMismatches=false omits filter (health panel wants all rows)', () => {
     const sql = buildRollupPivotSql('report_supply_chain_outbound_gen', 'delivery_amount', false);
     expect(sql).not.toContain('HAVING');
+    expect(sql).not.toContain('SELECT * FROM (');
   });
 });
 
