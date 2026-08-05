@@ -2,21 +2,31 @@ import { notFound } from "next/navigation";
 
 import { getDeviceType } from "@/lib/get-device-type";
 import { getClient } from "@/lib/api";
-import { getTargetKpi } from "@/lib/report-center/targets";
-import { getRegionBreakdown } from "@/lib/report-center/region-breakdown";
-import { getCategorySummary } from "@/lib/report-center/category-summary";
-import { getBrandMetric } from "@/lib/report-center/brand-metric";
+import { getTargetKpi, type TargetKpiRow } from "@/lib/report-center/targets";
+import { getRegionBreakdown, type RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
+import { getCategorySummary, type CategorySummaryRow } from "@/lib/report-center/category-summary";
+import { getBrandMetric, type BrandMetricRow } from "@/lib/report-center/brand-metric";
 import {
   getItemBreakdownTop,
+  type ItemBreakdownResult,
+  type TopBoard,
 } from "@/lib/report-center/item-breakdown";
-import { getSupplyChainOutbound } from "@/lib/report-center/supply-chain-outbound";
-import { getWholesaleDaily } from "@/lib/report-center/wholesale-daily";
+import { getSupplyChainOutbound, type SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
+import { getWholesaleDaily, type WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
+import { type GetterResult } from "@/lib/report-center/types";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
+import { PartialDegradeBanner } from "@/components/report-center/partial-degrade-banner";
 import { DesktopDashboard } from "./desktop";
 import { MobileDashboard } from "./mobile";
 
 export const dynamic = "force-dynamic";
+
+// 空的 GetterResult（用于 allSettled rejected 兜底——getter 内部已 catch，
+// 理论上不会 reject；这里防御性，确保不抛 unhandled promise rejection）。
+function errResult<T>(): GetterResult<T> {
+  return { rows: [], status: "error" };
+}
 
 // 看板页：取数 + 按设备分发。PC Header+Sidebar，移动 Header only（参照 reports/[id]/layout.tsx）。
 export default async function TargetDashboard({
@@ -29,29 +39,73 @@ export default async function TargetDashboard({
   const isMobile = (await getDeviceType()) === "mobile";
 
   const client = await getClient();
-  const { data: totalRows } = await client.database
-    .from("report_achievement_gen")
-    .select("*")
-    .eq("target_id", targetId)
-    .eq("target_level", "total")
-    .limit(1);
-  if (!totalRows?.length) notFound();
-  const t = totalRows[0];
+
+  // M8（Task 3 review）：report_achievement_gen 的 total 行查询原先用
+  // `if (!totalRows?.length) notFound()`——PostgREST error 时 totalRows===undefined → 误判 notFound。
+  // 改为：try/catch + 显式 error 标记。
+  //   - 查询成功 && rows===0 → notFound（目标真不存在）
+  //   - 查询失败（error 抛出或 res.error）→ 不 notFound，标记 totalFailed=true，
+  //     走降级渲染（只显示横幅，不渲染依赖 t 的 dashboard）
+  //   - 查询成功 && rows>0 → 正常渲染
+  let totalRows: Record<string, unknown>[] | null = null;
+  let totalFailed = false;
+  try {
+    const res = await client.database
+      .from("report_achievement_gen")
+      .select("*")
+      .eq("target_id", targetId)
+      .eq("target_level", "total")
+      .limit(1);
+    if (res.error) {
+      throw res.error;
+    }
+    totalRows = (res.data ?? null) as Record<string, unknown>[] | null;
+  } catch (e) {
+    console.error("report_achievement_gen total fetch failed:", e);
+    totalFailed = true;
+  }
+
+  // 只有"查询成功且 total 行数为 0"才 notFound（目标真不存在）
+  if (!totalFailed && !totalRows?.length) notFound();
+
+  // 取数失败：不 notFound，渲染降级页（横幅 + Header/Sidebar 外壳保持一致）
+  if (totalFailed || !totalRows?.length) {
+    const fallback = (
+      <div className={isMobile ? "p-4" : "p-6"}>
+        <PartialDegradeBanner failCount={7} total={7} />
+      </div>
+    );
+    return isMobile ? (
+      <div className="min-h-screen bg-gray-50">
+        <Header />
+        <main className="flex-1 px-3">{fallback}</main>
+      </div>
+    ) : (
+      <div className="min-h-screen bg-gray-50">
+        <Header />
+        <div className="flex">
+          <Sidebar />
+          <main className="flex-1">{fallback}</main>
+        </div>
+      </div>
+    );
+  }
+
+  const t = totalRows[0] as {
+    status: string;
+    start_date: string;
+    end_date: string;
+    days_elapsed: number | null;
+    total_days: number | null;
+    name: string;
+    [key: string]: unknown;
+  };
   // 已定格目标：各模块从 target_snapshot_breakdowns 读 close_target 冻结快照（视图不再算 closed 目标）
   const closed = t.status === "closed";
 
-  // F1.2: getTargetKpi 改返 GetterResult；这里只透传 .rows 给 KpiCards。
-  // KPI 失败时 rows=[] → KpiCards 渲染空，不再 throw 把整页带进 error.tsx。
-  // （Task 4 会用 Promise.allSettled 统一处理 error 字段做 toast/占位；本 task 最小改动让 typecheck 过。）
-  const [
-    kpiRes,
-    regionBreakdown,
-    categorySummary,
-    brandMetric,
-    itemTop,
-    supplyChain,
-    wholesaleDaily,
-  ] = await Promise.all([
+  // F1.2: Promise.allSettled + GetterResult——单 getter 失败不挂整页。
+  // 7 个 getter 内部已 catch（返 status:'error'），allSettled 是双保险。
+  const results = await Promise.allSettled([
     getTargetKpi(targetId),
     getRegionBreakdown(id, closed),
     getCategorySummary(id, closed),
@@ -60,7 +114,60 @@ export default async function TargetDashboard({
     getSupplyChainOutbound(targetId, closed),
     getWholesaleDaily(targetId, closed),
   ]);
-  const kpi = kpiRes.rows;
+
+  const kpi =
+    results[0].status === "fulfilled"
+      ? results[0].value
+      : errResult<TargetKpiRow>();
+  const regionBreakdown =
+    results[1].status === "fulfilled"
+      ? results[1].value
+      : errResult<RegionBreakdownRow>();
+  const categorySummary =
+    results[2].status === "fulfilled"
+      ? results[2].value
+      : errResult<CategorySummaryRow>();
+  const brandMetric =
+    results[3].status === "fulfilled"
+      ? results[3].value
+      : errResult<BrandMetricRow>();
+  const itemTop: ItemBreakdownResult =
+    results[4].status === "fulfilled"
+      ? results[4].value
+      : (() => {
+          const emptyBoard: TopBoard = {
+            rows: [],
+            totalAmount: 0,
+            totalProfit: 0,
+          };
+          return {
+            saleMonth: { ...emptyBoard },
+            saleDay: { ...emptyBoard },
+            outboundMonth: { ...emptyBoard },
+            outboundDay: { ...emptyBoard },
+            defaultDay: "",
+            status: "error",
+          };
+        })();
+  const supplyChain =
+    results[5].status === "fulfilled"
+      ? results[5].value
+      : errResult<SupplyChainOutboundRow>();
+  const wholesaleDaily =
+    results[6].status === "fulfilled"
+      ? results[6].value
+      : errResult<WholesaleDailyRow>();
+
+  // 统计失败模块数（getter 内部 catch 走 status:'error'；或 allSettled rejected）
+  const failCount = [
+    kpi,
+    regionBreakdown,
+    categorySummary,
+    brandMetric,
+    itemTop,
+    supplyChain,
+    wholesaleDaily,
+  ].filter((r) => r?.status === "error").length;
 
   // 数据新鲜度：3 表最早 /compute 时间（updated_at min）
   let freshness: string | null = null;
@@ -76,26 +183,35 @@ export default async function TargetDashboard({
   // 提取月份
   const targetMonth = new Date(t.start_date).getMonth() + 1;
 
+  const banner =
+    failCount > 0 ? <PartialDegradeBanner failCount={failCount} total={7} /> : null;
+
+  // 组件 props 本 task 不改（Task 6 做）——仍解包 .rows 传组件。
+  // itemTop 仍传整个对象（ItemBreakdownResult extends ItemBreakdownTop，结构兼容，多出来的 status/error 被忽略）。
   const dashboard = isMobile ? (
-    <MobileDashboard
-      target={t}
-      kpi={kpi}
-      regionBreakdown={regionBreakdown.rows}
-      categorySummary={categorySummary.rows}
-      brandMetric={brandMetric.rows}
-      progress={progress}
-      targetMonth={targetMonth}
-      freshness={freshness}
-      targetId={targetId}
-      itemTop={itemTop}
-      supplyChain={supplyChain.rows}
-      wholesaleDaily={wholesaleDaily.rows}
-    />
+    <>
+      {banner}
+      <MobileDashboard
+        target={t}
+        kpi={kpi.rows}
+        regionBreakdown={regionBreakdown.rows}
+        categorySummary={categorySummary.rows}
+        brandMetric={brandMetric.rows}
+        progress={progress}
+        targetMonth={targetMonth}
+        freshness={freshness}
+        targetId={targetId}
+        itemTop={itemTop}
+        supplyChain={supplyChain.rows}
+        wholesaleDaily={wholesaleDaily.rows}
+      />
+    </>
   ) : (
     <div className="p-6">
+      {banner}
       <DesktopDashboard
         target={t}
-        kpi={kpi}
+        kpi={kpi.rows}
         regionBreakdown={regionBreakdown.rows}
         categorySummary={categorySummary.rows}
         brandMetric={brandMetric.rows}
