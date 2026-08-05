@@ -40,8 +40,11 @@ export default async function TargetDashboard({
   // 已定格目标：各模块从 target_snapshot_breakdowns 读 close_target 冻结快照（视图不再算 closed 目标）
   const closed = t.status === "closed";
 
+  // F1.2: getTargetKpi 改返 GetterResult；这里只透传 .rows 给 KpiCards。
+  // KPI 失败时 rows=[] → KpiCards 渲染空，不再 throw 把整页带进 error.tsx。
+  // （Task 4 会用 Promise.allSettled 统一处理 error 字段做 toast/占位；本 task 最小改动让 typecheck 过。）
   const [
-    kpi,
+    kpiRes,
     regionBreakdown,
     categorySummary,
     brandMetric,
@@ -57,6 +60,7 @@ export default async function TargetDashboard({
     getSupplyChainOutbound(targetId, closed),
     getWholesaleDaily(targetId, closed),
   ]);
+  const kpi = kpiRes.rows;
 
   // 数据新鲜度：3 表最早 /compute 时间（updated_at min）
   let freshness: string | null = null;

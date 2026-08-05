@@ -10,12 +10,16 @@ import { TargetList } from "@/components/report-center/target-list";
  * 点目标进 /reports/targets/[id] 看板。PC/移动共用 TargetList（响应式 grid）。
  */
 export default async function HomePage() {
-  const [deviceType, activeTargets, closedTargets] = await Promise.all([
+  // F1.2: getTargetList 改返 GetterResult；首页消费 .rows（失败时空列表，
+  // 不再因 throw 触发 error.tsx 挂掉整页——目标列表静默降级为空，更友好）。
+  const [deviceType, activeRes, closedRes] = await Promise.all([
     getDeviceType(),
     getTargetList("active"),
     getTargetList("closed"),
   ]);
   const isMobile = deviceType === "mobile";
+  const activeTargets = activeRes.rows;
+  const closedTargets = closedRes.rows;
 
   const content = (
     <>
