@@ -25,6 +25,7 @@ import { useCanSeeCost } from "./use-can-see-cost";
 interface BrandMetricTableProps {
   result: GetterResult<BrandMetricRow>;
   targetMonth?: number;
+  progress?: number; // 时间进度（如 0.677）；传了则达成率按「达成率/时间进度」相对着色
   isMobile?: boolean;
 }
 
@@ -39,19 +40,25 @@ function fmtRate(r: number | null): string {
   return r == null ? "—" : `${(r * 100).toFixed(1)}%`;
 }
 
-// 达成率三色（照 kpi-cards.rateColor）：≥1 绿/≥0.8 琥珀/<0.8 红；NULL → 灰
-function rateColor(r: number | null): string {
+// 达成率三色（对齐 KPI 比率带）：按「达成率 / 时间进度」对比着色（相对进度）：
+//   >=1   → success #16A34A（跑赢进度）
+//   >=0.8 → warning #D97706（接近）
+//   <0.8  → error #DC2626（落后）
+// progress 未传（null/undefined）→ 退化为绝对达成率三色（rate 本身）；progress=0 → 除 0.0001 兜底。
+// NULL rate → 灰（无数据/脱敏）。
+function rateColor(r: number | null, progress?: number): string {
   if (r == null) return "text-slate-300";
-  return r >= 1
+  const ratio = progress == null ? r : r / (progress || 0.0001);
+  return ratio >= 1
     ? "text-green-600"
-    : r >= 0.8
+    : ratio >= 0.8
       ? "text-amber-600"
       : "text-red-600";
 }
 
 // 品牌×指标表：3 行（熊喵/品品甜/合计）。完成率三色，合计行高亮。
 // 镜像 category-summary.tsx 结构/样式 + chart-actions 导出。
-export function BrandMetricTable({ result, targetMonth, isMobile = false }: BrandMetricTableProps) {
+export function BrandMetricTable({ result, targetMonth, progress, isMobile = false }: BrandMetricTableProps) {
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const title = `${targetMonth ?? ""}月品牌×指标`;
@@ -207,7 +214,7 @@ export function BrandMetricTable({ result, targetMonth, isMobile = false }: Bran
                   <td
                     className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(
                       s.saleRate,
-                      rateColor(r.sale_rate)
+                      rateColor(r.sale_rate, progress)
                     )}`}
                     title={suspiciousTitle(s.saleRate)}
                   >

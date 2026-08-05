@@ -6,6 +6,8 @@ import { TargetSummary } from "@/lib/report-center/targets";
 // 目标列表卡：纯渲染 + next/link，Server Component（不加 "use client"）。
 // 进度率(progress_rate) 作主数字并按三色编码（绿>=1 / 琥珀>=0.8 / 红<0.8）；
 // 达成率(achievement_rate) 作副数字。所有数字 tabular-nums 对齐。
+// 着色口径：进行中卡「进度」主数字保持绝对（它就是进度本身）；「达成」副文本按
+// 「达成率 / 时间进度」相对着色（对齐 KPI 比率带）；已结束无时间进度概念，达成率保持绝对。
 
 function fmtPct(r: number) {
   return (r * 100).toFixed(1) + "%";
@@ -13,6 +15,11 @@ function fmtPct(r: number) {
 
 function rateColor(r: number) {
   return r >= 1 ? "text-green-600" : r >= 0.8 ? "text-amber-600" : "text-red-600";
+}
+
+// 相对进度的达成率三色（对齐 KPI 比率带）：achievement/progress >=1 绿 / >=0.8 琥珀 / <0.8 红。
+function rateColorByProgress(achievement: number, progress: number) {
+  return rateColor(achievement / (progress || 0.0001));
 }
 
 export function TargetList({ targets }: { targets: TargetSummary[] }) {
@@ -66,7 +73,12 @@ export function TargetList({ targets }: { targets: TargetSummary[] }) {
                 </div>
                 <div className="mt-0.5 text-xs text-slate-400">
                   达成{" "}
-                  <span className="text-slate-600">
+                  <span
+                    className={rateColorByProgress(
+                      t.sample_achievement_rate,
+                      t.sample_progress_rate,
+                    )}
+                  >
                     {fmtPct(t.sample_achievement_rate)}
                   </span>
                 </div>

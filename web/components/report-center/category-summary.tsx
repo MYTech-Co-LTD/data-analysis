@@ -27,7 +27,24 @@ interface CategorySummaryProps {
   result: GetterResult<CategorySummaryRow>;
   targetMonth: number;
   targetId: number;
+  progress?: number; // 时间进度（如 0.677）；传了则完成率按「完成率/时间进度」相对着色
   isMobile?: boolean;
+}
+
+// 完成率三色（对齐 KPI 比率带）：按「达成率 / 时间进度」对比着色（相对进度）：
+//   >=1   → success #16A34A（跑赢进度）
+//   >=0.8 → warning #D97706（接近）
+//   <0.8  → error #DC2626（落后）
+// progress 未传（null/undefined）→ 退化为绝对完成率三色（rate 本身）；progress=0 → 除 0.0001 兜底。
+// NULL rate → 灰（无数据/脱敏）。
+function rateColor(rate: number | null, progress?: number): string {
+  if (rate == null) return "text-slate-300";
+  const ratio = progress == null ? rate : rate / (progress || 0.0001);
+  return ratio >= 1
+    ? "text-green-600"
+    : ratio >= 0.8
+      ? "text-amber-600"
+      : "text-red-600";
 }
 
 // 毛利率 < 12% 标红
@@ -45,7 +62,7 @@ function fmtRate(r: number | null): string {
   return r == null ? "—" : `${(r * 100).toFixed(1)}%`;
 }
 
-export function CategorySummary({ result, targetMonth, targetId, isMobile = false }: CategorySummaryProps) {
+export function CategorySummary({ result, targetMonth, targetId, progress, isMobile = false }: CategorySummaryProps) {
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [drawerCat, setDrawerCat] = useState<string | null>(null);
@@ -271,7 +288,7 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleActual, "text-slate-700")}`} title={suspiciousTitle(s.saleActual)}>
                     {fmtCurrency(r.sale_actual)}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleRate, "text-slate-700")}`} title={suspiciousTitle(s.saleRate)}>
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.saleRate, rateColor(r.sale_rate, progress))}`} title={suspiciousTitle(s.saleRate)}>
                     {fmtRate(r.sale_rate)}
                   </td>
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profitTarget, "text-slate-700")}`} title={suspiciousTitle(s.profitTarget)}>
@@ -280,7 +297,7 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profitActual, "text-slate-700")}`} title={suspiciousTitle(s.profitActual)}>
                     {fmtCurrency(r.profit_actual)}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profitRate, "text-slate-700")}`} title={suspiciousTitle(s.profitRate)}>
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profitRate, rateColor(r.profit_rate, progress))}`} title={suspiciousTitle(s.profitRate)}>
                     {fmtRate(r.profit_rate)}
                   </td>
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profitMargin, marginColor(r.profit_margin))}`} title={suspiciousTitle(s.profitMargin)}>
@@ -313,7 +330,7 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
                 <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousAmount(totals.saleActual), "")}`}>
                   {fmtCurrency(totals.saleActual)}
                 </td>
-                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousRate(totals.saleRate), "")}`}>
+                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousRate(totals.saleRate), rateColor(totals.saleRate, progress))}`}>
                   {fmtRate(totals.saleRate)}
                 </td>
                 <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousAmount(totals.profitTarget), "")}`}>
@@ -322,7 +339,7 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
                 <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousProfit(totals.profitActual), "")}`}>
                   {fmtCurrency(totals.profitActual)}
                 </td>
-                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousRate(totals.profitRate), "")}`}>
+                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousRate(totals.profitRate), rateColor(totals.profitRate, progress))}`}>
                   {fmtRate(totals.profitRate)}
                 </td>
                 <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousMargin(totals.profitMargin), marginColor(totals.profitMargin))}`}>
@@ -387,7 +404,7 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
                       <span>{r.category}</span>
                     </button>
                   </td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.saleRate, "text-slate-700")}`} title={suspiciousTitle(s.saleRate)}>
+                  <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.saleRate, rateColor(r.sale_rate, progress))}`} title={suspiciousTitle(s.saleRate)}>
                     {fmtRate(r.sale_rate)}
                   </td>
                   <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.profitMargin, marginColor(r.profit_margin))}`} title={suspiciousTitle(s.profitMargin)}>
@@ -414,7 +431,7 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
                 <td className="px-2 py-2 text-left">
                   合计{totalAnomaly && <TotalAnomalyBadge />}
                 </td>
-                <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousRate(totals.saleRate), "")}`}>
+                <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousRate(totals.saleRate), rateColor(totals.saleRate, progress))}`}>
                   {fmtRate(totals.saleRate)}
                 </td>
                 <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousMargin(totals.profitMargin), marginColor(totals.profitMargin))}`}>

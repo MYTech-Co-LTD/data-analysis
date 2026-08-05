@@ -98,7 +98,7 @@ export function MobileDashboard({
 
       {/* 品牌×指标 */}
       <div className="px-4">
-        <BrandMetricTable result={brandMetric} targetMonth={targetMonth} isMobile />
+        <BrandMetricTable result={brandMetric} targetMonth={targetMonth} progress={progress} isMobile />
       </div>
 
       {/* 门店零售/配送数据报表（战区） */}
@@ -127,7 +127,7 @@ export function MobileDashboard({
 
       {/* 类别出库报表 */}
       <div className="px-4">
-        <CategorySummary result={categorySummary} targetMonth={targetMonth} targetId={targetId} isMobile />
+        <CategorySummary result={categorySummary} targetMonth={targetMonth} targetId={targetId} progress={progress} isMobile />
       </div>
 
       {/* 供应链出库层级 */}

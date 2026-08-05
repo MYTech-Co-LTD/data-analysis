@@ -95,7 +95,7 @@ export function DesktopDashboard({
       <KpiCards result={kpi} />
 
       {/* 品牌×指标 */}
-      <BrandMetricTable result={brandMetric} targetMonth={targetMonth} />
+      <BrandMetricTable result={brandMetric} targetMonth={targetMonth} progress={progress} />
 
       {/* 门店零售/配送数据报表（战区） */}
       <RegionDrillTable
@@ -117,7 +117,7 @@ export function DesktopDashboard({
       />
 
       {/* 类别出库报表 */}
-      <CategorySummary result={categorySummary} targetMonth={targetMonth} targetId={targetId} />
+      <CategorySummary result={categorySummary} targetMonth={targetMonth} targetId={targetId} progress={progress} />
 
       {/* 供应链出库层级 + 外部批发日报（2 看板并排） */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

@@ -27,11 +27,15 @@ interface RegionDrillTableProps {
   isMobile?: boolean;
 }
 
-// 达成率三色编码
+// 达成率三色编码（对齐 KPI 比率带）：按「达成率 / 时间进度」对比着色（相对进度）：
+//   >=1   → success #16A34A（跑赢进度）
+//   >=0.8 → warning #D97706（接近）
+//   <0.8  → error #DC2626（落后）
+// NULL rate → 灰（无数据/脱敏）；progress=0 → 除 0.0001 兜底。
 function rateColor(rate: number | null, progress: number): string {
   if (rate == null) return "text-slate-300";
-  if (rate < progress) return "text-red-600";
-  return rate >= 1 ? "text-green-600" : rate >= 0.8 ? "text-amber-600" : "text-red-600";
+  const ratio = (rate ?? 0) / (progress || 0.0001);
+  return ratio >= 1 ? "text-green-600" : ratio >= 0.8 ? "text-amber-600" : "text-red-600";
 }
 
 function fmtCurrency(v: number | null | undefined): string {
