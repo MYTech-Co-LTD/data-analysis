@@ -59,7 +59,7 @@ describe('runC1Checks', () => {
       trigger: 'manual',
     });
 
-    expect(results).toHaveLength(5); // retail, delivery, wholesale, item_sales, wholesale_customer
+    expect(results).toHaveLength(6); // retail, delivery, wholesale, item_sales, wholesale_customer, item_outbound
     expect(results.every(r => r.status === 'pass')).toBe(true);
     expect(fetch).not.toHaveBeenCalled(); // No /compute
   });
@@ -159,7 +159,7 @@ describe('runC1Checks', () => {
       checks: ['C1'],
     });
 
-    expect(results).toHaveLength(5); // all 5 sources (含 item_sales / wholesale_customer)
+    expect(results).toHaveLength(6); // all 6 sources (含 item_sales / wholesale_customer / item_outbound)
   });
 
   it('checks filter: C1:item_sales runs only item_sales source', async () => {

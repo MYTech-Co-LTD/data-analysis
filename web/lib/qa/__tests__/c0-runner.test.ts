@@ -228,6 +228,23 @@ describe('runC0Checks', () => {
     expect(countRetailApi).not.toHaveBeenCalled();
   });
 
+  it('item 源跳过：C0:item_outbound 不产生结果（function_slug 空，走不到 countForDay）', async () => {
+    vi.mocked(runC0).mockResolvedValue(PASS('2026-08-05'));
+
+    const res = await runC0Checks({
+      client: makeClient() as any,
+      duck: makeDuck() as any,
+      runId: 'r10',
+      trigger: 'collect',
+      checks: ['C0:item_outbound'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+    });
+
+    expect(res).toHaveLength(0);
+    expect(runC0).not.toHaveBeenCalled();
+    expect(countRetailApi).not.toHaveBeenCalled();
+  });
+
   it('无 collect_tasks → error 结果，不写 qa_logs', async () => {
     vi.mocked(runC0).mockResolvedValue(PASS('x'));
 

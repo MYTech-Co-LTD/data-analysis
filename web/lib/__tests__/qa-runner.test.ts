@@ -46,6 +46,14 @@ describe('runQaChecks', () => {
     expect(results).toHaveLength(0);
   });
 
+  it('D1 跳过 item_outbound：D1:item_outbound 定向不产生结果（natural_key=[] 不适用）', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-skip-item-ob', trigger: 'cron', db, duck, checks: ['D1:item_outbound'] });
+    expect(results.filter((r) => r.check_type === 'D1')).toHaveLength(0);
+    expect(results).toHaveLength(0);
+  });
+
   it('D2 覆盖 item 源：D2:item_sales 跑 RPC 检查聚合表 PK', async () => {
     const db = makeDb();
     const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);

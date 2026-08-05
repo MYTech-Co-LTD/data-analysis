@@ -86,5 +86,23 @@
     "brand_expr": "regexp_extract(filename,'wholesale_detail/([0-9]+)/',1)",
     "detail_date_expr": "substr(audit_time,1,4)||substr(audit_time,6,2)||substr(audit_time,9,2)",
     "tolerance": 0.01
+  },
+  {
+    "name": "item_outbound",
+    "report_type": "item_outbound",
+    "function_slug": "",
+    "glob": "s3://lemeng-datasource/lemeng/transfer_detail/**/all.parquet",
+    "glob_date_format": "compact",
+    "natural_key": [],
+    "agg_table": "report_daily_item_outbound",
+    "agg_key": ["system_book_code", "item_num", "biz_date"],
+    "agg_metric": [
+      { "detail": "delivery_amount", "agg": "delivery_amount" },
+      { "detail": "wholesale_amount", "agg": "wholesale_amount" }
+    ],
+    "brand_expr": "regexp_extract(filename,'transfer_detail/([0-9]+)/',1)",
+    "detail_date_expr": "substr(order_time,1,4)||substr(order_time,6,2)||substr(order_time,9,2)",
+    "custom_duck_sql": "WITH delivery AS (\n  SELECT regexp_extract(filename,'transfer_detail/([0-9]+)/',1) AS sbc,\n    substr(order_time,1,4)||substr(order_time,6,2)||substr(order_time,9,2) AS bizday,\n    CAST(SUM(CAST(out_money AS DECIMAL(18,2))) AS DECIMAL(18,2)) AS delivery_amount,\n    CAST(SUM(CAST(profit_money AS DECIMAL(18,2))) AS DECIMAL(18,2)) AS delivery_profit\n  FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/**/all.parquet', filename=true, union_by_name=true)\n  WHERE substr(order_time,1,4)||substr(order_time,6,2)||substr(order_time,9,2) BETWEEN '{{fromCompact}}' AND '{{toCompact}}'\n  GROUP BY 1,2\n),\nwholesale AS (\n  SELECT COALESCE(db.system_book_code, regexp_extract(w.filename,'wholesale_detail/([0-9]+)/',1)) AS sbc,\n    substr(w.audit_time,1,4)||substr(w.audit_time,6,2)||substr(w.audit_time,9,2) AS bizday,\n    CAST(SUM(CAST(w.wholesale_money AS DECIMAL(18,2))) AS DECIMAL(18,2)) AS wholesale_amount,\n    CAST(SUM(CAST(w.wholesale_profit AS DECIMAL(18,2))) AS DECIMAL(18,2)) AS wholesale_profit\n  FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/**/all.parquet', filename=true, union_by_name=true) w\n  LEFT JOIN read_parquet('s3://lemeng-datasource/dims/dim_branch.parquet') db ON db.system_book_code='64188' AND db.branch_name=w.client_name\n  WHERE substr(w.audit_time,1,4)||substr(w.audit_time,6,2)||substr(w.audit_time,9,2) BETWEEN '{{fromCompact}}' AND '{{toCompact}}'\n  GROUP BY 1,2\n)\nSELECT COALESCE(d.sbc,w.sbc) AS sbc,\n  COALESCE(d.bizday,w.bizday) AS bizday,\n  COALESCE(d.delivery_amount,0) AS delivery_amount,\n  COALESCE(d.delivery_profit,0) AS delivery_profit,\n  COALESCE(w.wholesale_amount,0) AS wholesale_amount,\n  COALESCE(w.wholesale_profit,0) AS wholesale_profit\nFROM delivery d FULL OUTER JOIN wholesale w ON d.sbc=w.sbc AND d.bizday=w.bizday\nORDER BY 1,2",
+    "tolerance": 0.01
   }
 ]

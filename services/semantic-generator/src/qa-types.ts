@@ -18,6 +18,10 @@ export interface DetailSource {
   brand_expr: string;                    // 品牌提取表达式（duckdb，引 filename）
   detail_date_expr: string;              // 明细日期 → YYYYMMDD 表达式
   api_count?: { fn: string; dates_iso: boolean };  // C0 用（web 侧映射）
+  /** C1 多源合并明细 SQL（替代默认单 glob 查询）：含 {{fromCompact}}/{{toCompact}} 日期占位，
+   *  返回列须含 sbc/bizday/<agg_metric[].detail>（如 delivery_amount/wholesale_amount），
+   *  已按 (sbc,bizday) GROUP BY。缺省则用 brand_expr+detail_date_expr+glob 的默认单源 SQL。 */
+  custom_duck_sql?: string;
   tolerance: number;                     // C1 金额容差（元）
 }
 
