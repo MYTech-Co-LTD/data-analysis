@@ -13,6 +13,7 @@ import { notifyWecom } from './notify';
 import { runServiceDownBucket, runCollectTokenBucket, runHourlyBucket, runDailyBucket } from './monitor/runtime';
 import { runQaChecks } from './qa-runner';
 import { runC0Checks } from './qa/c0-runner';
+import { runC1Checks } from './qa/c1-runner';
 import detailSources from './qa/config/detail-sources.json';
 import { duckQuery } from './qa/duck';
 import { buildDayGlob } from './qa/d1';
@@ -650,16 +651,36 @@ async function executeTask(task: {
       await triggerCompute(client, dates, task.id);
     }
 
-    // L4 采集后即时 D1 去重守护（当日增量后查唯一性，轻量）；QA 失败不阻塞采集流程
-    try {
-      const src = (detailSources as DetailSource[]).find((s) => s.function_slug === task.function_slug);
-      if (src) {
-        const todayCompact = getDateOffsetChina(0).replace(/-/g, '');
-        // D1 只扫当日分区（buildDayGlob 按源目录格式把日期段替换成具体日），避免每 5 分钟全库重扫
+    // L4 采集后即时 QA：D1 去重守护 + C1 明细↔聚合对账（受影响源当日）；QA 失败不阻塞采集流程
+    const src = (detailSources as DetailSource[]).find((s) => s.function_slug === task.function_slug);
+    if (src) {
+      const todayCompact = getDateOffsetChina(0).replace(/-/g, '');
+      const todayIso = getDateOffsetChina(0);
+      // D1+D2 去重守护（当日分区，buildDayGlob 按源目录格式把日期段替换成具体日，避免每 5 分钟全库重扫）
+      try {
         const dayGlob = buildDayGlob(src, todayCompact);
         await runDailyQa('collect', [`D1:${src.name}`, `D2:${src.name}`], todayCompact, todayCompact, { [src.name]: dayGlob });
-      }
-    } catch (e: any) { console.error('[scheduler] 采集后 QA 失败:', e?.message ?? e); }
+      } catch (e: any) { console.error('[scheduler] 采集后 D1/D2 失败:', e?.message ?? e); }
+      // C1 明细↔聚合对账（受影响源当日单日，非 7 天）+ 自动 /compute 重算 retry；C1 失败不阻断采集（parquet 已落，采集是主任务）
+      try {
+        const c1Client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
+        const c1Db = {
+          rpc: async (fn: string, body: Record<string, unknown>) => {
+            const r = await fetch(`${POSTGREST_URL}/rpc/${fn}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
+            });
+            const json = await r.json();
+            if (!r.ok) return { error: json };
+            return { data: json };
+          },
+          from: (t: string) => c1Client.database.from(t),
+        } as any;
+        const c1Duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql);
+        // 随机后缀防同毫秒 run_id 撞 qa_logs UNIQUE 约束（与 runDailyQa 同模式）
+        const c1RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        await runC1Checks({ db: c1Db, duck: c1Duck, runId: c1RunId, trigger: 'collect', checks: [`C1:${src.name}`], window: { from: todayIso, to: todayIso } });
+      } catch (e: any) { console.error('[scheduler] 采集后 C1 失败:', e?.message ?? e); }
+    }
 
     const finalStatus = lastResult.error ? 'partial' : 'success';
     await writeLog(

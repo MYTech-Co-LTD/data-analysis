@@ -31,6 +31,9 @@ export interface C1RunnerOpts {
   runId: string;
   trigger: QaTrigger;
   checks?: string[];
+  /** 窗口覆盖（ISO YYYY-MM-DD）。不传则默认 7 天回溯（昨天往前 C1_DAYS 天）。
+   *  采集后即时对账传当日单日窗口（性能优化，避免每 5 分钟全 7 天扫描）。 */
+  window?: { from: string; to: string };
 }
 
 /** pg.query 适配器：经 execute_sql RPC 执行 raw SQL，返 any[]（每行=对象）。
@@ -65,20 +68,21 @@ async function recompute(report_type: string, dateIso: string): Promise<void> {
 
 export async function runC1Checks(opts: C1RunnerOpts): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
-  const { db, duck, runId, trigger, checks } = opts;
+  const { db, duck, runId, trigger, checks, window: win } = opts;
 
   const duckAdapter = { query: duck };
   const pgAdapter = { query: (sql: string) => pgQuery(db, sql) };
+
+  // 窗口：opts.window 优先（采集后当日单日），否则默认 7 天回溯
+  const fromIso = win?.from ?? getDateOffsetChina(-C1_DAYS);
+  const toIso = win?.to ?? getDateOffsetChina(-1);
 
   for (const src of detailSources as DetailSource[]) {
     // 过滤：C1（全部）或 C1:<name>（定向）
     if (checks && !checks.some(c => c === 'C1' || c === `C1:${src.name}`)) continue;
 
-    const fromIso = getDateOffsetChina(-C1_DAYS);
-    const toIso = getDateOffsetChina(-1);
-
     try {
-      // 初始 7 天窗口对账
+      // 初始窗口对账（默认 7 天，或 opts.window 指定的单日）
       let r = await runC1(src, fromIso, toIso, { duck: duckAdapter, pg: pgAdapter });
       let retries = 0;
 
