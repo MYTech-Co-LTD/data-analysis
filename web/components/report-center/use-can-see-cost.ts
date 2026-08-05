@@ -50,8 +50,3 @@ export function useCanSeeCost(): boolean {
   }, []);
   return canSeeCost;
 }
-
-/** Test-only: reset the module-level cache between tests. */
-export function __resetCanSeeCostCacheForTest(): void {
-  _promise = null;
-}

@@ -10,7 +10,7 @@ import { useRef, useState } from "react";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { ItemDetailDrawer } from "./item-detail-drawer";
 import { MaskedBadge } from "./masked-badge";
-import { ModuleError } from "./module-error";
+import { ModuleError, formatModuleError } from "./module-error";
 import { useCanSeeCost } from "./use-can-see-cost";
 import type { TopBoard, ItemBreakdownResult } from "@/lib/report-center/item-breakdown";
 
@@ -399,7 +399,7 @@ export function SaleTopBoards({
           <h3 className="text-sm font-medium text-slate-700">销售商品 TOP 榜</h3>
         </div>
         <ModuleError
-          message={`销售商品榜加载失败${error?.message ? `（${error.message}）` : ""}`}
+          message={formatModuleError("销售商品榜加载失败", error)}
         />
       </div>
     );
@@ -507,7 +507,7 @@ export function OutboundTopBoards({
           <h3 className="text-sm font-medium text-slate-700">出库商品 TOP 榜</h3>
         </div>
         <ModuleError
-          message={`出库商品榜加载失败${error?.message ? `（${error.message}）` : ""}`}
+          message={formatModuleError("出库商品榜加载失败", error)}
         />
       </div>
     );

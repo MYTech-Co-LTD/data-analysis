@@ -5,7 +5,7 @@ import { BrandMetricRow } from "@/lib/report-center/brand-metric";
 import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { MaskedBadge } from "./masked-badge";
-import { ModuleError } from "./module-error";
+import { ModuleError, formatModuleError } from "./module-error";
 import { useCanSeeCost } from "./use-can-see-cost";
 
 interface BrandMetricTableProps {
@@ -84,7 +84,7 @@ export function BrandMetricTable({ result, targetMonth, isMobile = false }: Bran
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <ModuleError
-          message={`品牌×指标加载失败${error?.message ? `（${error.message}）` : ""}`}
+          message={formatModuleError("品牌×指标加载失败", error)}
         />
       </div>
     );

@@ -1,8 +1,14 @@
 'use client';
+import { useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { getUserFriendlyMessage, isRetryable } from '@/lib/error';
 
 export default function ReportError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  // N1：与全局 app/error.tsx 一致——错误日志上报（生产可接 Sentry）。
+  useEffect(() => {
+    console.error('Report error:', error);
+  }, [error]);
+
   const msg = getUserFriendlyMessage(error);
   return (
     <div className="flex flex-col items-center justify-center gap-3 p-12 text-center">

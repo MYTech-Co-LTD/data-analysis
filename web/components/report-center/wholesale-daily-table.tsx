@@ -17,7 +17,7 @@ import type {
 import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { MaskedBadge } from "./masked-badge";
-import { ModuleError } from "./module-error";
+import { ModuleError, formatModuleError } from "./module-error";
 import { useCanSeeCost } from "./use-can-see-cost";
 
 interface WholesaleDailyTableProps {
@@ -149,7 +149,7 @@ export function WholesaleDailyTable({
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <ModuleError
-          message={`外部批发日报加载失败${error?.message ? `（${error.message}）` : ""}`}
+          message={formatModuleError("外部批发日报加载失败", error)}
         />
       </div>
     );

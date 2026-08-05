@@ -70,10 +70,12 @@ export default async function TargetDashboard({
   if (!totalFailed && !totalRows?.length) notFound();
 
   // 取数失败：不 notFound，渲染降级页（横幅 + Header/Sidebar 外壳保持一致）
+  // M9：total 查询失败≠模块 getter 失败（7 个 getter 根本没跑），不再显示 "7/7 个模块加载失败"
+  //（错误计数无意义），改 variant="total-failed" 显示「看板数据加载失败」，保留重试。
   if (totalFailed || !totalRows?.length) {
     const fallback = (
       <div className={isMobile ? "p-4" : "p-6"}>
-        <PartialDegradeBanner failCount={7} total={7} />
+        <PartialDegradeBanner variant="total-failed" />
         <PermissionBanner />
       </div>
     );
@@ -137,10 +139,12 @@ export default async function TargetDashboard({
     results[4].status === "fulfilled"
       ? results[4].value
       : (() => {
+          // M10：TopBoard.totalProfit 契约是 number|null（脱敏全 null 时透传 null），
+          // rejected 兜底空 board 用 null 而非 0，与脱敏语义一致（0 会误导显示 ¥0）。
           const emptyBoard: TopBoard = {
             rows: [],
             totalAmount: 0,
-            totalProfit: 0,
+            totalProfit: null,
           };
           return {
             saleMonth: { ...emptyBoard },

@@ -11,6 +11,17 @@ import { useRouter } from "next/navigation";
 // 设计：client component（useRouter().refresh 触发 RSC re-render 重新取数）。
 // 调用方（已是 client）可传 onRetry 覆盖默认 refresh 行为；默认走 router.refresh()。
 // 错误消息从 AppError.message 取（已 wrapError 友好化）；未提供时显示通用兜底文案。
+
+// M14：统一模块加载失败文案模板——`${prefix}${error?.message ? `（${error.message}）` : ""}`。
+// 7 个报表组件（brand-metric/region/category/supply-chain/wholesale-daily/kpi-cards/item-top-boards）
+// 复用此 helper，避免同一模板各写一份（错误消息已 wrapError 友好化，仅透传 message 即可）。
+export function formatModuleError(
+  prefix: string,
+  error?: { message?: string } | null,
+): string {
+  return `${prefix}${error?.message ? `（${error.message}）` : ""}`;
+}
+
 export function ModuleError({
   message,
   onRetry,

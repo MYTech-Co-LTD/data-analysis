@@ -6,7 +6,7 @@ import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 import type { GetterResult } from "@/lib/report-center/types";
 import { actualRatio, targetRatio, formatRatio } from "@/lib/report-center/ratio";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
-import { ModuleError } from "./module-error";
+import { ModuleError, formatModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 
 interface RegionDrillTableProps {
@@ -141,7 +141,7 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <ModuleError
-          message={`门店零售/配送报表加载失败${error?.message ? `（${error.message}）` : ""}`}
+          message={formatModuleError("门店零售/配送报表加载失败", error)}
         />
       </div>
     );

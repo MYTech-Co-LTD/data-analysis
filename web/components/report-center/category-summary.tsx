@@ -7,7 +7,7 @@ import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { CategoryItemDrawer } from "./category-item-drawer";
 import { MaskedBadge } from "./masked-badge";
-import { ModuleError } from "./module-error";
+import { ModuleError, formatModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 import { useCanSeeCost } from "./use-can-see-cost";
 
@@ -150,7 +150,7 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <ModuleError
-          message={`类别出库报表加载失败${error?.message ? `（${error.message}）` : ""}`}
+          message={formatModuleError("类别出库报表加载失败", error)}
         />
       </div>
     );

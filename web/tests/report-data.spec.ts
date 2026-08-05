@@ -22,7 +22,8 @@ test.describe('报表数据守护 (F1 降级 + F2 RLS 标注)', () => {
   });
 
   // F1：取数错误透传 + 部分降级——单模块 getter 失败不挂整页。
-  // 降级兜底页含 PartialDegradeBanner（"⚠️ N/7 个模块加载失败"）。
+  // 降级兜底页含 PartialDegradeBanner（total 查询失败 → variant="total-failed"，
+  // M9 后文案为「看板数据加载失败」；单模块失败 → "N/7 个模块加载失败"）。
   test('F1: API 失败时显示模块降级而非空白', async ({ page }) => {
     // 保留 route mock 作为 F1 语义文档。服务端查询不经浏览器故不生效；本地 dev
     // 环境 gateway 不代理 /rest/v1/ 致查询自然失败，降级页照常渲染。
@@ -32,7 +33,7 @@ test.describe('报表数据守护 (F1 降级 + F2 RLS 标注)', () => {
 
     await page.goto('/reports/targets/823', { waitUntil: 'domcontentloaded' });
 
-    // 降级横幅可见（PartialDegradeBanner："⚠️ 7/7 个模块加载失败，部分数据不可用"）
+    // 降级横幅可见（M9 后 total 失败文案为「看板数据加载失败」；regex /加载失败/ 仍匹配）
     await expect(page.getByText(/加载失败/)).toBeVisible({ timeout: 15000 });
 
     // 整页仍渲染：body 可见（不空白）

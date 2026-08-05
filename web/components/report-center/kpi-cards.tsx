@@ -4,7 +4,7 @@ import { METRICS, METRIC_ORDER, MetricCode } from "@/lib/report-center/metric-so
 import { statusToZh } from "@/lib/report-center/status-i18n";
 import type { TargetKpiRow } from "@/lib/report-center/targets";
 import type { GetterResult } from "@/lib/report-center/types";
-import { ModuleError } from "./module-error";
+import { ModuleError, formatModuleError } from "./module-error";
 
 interface KpiRow {
   metric_code: MetricCode;
@@ -91,14 +91,20 @@ export function KpiCards({
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <ModuleError
-          message={`指标加载失败${error?.message ? `（${error.message}）` : ""}`}
+          message={formatModuleError("指标加载失败", error)}
         />
       </div>
     );
   }
 
-  // 视图行透传字段宽，本地 KpiRow 收紧 metric_code 类型（METRIC_ORDER 过滤未知 code）
-  const typedRows: KpiRow[] = rows as unknown as KpiRow[];
+  // M12：不做整对象双重断言（as unknown as KpiRow[]）——只收窄真正不兼容的
+  // metric_code 字段（TargetKpiRow.metric_code: string → MetricCode 联合），
+  // 其余字段（target_value/actual_value/achievement_rate/progress_rate/data_status）
+  // 交由 tsc 做结构兼容检查，避免双重断言掩盖未来字段漂移。
+  const typedRows: KpiRow[] = rows.map((r) => ({
+    ...r,
+    metric_code: r.metric_code as MetricCode,
+  }));
   if (typedRows.length === 0) {
     return (
       <div className="rounded-lg border border-slate-200 bg-white p-4 text-center text-slate-400 py-8 text-sm">
