@@ -34,14 +34,14 @@ export async function getBrandMetric(
   if (closed) {
     try {
       const snap = await getSnapshotRows(targetId, "brand");
-      if (snap) {
+      if (snap.status === "ok") {
         return okResult(
-          (snap as BrandMetricRow[]).sort((a, b) =>
+          (snap.rows as BrandMetricRow[]).sort((a, b) =>
             a.system_book_code.localeCompare(b.system_book_code)
           )
         );
       }
-      // snap === null：保持原 fall-through 行为，继续走下面的 live 查询
+      // snap.status !== 'ok'（error/no-data）：保持原 fall-through 行为，继续走下面的 live 查询
     } catch (e) {
       console.error("brand_metric snapshot:", e);
       return errorResult<BrandMetricRow>([], wrapError(e));

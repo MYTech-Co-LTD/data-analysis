@@ -4,7 +4,12 @@
 // 口径源自语义层生成器（仅考核战区 is_assessed_war_zone 门店，branch_num<>'99' 配送中心）
 // 脱敏：profit/margin 受 request.jwt.claims.can_see_cost 控制，无成本权限时视图返 NULL（非 0，前端自行处理）
 // margin 为 round(x,4) 即 0-1 小数（0.1234 = 12.34%），amount=0 时 NULLIF 致 margin NULL
+//
+// F1.1（前端数据准确性守护 P0）：返 GetterResult<SupplyChainOutboundRow>，吞错改 status='error'。
+// 保留 closed 分支 "有快照用快照、无快照 fall-through live" 行为，select 字段不变。
 import { getClient } from "@/lib/api";
+import { wrapError } from "@/lib/error";
+import { okResult, errorResult, type GetterResult } from "./types";
 import { getSnapshotRows } from "./target-snapshot";
 
 export interface SupplyChainOutboundRow {
@@ -30,23 +35,32 @@ export interface SupplyChainOutboundRow {
 export async function getSupplyChainOutbound(
   targetId: number,
   closed?: boolean,
-): Promise<SupplyChainOutboundRow[]> {
+): Promise<GetterResult<SupplyChainOutboundRow>> {
   // 已定格目标：读快照
   if (closed) {
-    const snap = await getSnapshotRows(targetId, "supply");
-    if (snap) return snap as SupplyChainOutboundRow[];
-  }
-  const client = await getClient();
-
-  const { data, error } = await client.database
-    .from("report_supply_chain_outbound_gen")
-    .select("*")
-    .eq("target_id", targetId);
-
-  if (error) {
-    console.error("getSupplyChainOutbound: fetch failed:", error);
-    return [];
+    try {
+      const snap = await getSnapshotRows(targetId, "supply");
+      if (snap.status === "ok") {
+        return okResult(snap.rows as SupplyChainOutboundRow[]);
+      }
+      // snap.status !== 'ok'：保持原 fall-through 行为（无快照即查 live）
+    } catch (e) {
+      console.error("supply_chain_outbound snapshot:", e);
+      return errorResult<SupplyChainOutboundRow>([], wrapError(e));
+    }
   }
 
-  return (data ?? []) as SupplyChainOutboundRow[];
+  try {
+    const client = await getClient();
+    const { data, error } = await client.database
+      .from("report_supply_chain_outbound_gen")
+      .select("*")
+      .eq("target_id", targetId);
+
+    if (error) throw error;
+    return okResult((data ?? []) as SupplyChainOutboundRow[]);
+  } catch (e) {
+    console.error("getSupplyChainOutbound: fetch failed:", e);
+    return errorResult<SupplyChainOutboundRow>([], wrapError(e));
+  }
 }

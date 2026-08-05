@@ -5,7 +5,12 @@
 // 口径源自语义层生成器
 // 脱敏：profit/margin 受 request.jwt.claims.can_see_cost 控制，无成本权限时视图返 NULL（非 0，前端自行处理）
 // margin 为 round(x,4) 即 0-1 小数（0.1234 = 12.34%），amount=0 时 NULLIF 致 margin NULL
+//
+// F1.1（前端数据准确性守护 P0）：返 GetterResult<WholesaleDailyRow> / GetterResult<WholesaleDailyCustomerRow>，
+// 吞错改 status='error'。保留 closed 分支 "有快照用快照、无快照 fall-through live" 行为，select 字段不变。
 import { getClient } from "@/lib/api";
+import { wrapError } from "@/lib/error";
+import { okResult, errorResult, type GetterResult } from "./types";
 import { getSnapshotRows } from "./target-snapshot";
 
 export interface WholesaleDailyRow {
@@ -19,26 +24,39 @@ export interface WholesaleDailyRow {
 export async function getWholesaleDaily(
   targetId: number,
   closed?: boolean,
-): Promise<WholesaleDailyRow[]> {
+): Promise<GetterResult<WholesaleDailyRow>> {
   // 已定格目标：读快照
   if (closed) {
-    const snap = await getSnapshotRows(targetId, "wholesale_daily");
-    if (snap) return (snap as WholesaleDailyRow[]).sort((a, b) => String(a.biz_date).localeCompare(String(b.biz_date)));
+    try {
+      const snap = await getSnapshotRows(targetId, "wholesale_daily");
+      if (snap.status === "ok") {
+        return okResult(
+          (snap.rows as WholesaleDailyRow[]).sort((a, b) =>
+            String(a.biz_date).localeCompare(String(b.biz_date))
+          )
+        );
+      }
+      // snap.status !== 'ok'：保持原 fall-through 行为（无快照即查 live）
+    } catch (e) {
+      console.error("wholesale_daily snapshot:", e);
+      return errorResult<WholesaleDailyRow>([], wrapError(e));
+    }
   }
-  const client = await getClient();
 
-  const { data, error } = await client.database
-    .from("report_wholesale_daily_gen")
-    .select("*")
-    .eq("target_id", targetId)
-    .order("biz_date", { ascending: true });
+  try {
+    const client = await getClient();
+    const { data, error } = await client.database
+      .from("report_wholesale_daily_gen")
+      .select("*")
+      .eq("target_id", targetId)
+      .order("biz_date", { ascending: true });
 
-  if (error) {
-    console.error("getWholesaleDaily: fetch failed:", error);
-    return [];
+    if (error) throw error;
+    return okResult((data ?? []) as WholesaleDailyRow[]);
+  } catch (e) {
+    console.error("getWholesaleDaily: fetch failed:", e);
+    return errorResult<WholesaleDailyRow>([], wrapError(e));
   }
-
-  return (data ?? []) as WholesaleDailyRow[];
 }
 
 // 双 grain 视图 report_wholesale_daily_customer_gen：每行=该天该客户
@@ -55,22 +73,22 @@ export interface WholesaleDailyCustomerRow {
 export async function getWholesaleDailyCustomers(
   targetId: number,
   date: string,
-): Promise<WholesaleDailyCustomerRow[]> {
-  const client = await getClient();
+): Promise<GetterResult<WholesaleDailyCustomerRow>> {
+  try {
+    const client = await getClient();
+    const { data, error } = await client.database
+      .from("report_wholesale_daily_customer_gen")
+      .select(
+        "client_code,client_name,wholesale_ext_customer_amount,wholesale_ext_customer_profit,wholesale_ext_customer_margin",
+      )
+      .eq("target_id", targetId)
+      .eq("biz_date", date)
+      .order("wholesale_ext_customer_amount", { ascending: false });
 
-  const { data, error } = await client.database
-    .from("report_wholesale_daily_customer_gen")
-    .select(
-      "client_code,client_name,wholesale_ext_customer_amount,wholesale_ext_customer_profit,wholesale_ext_customer_margin",
-    )
-    .eq("target_id", targetId)
-    .eq("biz_date", date)
-    .order("wholesale_ext_customer_amount", { ascending: false });
-
-  if (error) {
-    console.error("getWholesaleDailyCustomers: fetch failed:", error);
-    return [];
+    if (error) throw error;
+    return okResult((data ?? []) as WholesaleDailyCustomerRow[]);
+  } catch (e) {
+    console.error("getWholesaleDailyCustomers: fetch failed:", e);
+    return errorResult<WholesaleDailyCustomerRow>([], wrapError(e));
   }
-
-  return (data ?? []) as WholesaleDailyCustomerRow[];
 }

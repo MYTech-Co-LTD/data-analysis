@@ -2,8 +2,20 @@
 // 商品 TOP 4 独立看板（月度销售/日销售/月度出库/日出库）+ 出库明细分页
 // 月榜走视图 report_item_breakdown_gen（含脱敏 sale_profit/outbound_profit）；
 // 日榜走 RPC get_item_top_by_day（migration 145 后返 7 列含脱敏利润）。
+//
+// F1.1（前端数据准确性守护 P0）：
+// - getItemBreakdownTop 返 ItemBreakdownResult（= ItemBreakdownTop + status/error），5 个错误分支吞错改 status='error'。
+// - getItemOutboundListPage 返 ItemOutboundListResult（= {rows,total} + status/error），error 分支吞错改 status='error'。
+//
+// 形状偏差（已记入 task-2-report）：task-2-brief 给的 ItemBreakdownResult 形状
+// `{rows,totalAmount,totalProfit,defaultDay}` 与真实代码结构不符——getItemBreakdownTop 实际返
+// 4 个 TopBoard（saleMonth/saleDay/outboundMonth/outboundDay + defaultDay），不是单 board。
+// 故 ItemBreakdownResult 改为 extends ItemBreakdownTop 加 status/error；dashboard 组件 prop
+// 契约不变（结构兼容，多出来的 status/error 被忽略），page.tsx 也不需要解包（直接传 itemTop）。
+// totalProfit 保持 number（按 brief #3 不动，Task 8 再改 number|null）。
 import { getClient } from "@/lib/api";
-import { getSnapshotRows } from "./target-snapshot";
+import { wrapError, type AppError } from "@/lib/error";
+import { type GetterStatus } from "./types";
 
 export interface ItemTopRow {
   item_code: string;
@@ -26,6 +38,13 @@ export interface ItemBreakdownTop {
   outboundMonth: TopBoard;
   outboundDay: TopBoard;
   defaultDay: string; // 默认日期 YYYY-MM-DD
+}
+
+// GetterResult 模式扩展：在 ItemBreakdownTop 数据形状上挂 status/error。
+// 因 getItemBreakdownTop 返 4 个 board（不是单 rows 数组），不能直接用 GetterResult<ItemTopRow>。
+export interface ItemBreakdownResult extends ItemBreakdownTop {
+  status: GetterStatus;
+  error?: AppError;
 }
 
 // 通用 TopBoard 构造器：按 amtKey 排序 + TOP20 + 利润 + totals（给合计行）
@@ -58,94 +77,115 @@ function toBoard(
 export async function getItemBreakdownTop(
   targetId: number,
   closed?: boolean,
-): Promise<ItemBreakdownTop> {
+): Promise<ItemBreakdownResult> {
   const emptyBoard: TopBoard = { rows: [], totalAmount: 0, totalProfit: 0 };
-  const empty: ItemBreakdownTop = {
+  const empty: ItemBreakdownResult = {
     saleMonth: { ...emptyBoard },
     saleDay: { ...emptyBoard },
     outboundMonth: { ...emptyBoard },
     outboundDay: { ...emptyBoard },
     defaultDay: "",
+    status: "no-data",
   };
 
-  const client = await getClient();
+  try {
+    const client = await getClient();
 
-  // 取目标周期，算默认日：今天在周期内->今天；今天>end->end；今天<start->start
-  const { data: t, error: tErr } = await client.database
-    .from("targets")
-    .select("start_date,end_date")
-    .eq("id", targetId)
-    .single();
-  if (tErr || !t) {
-    console.error("getItemBreakdownTop: target fetch failed:", tErr);
-    return empty;
-  }
-  const startDate: string = t.start_date;
-  const endDate: string = t.end_date;
-  const today = new Date().toISOString().slice(0, 10);
-  const defaultDay =
-    today >= startDate && today <= endDate
-      ? today
-      : today > endDate
-        ? endDate
-        : startDate;
-
-  // 月榜：closed 读 item_top 小快照（TOP20+total，几KB，避免读全量 item 2.58MB 拖慢 SSR）；
-  //       active 查视图全量（toBoard 算 TOP20）
-  let saleMonth: TopBoard;
-  let outboundMonth: TopBoard;
-  if (closed) {
-    const { data: snap, error: sErr } = await client.database
-      .from("target_snapshot_breakdowns")
-      .select("data")
-      .eq("target_id", targetId)
-      .eq("module", "item_top")
+    // 取目标周期，算默认日：今天在周期内->今天；今天>end->end；今天<start->start
+    const { data: t, error: tErr } = await client.database
+      .from("targets")
+      .select("start_date,end_date")
+      .eq("id", targetId)
       .single();
-    if (sErr || !snap?.data) {
-      console.error("getItemBreakdownTop: item_top snapshot missing:", sErr);
-      return { ...empty, defaultDay };
+    if (tErr || !t) {
+      console.error("getItemBreakdownTop: target fetch failed:", tErr);
+      return { ...empty, status: "error", error: wrapError(tErr ?? new Error("target not found")) };
     }
-    const d = snap.data as {
-      saleTop?: Array<{ item_code: string; item_name: string; category_name: string | null; sale_amount: number; sale_profit: number | null }>;
-      outboundTop?: Array<{ item_code: string; item_name: string; category_name: string | null; outbound_amount: number; outbound_profit: number | null }>;
-      totalSaleAmount?: number; totalSaleProfit?: number; totalOutboundAmount?: number; totalOutboundProfit?: number;
-    };
-    saleMonth = {
-      rows: (d.saleTop ?? []).map((r) => ({ item_code: String(r.item_code ?? ""), item_name: String(r.item_name ?? ""), category_name: r.category_name == null ? null : String(r.category_name), amount: Number(r.sale_amount ?? 0), profit: Number(r.sale_profit ?? 0), pct: (d.totalSaleAmount ?? 0) > 0 ? Number(r.sale_amount ?? 0) / (d.totalSaleAmount ?? 0) : 0 })),
-      totalAmount: d.totalSaleAmount ?? 0, totalProfit: d.totalSaleProfit ?? 0,
-    };
-    outboundMonth = {
-      rows: (d.outboundTop ?? []).map((r) => ({ item_code: String(r.item_code ?? ""), item_name: String(r.item_name ?? ""), category_name: r.category_name == null ? null : String(r.category_name), amount: Number(r.outbound_amount ?? 0), profit: Number(r.outbound_profit ?? 0), pct: (d.totalOutboundAmount ?? 0) > 0 ? Number(r.outbound_amount ?? 0) / (d.totalOutboundAmount ?? 0) : 0 })),
-      totalAmount: d.totalOutboundAmount ?? 0, totalProfit: d.totalOutboundProfit ?? 0,
-    };
-  } else {
-    const { data: monthRows, error: mErr } = await client.database
-      .from("report_item_breakdown_gen")
-      .select("item_code,item_name,category_name,sale_amount,sale_profit,outbound_amount,outbound_profit")
-      .eq("target_id", targetId);
-    if (mErr) {
-      console.error("getItemBreakdownTop: month view fetch failed:", mErr);
-      return { ...empty, defaultDay };
+    const startDate: string = t.start_date;
+    const endDate: string = t.end_date;
+    const today = new Date().toISOString().slice(0, 10);
+    const defaultDay =
+      today >= startDate && today <= endDate
+        ? today
+        : today > endDate
+          ? endDate
+          : startDate;
+
+    // 月榜：closed 读 item_top 小快照（TOP20+total，几KB，避免读全量 item 2.58MB 拖慢 SSR）；
+    //       active 查视图全量（toBoard 算 TOP20）
+    let saleMonth: TopBoard;
+    let outboundMonth: TopBoard;
+    if (closed) {
+      const { data: snap, error: sErr } = await client.database
+        .from("target_snapshot_breakdowns")
+        .select("data")
+        .eq("target_id", targetId)
+        .eq("module", "item_top")
+        .single();
+      if (sErr || !snap?.data) {
+        console.error("getItemBreakdownTop: item_top snapshot missing:", sErr);
+        return {
+          ...empty,
+          defaultDay,
+          status: "error",
+          error: wrapError(sErr ?? new Error("item_top snapshot missing")),
+        };
+      }
+      const d = snap.data as {
+        saleTop?: Array<{ item_code: string; item_name: string; category_name: string | null; sale_amount: number; sale_profit: number | null }>;
+        outboundTop?: Array<{ item_code: string; item_name: string; category_name: string | null; outbound_amount: number; outbound_profit: number | null }>;
+        totalSaleAmount?: number; totalSaleProfit?: number; totalOutboundAmount?: number; totalOutboundProfit?: number;
+      };
+      saleMonth = {
+        rows: (d.saleTop ?? []).map((r) => ({ item_code: String(r.item_code ?? ""), item_name: String(r.item_name ?? ""), category_name: r.category_name == null ? null : String(r.category_name), amount: Number(r.sale_amount ?? 0), profit: Number(r.sale_profit ?? 0), pct: (d.totalSaleAmount ?? 0) > 0 ? Number(r.sale_amount ?? 0) / (d.totalSaleAmount ?? 0) : 0 })),
+        totalAmount: d.totalSaleAmount ?? 0, totalProfit: d.totalSaleProfit ?? 0,
+      };
+      outboundMonth = {
+        rows: (d.outboundTop ?? []).map((r) => ({ item_code: String(r.item_code ?? ""), item_name: String(r.item_name ?? ""), category_name: r.category_name == null ? null : String(r.category_name), amount: Number(r.outbound_amount ?? 0), profit: Number(r.outbound_profit ?? 0), pct: (d.totalOutboundAmount ?? 0) > 0 ? Number(r.outbound_amount ?? 0) / (d.totalOutboundAmount ?? 0) : 0 })),
+        totalAmount: d.totalOutboundAmount ?? 0, totalProfit: d.totalOutboundProfit ?? 0,
+      };
+    } else {
+      const { data: monthRows, error: mErr } = await client.database
+        .from("report_item_breakdown_gen")
+        .select("item_code,item_name,category_name,sale_amount,sale_profit,outbound_amount,outbound_profit")
+        .eq("target_id", targetId);
+      if (mErr) {
+        console.error("getItemBreakdownTop: month view fetch failed:", mErr);
+        return { ...empty, defaultDay, status: "error", error: wrapError(mErr) };
+      }
+      const monthArr = (monthRows ?? []) as unknown as Array<Record<string, unknown>>;
+      saleMonth = toBoard(monthArr, "sale_amount", "sale_profit");
+      outboundMonth = toBoard(monthArr, "outbound_amount", "outbound_profit");
     }
-    const monthArr = (monthRows ?? []) as unknown as Array<Record<string, unknown>>;
-    saleMonth = toBoard(monthArr, "sale_amount", "sale_profit");
-    outboundMonth = toBoard(monthArr, "outbound_amount", "outbound_profit");
-  }
 
-  // 日榜：调 RPC（closed 目标 RPC 读底表不依赖 target_status；migration 158 后 pos_item_code lateral）
-  const { data: dayRows, error: dErr } = await client.database.rpc(
-    "get_item_top_by_day",
-    { p_target_id: targetId, p_day: defaultDay },
-  );
-  if (dErr) {
-    console.error("getItemBreakdownTop: day RPC failed:", dErr);
-    return { saleMonth, saleDay: { ...emptyBoard }, outboundMonth, outboundDay: { ...emptyBoard }, defaultDay };
-  }
-  const dayArr = (dayRows ?? []) as unknown as Array<Record<string, unknown>>;
-  const saleDay = toBoard(dayArr, "sale_amount", "sale_profit");
-  const outboundDay = toBoard(dayArr, "outbound_amount", "outbound_profit");
+    // 日榜：调 RPC（closed 目标 RPC 读底表不依赖 target_status；migration 158 后 pos_item_code lateral）
+    const { data: dayRows, error: dErr } = await client.database.rpc(
+      "get_item_top_by_day",
+      { p_target_id: targetId, p_day: defaultDay },
+    );
+    if (dErr) {
+      console.error("getItemBreakdownTop: day RPC failed:", dErr);
+      // 月榜已成功（有数据），仅日榜 RPC 失败：保留月榜数据（dashboard 仍可显示月榜），
+      // 但整体 status='error'（按 brief "5 个错误分支都改 error"），让上层能感知日榜缺失。
+      return {
+        saleMonth,
+        saleDay: { ...emptyBoard },
+        outboundMonth,
+        outboundDay: { ...emptyBoard },
+        defaultDay,
+        status: "error",
+        error: wrapError(dErr),
+      };
+    }
+    const dayArr = (dayRows ?? []) as unknown as Array<Record<string, unknown>>;
+    const saleDay = toBoard(dayArr, "sale_amount", "sale_profit");
+    const outboundDay = toBoard(dayArr, "outbound_amount", "outbound_profit");
 
-  return { saleMonth, saleDay, outboundMonth, outboundDay, defaultDay };
+    return { saleMonth, saleDay, outboundMonth, outboundDay, defaultDay, status: "ok" };
+  } catch (e) {
+    console.error("getItemBreakdownTop:", e);
+    return { ...empty, status: "error", error: wrapError(e) };
+  }
 }
 
 export interface ItemOutboundListRow {
@@ -160,6 +200,14 @@ export interface ItemOutboundListRow {
   pct: number; // 占比（前端可基于 total 重算，这里给 0 占位）
 }
 
+// getItemOutboundListPage 返 {rows,total} 形状；挂 status/error 成 GetterResult 风格。
+export interface ItemOutboundListResult {
+  rows: ItemOutboundListRow[];
+  total: number;
+  status: GetterStatus;
+  error?: AppError;
+}
+
 /**
  * 出库明细分页：按 outbound_amount 倒序，每页 50 行。
  * 占比留给前端基于完整 total 计算（避免 server 端二次全量查询）。
@@ -168,27 +216,57 @@ export async function getItemOutboundListPage(
   targetId: number,
   page: number,
   filters: { category?: string; brand?: string; q?: string },
-): Promise<{ rows: ItemOutboundListRow[]; total: number }> {
-  const client = await getClient();
-  // closed 目标：读 item 全量快照分页（展开抽屉才调，按需加载；不查视图因 closed 视图 tgt 不含此 target）
-  const { data: t } = await client.database.from("targets").select("status").eq("id", targetId).single();
-  if (t?.status === "closed") {
-    const { data: snap } = await client.database
-      .from("target_snapshot_breakdowns")
-      .select("data")
-      .eq("target_id", targetId)
-      .eq("module", "item")
-      .single();
-    let all = (snap?.data ?? []) as Array<Record<string, unknown>>;
-    if (filters.category) all = all.filter((r) => r.category_group === filters.category);
-    if (filters.q) {
-      const q = filters.q.toLowerCase();
-      all = all.filter((r) => String(r.item_name ?? "").toLowerCase().includes(q));
+): Promise<ItemOutboundListResult> {
+  try {
+    const client = await getClient();
+    // closed 目标：读 item 全量快照分页（展开抽屉才调，按需加载；不查视图因 closed 视图 tgt 不含此 target）
+    const { data: t } = await client.database.from("targets").select("status").eq("id", targetId).single();
+    if (t?.status === "closed") {
+      const { data: snap } = await client.database
+        .from("target_snapshot_breakdowns")
+        .select("data")
+        .eq("target_id", targetId)
+        .eq("module", "item")
+        .single();
+      let all = (snap?.data ?? []) as Array<Record<string, unknown>>;
+      if (filters.category) all = all.filter((r) => r.category_group === filters.category);
+      if (filters.q) {
+        const q = filters.q.toLowerCase();
+        all = all.filter((r) => String(r.item_name ?? "").toLowerCase().includes(q));
+      }
+      all.sort((a, b) => Number(b.outbound_amount ?? 0) - Number(a.outbound_amount ?? 0));
+      const total = all.length;
+      const start = (page - 1) * 50;
+      const rows = all.slice(start, start + 50).map((r) => ({
+        item_code: String(r.item_code ?? ""),
+        item_name: String(r.item_name ?? ""),
+        category_name: r.category_name == null ? null : String(r.category_name),
+        top_category: r.top_category == null ? null : String(r.top_category),
+        category_group: r.category_group == null ? null : String(r.category_group),
+        delivery_amount: Number(r.delivery_amount || 0),
+        wholesale_amount: Number(r.wholesale_amount || 0),
+        outbound_amount: Number(r.outbound_amount || 0),
+        pct: 0,
+      }));
+      return { rows, total, status: "ok" };
     }
-    all.sort((a, b) => Number(b.outbound_amount ?? 0) - Number(a.outbound_amount ?? 0));
-    const total = all.length;
-    const start = (page - 1) * 50;
-    const rows = all.slice(start, start + 50).map((r) => ({
+    // active: 查视图（原逻辑）
+    let query = client.database
+      .from("report_item_breakdown_gen")
+      .select(
+        "item_code,item_name,category_name,top_category,category_group,delivery_amount,wholesale_amount,outbound_amount",
+        { count: "exact" },
+      )
+      .eq("target_id", targetId);
+    if (filters.category) query = query.eq("category_group", filters.category);
+    // 注：原 filters.brand -> item_brand 筛选已移除（item_brand 是 manufacturer brand，脏值+跨品牌粒度，会导致 0 行）。
+    if (filters.q) query = query.ilike("item_name", `%${filters.q}%`);
+
+    const { data, count, error } = await query
+      .order("outbound_amount", { ascending: false })
+      .range((page - 1) * 50, page * 50 - 1);
+    if (error) throw error;
+    const rows = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
       item_code: String(r.item_code ?? ""),
       item_name: String(r.item_name ?? ""),
       category_name: r.category_name == null ? null : String(r.category_name),
@@ -199,37 +277,9 @@ export async function getItemOutboundListPage(
       outbound_amount: Number(r.outbound_amount || 0),
       pct: 0,
     }));
-    return { rows, total };
+    return { rows, total: count ?? 0, status: "ok" };
+  } catch (e) {
+    console.error("getItemOutboundListPage: fetch failed:", e);
+    return { rows: [], total: 0, status: "error", error: wrapError(e) };
   }
-  // active: 查视图（原逻辑）
-  let query = client.database
-    .from("report_item_breakdown_gen")
-    .select(
-      "item_code,item_name,category_name,top_category,category_group,delivery_amount,wholesale_amount,outbound_amount",
-      { count: "exact" },
-    )
-    .eq("target_id", targetId);
-  if (filters.category) query = query.eq("category_group", filters.category);
-  // 注：原 filters.brand -> item_brand 筛选已移除（item_brand 是 manufacturer brand，脏值+跨品牌粒度，会导致 0 行）。
-  if (filters.q) query = query.ilike("item_name", `%${filters.q}%`);
-
-  const { data, count, error } = await query
-    .order("outbound_amount", { ascending: false })
-    .range((page - 1) * 50, page * 50 - 1);
-  if (error) {
-    console.error("getItemOutboundListPage: fetch failed:", error);
-    return { rows: [], total: 0 };
-  }
-  const rows = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
-    item_code: String(r.item_code ?? ""),
-    item_name: String(r.item_name ?? ""),
-    category_name: r.category_name == null ? null : String(r.category_name),
-    top_category: r.top_category == null ? null : String(r.top_category),
-    category_group: r.category_group == null ? null : String(r.category_group),
-    delivery_amount: Number(r.delivery_amount || 0),
-    wholesale_amount: Number(r.wholesale_amount || 0),
-    outbound_amount: Number(r.outbound_amount || 0),
-    pct: 0,
-  }));
-  return { rows, total: count ?? 0 };
 }

@@ -76,32 +76,32 @@ export default async function TargetDashboard({
     <MobileDashboard
       target={t}
       kpi={kpi}
-      regionBreakdown={regionBreakdown}
-      categorySummary={categorySummary}
+      regionBreakdown={regionBreakdown.rows}
+      categorySummary={categorySummary.rows}
       brandMetric={brandMetric.rows}
       progress={progress}
       targetMonth={targetMonth}
       freshness={freshness}
       targetId={targetId}
       itemTop={itemTop}
-      supplyChain={supplyChain}
-      wholesaleDaily={wholesaleDaily}
+      supplyChain={supplyChain.rows}
+      wholesaleDaily={wholesaleDaily.rows}
     />
   ) : (
     <div className="p-6">
       <DesktopDashboard
         target={t}
         kpi={kpi}
-        regionBreakdown={regionBreakdown}
-        categorySummary={categorySummary}
+        regionBreakdown={regionBreakdown.rows}
+        categorySummary={categorySummary.rows}
         brandMetric={brandMetric.rows}
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}
         targetId={targetId}
         itemTop={itemTop}
-        supplyChain={supplyChain}
-        wholesaleDaily={wholesaleDaily}
+        supplyChain={supplyChain.rows}
+        wholesaleDaily={wholesaleDaily.rows}
       />
     </div>
   );
