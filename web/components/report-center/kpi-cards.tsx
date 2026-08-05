@@ -29,8 +29,8 @@ function fmtPercent(r: number): string {
   return `${(r * 100).toFixed(1)}%`;
 }
 
-// 达成率三色编码（DESIGN 语义色），按绝对 achievement_rate 着色：
-//   >=1   → success #16A34A（达成）
+// 达成率三色编码（DESIGN 语义色），按「达成率 / 时间进度」对比着色（相对进度）：
+//   >=1   → success #16A34A（跑赢进度）
 //   >=0.8 → warning #D97706（接近）
 //   <0.8  → error #DC2626（落后）
 function rateColor(r: number) {
@@ -74,7 +74,7 @@ function KpiTooltip({ target, actual, rate }: { target: string; actual: string; 
 }
 
 // 4 指标 KPI 卡行：每卡显示 label / 达成率大数字 / 实际·目标·进度 / 数据状态徽章。
-// 着色按绝对达成率（与 target-list.tsx 一致：≥1 绿/≥0.8 琥珀/<0.8 红），progress 仅作副信息。
+// 着色按「达成率 / 时间进度」对比（相对进度：跑赢进度绿/接近琥珀/落后红）；target-list 仍用绝对达成率口径。
 // hover 显示 tooltip：总目标、总完成、完成率。
 // F1.3：props 接 GetterResult<TargetKpiRow>（不再解包 .rows）。
 //   - status==='error' → 渲染"指标加载失败"占位（不渲染空 KPI 卡，避免与 data_status 徽章混淆）
@@ -148,7 +148,7 @@ export function KpiCards({
                 <div
                   className={`mt-1 flex items-baseline gap-1 text-2xl font-semibold tabular-nums ${suspiciousClass(
                     susp,
-                    rateColor(r.achievement_rate ?? 0),
+                    rateColor((r.achievement_rate ?? 0) / (progress || 0.0001)),
                   )}`}
                 >
                   {rateDisplay}
