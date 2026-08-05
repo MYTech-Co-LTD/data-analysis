@@ -7,6 +7,7 @@ import { runItemMasterCheck } from './qa/item-master';
 import { runBranchWarzoneCheck } from './qa/branch-warzone';
 import { runC1Checks } from './qa/c1-runner';
 import { runC3Checks } from './qa/c3-runner';
+import { runC4Checks } from './qa/c4-runner';
 import detailSources from './qa/config/detail-sources.json';
 import qaChecks from './qa/config/qa-checks.json';
 import type { DetailSource, ViewAssertion, CheckResult, CheckType, QaTrigger } from './qa/types';
@@ -129,6 +130,12 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
   // 恢复 155 删 _audit 后的 rollup 自洽守护（不改生成器/视图，C2 模式注入）。
   if (!opts.checks || opts.checks.some(c => c.startsWith('C3'))) {
     results.push(...await runC3Checks({ db: opts.db, runId: opts.runId, trigger: opts.trigger, checks: opts.checks }));
+  }
+
+  // C4 口径回归：调 validate_semantic_registry RPC（registry 静态校验，迁移 131），
+  // 空 = pass，有 issue = fail（diff=issue 数）。registry 配置闭环改动后运行期可发现（C3 模式注入）。
+  if (!opts.checks || opts.checks.some(c => c.startsWith('C4'))) {
+    results.push(...await runC4Checks({ db: opts.db, runId: opts.runId, trigger: opts.trigger, checks: opts.checks }));
   }
 
   return results;

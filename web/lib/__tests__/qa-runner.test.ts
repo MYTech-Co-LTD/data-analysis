@@ -106,4 +106,42 @@ describe('runQaChecks', () => {
     expect(results[0].check_type).toBe('D2');
     expect(results[0].check_name).toBe('retail');
   });
+
+  it('C4 定向：checks=[C4:semantic-registry] 只跑 C4（registry 静态校验 pass）', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-c4', trigger: 'cron', db, duck, checks: ['C4:semantic-registry'] });
+    expect(results).toHaveLength(1);
+    const c4 = results[0];
+    expect(c4.check_type).toBe('C4');
+    expect(c4.check_name).toBe('semantic-registry');
+    expect(c4.status).toBe('pass');
+    // execute_sql 适配：查询包 to_jsonb 调 validate_semantic_registry
+    expect(db.rpc).toHaveBeenCalledWith('execute_sql', {
+      query: 'SELECT to_jsonb(q) FROM (SELECT * FROM validate_semantic_registry()) AS q',
+    });
+  });
+
+  it('C4 默认注入：无 checks 时 runQaChecks 含 C4 且空 issue = pass', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-c4-default', trigger: 'cron', db, duck });
+    const c4 = results.find((r) => r.check_type === 'C4' && r.check_name === 'semantic-registry');
+    expect(c4?.status).toBe('pass');
+    expect(c4?.diff).toBe(0);
+  });
+
+  it('C4 有 issue 时记 fail 且 diff=issue 数', async () => {
+    const db = makeDb({
+      rpc: vi.fn(async () => ({
+        data: [{ to_jsonb: { issue: 'derived 指标 m2 依赖未定义指标 m3' } }],
+      })),
+    });
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-c4-fail', trigger: 'cron', db, duck, checks: ['C4:semantic-registry'] });
+    const c4 = results.find((r) => r.check_type === 'C4');
+    expect(c4?.status).toBe('fail');
+    expect(c4?.diff).toBe(1);
+    expect((c4?.detail as any[])[0]).toEqual({ issue: 'derived 指标 m2 依赖未定义指标 m3' });
+  });
 });

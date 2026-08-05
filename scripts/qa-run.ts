@@ -33,6 +33,7 @@ const validCheckKeys = new Set<string>([
   ...detailSources.map((s) => `D2:${s.name}`),
   ...qaChecks.map((c) => `C2:${c.view}`),
   ...c3Views.map((v) => `C3:${v}`),
+  'C4:semantic-registry', // 口径回归：validate_semantic_registry RPC 静态校验
 ]);
 
 function arg(key: string): string | undefined {
