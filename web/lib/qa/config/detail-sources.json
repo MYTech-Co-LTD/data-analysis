@@ -1,6 +1,7 @@
 [
   {
     "name": "retail",
+    "report_type": "daily_sales",
     "function_slug": "collect-lemeng",
     "glob": "s3://lemeng-datasource/lemeng/retail_detail/*/*-*-*/all.parquet",
     "glob_date_format": "iso",
@@ -18,6 +19,7 @@
   },
   {
     "name": "delivery",
+    "report_type": "daily_delivery",
     "function_slug": "collect-delivery",
     "glob": "s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet",
     "glob_date_format": "compact",
@@ -35,6 +37,7 @@
   },
   {
     "name": "wholesale",
+    "report_type": "daily_wholesale",
     "function_slug": "collect-wholesale",
     "glob": "s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet",
     "glob_date_format": "compact",

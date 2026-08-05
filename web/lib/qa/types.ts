@@ -8,6 +8,7 @@ export type QaTrigger = 'cron' | 'collect' | 'deploy' | 'manual';
 /** 明细源注册：D1 主键唯一性 / D2 聚合PK重复 / C1 明细↔聚合 的配置来源 */
 export interface DetailSource {
   name: string;                          // 'retail' | 'delivery' | 'wholesale'
+  report_type: string;                   // 聚合表对应的报表类型标识（daily_sales/daily_delivery/daily_wholesale）
   function_slug: string;                 // 对应采集 function（C0 参数查找用）
   glob: string;                          // 严格 all.parquet glob
   glob_date_format: 'iso' | 'compact';   // 日期目录格式：retail=YYYY-MM-DD(iso)，delivery/wholesale=YYYYMMDD(compact)

@@ -1,0 +1,53 @@
+// web/lib/qa/c1.ts
+// C1 明细↔聚合对账核心：duck parquet 明细 SUM vs pg 聚合表 SUM，按 sbc|bizday，amt+profit 双指标。
+// 抓 /compute 聚合漏算/翻倍--明细 duck 端用 brand_expr（regexp_extract filename）+ detail_date_expr
+// 提取 sbc 与 bizday，pg 端用 system_book_code + biz_date；不 dim_branch JOIN（wholesale 64188 由 filename）。
+// |diff|>tolerance -> mismatch；任一 mismatch -> fail。
+import type { DetailSource, CheckResult } from './types';
+
+export interface C1Opts {
+  duck: { query: (sql: string) => Promise<any[]> };
+  pg: { query: (sql: string, params?: any[]) => Promise<any[]> };
+}
+
+export interface C1Mismatch {
+  sbc: string;
+  bizday: string;
+  metric: string;
+  detail_sum: number;
+  agg_sum: number;
+  diff: number;
+}
+
+export async function runC1(
+  src: DetailSource,
+  fromIso: string,
+  toIso: string,
+  opts: C1Opts,
+): Promise<CheckResult> {
+  const fromCompact = fromIso.replace(/-/g, '');
+  const toCompact = toIso.replace(/-/g, '');
+  const mismatches: C1Mismatch[] = [];
+  for (const m of src.agg_metric) {
+    const duckSql = `SELECT ${src.brand_expr} AS sbc, ${src.detail_date_expr} AS bizday, SUM(CAST(${m.detail} AS DECIMAL(18,2))) AS detail_sum FROM read_parquet('${src.glob}', filename=true, union_by_name=true) WHERE ${src.detail_date_expr} BETWEEN '${fromCompact}' AND '${toCompact}' GROUP BY sbc, bizday`;
+    const pgSql = `SELECT system_book_code AS sbc, to_char(biz_date,'YYYYMMDD') AS bizday, SUM(${m.agg}) AS agg_sum FROM ${src.agg_table} WHERE biz_date BETWEEN '${fromIso}' AND '${toIso}' GROUP BY sbc, bizday`;
+    const [duckRows, pgRows] = await Promise.all([opts.duck.query(duckSql), opts.pg.query(pgSql)]);
+    const pgMap = new Map(pgRows.map((r: any) => [`${r.sbc}|${r.bizday}`, Number(r.agg_sum)]));
+    for (const d of duckRows) {
+      const agg = pgMap.get(`${d.sbc}|${d.bizday}`) ?? 0;
+      const diff = Math.round((Number(d.detail_sum) - Number(agg)) * 100) / 100;
+      if (Math.abs(diff) > src.tolerance) {
+        mismatches.push({ sbc: d.sbc, bizday: d.bizday, metric: m.agg, detail_sum: Number(d.detail_sum), agg_sum: agg, diff });
+      }
+    }
+  }
+  return {
+    run_id: '',
+    trigger: 'manual',
+    check_type: 'C1',
+    check_name: src.name,
+    status: mismatches.length ? 'fail' : 'pass',
+    diff: mismatches.length ? mismatches[0].diff : 0,
+    detail: mismatches.length ? mismatches : null,
+  };
+}
