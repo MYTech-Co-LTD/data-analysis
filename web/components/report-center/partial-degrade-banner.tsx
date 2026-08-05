@@ -1,12 +1,14 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { AlertTriangle } from 'lucide-react';
 
 // F1.2/1.4 部分降级横幅：page.tsx 统计 7 个 getter 中 status==='error' 的数量，
 // failCount>0 时在报表看板顶部渲染。重试按钮触发 RSC re-render（重新跑取数）。
 //
 // 设计：client component（useRouter）；由 page.tsx（RSC）传 failCount/total 两个 prop。
 // 仅 failCount>0 时由 page 端条件渲染——本组件不做隐藏逻辑，保持单一职责。
+// DESIGN.md 禁 emoji——用 lucide AlertTriangle 替代警告 emoji。
 export function PartialDegradeBanner({
   failCount,
   total,
@@ -17,8 +19,9 @@ export function PartialDegradeBanner({
   const router = useRouter();
   return (
     <div className="mb-3 flex items-center justify-between rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-      <span>
-        ⚠️ {failCount}/{total} 个模块加载失败，部分数据不可用
+      <span className="inline-flex items-center gap-1.5">
+        <AlertTriangle size={16} strokeWidth={1.5} className="shrink-0" />
+        {failCount}/{total} 个模块加载失败，部分数据不可用
       </span>
       <button
         type="button"

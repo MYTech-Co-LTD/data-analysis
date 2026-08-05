@@ -13,6 +13,7 @@
 // 颜色：slate 中性（对齐 DESIGN.md）——本者是「正常权限提示」，区别于 PartialDegradeBanner
 // 的 amber（后者是「错误降级」）。
 import { useEffect, useState } from 'react';
+import { Info } from 'lucide-react';
 
 export function PermissionBanner() {
   const [masked, setMasked] = useState(false);
@@ -38,8 +39,9 @@ export function PermissionBanner() {
   }, []);
   if (!masked) return null;
   return (
-    <div className="mb-3 rounded-md border border-slate-300 bg-slate-50 px-4 py-2 text-xs text-slate-600">
-      ℹ️ 数据已按你的门店权限裁剪——「合计/战区/品牌」行仅含有权门店，非全量
+    <div className="mb-3 flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+      <Info size={14} strokeWidth={1.5} className="shrink-0" />
+      <span>数据已按你的门店权限裁剪——「合计/战区/品牌」行仅含有权门店，非全量</span>
     </div>
   );
 }

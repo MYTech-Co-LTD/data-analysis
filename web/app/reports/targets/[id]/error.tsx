@@ -1,11 +1,12 @@
 'use client';
+import { AlertTriangle } from 'lucide-react';
 import { getUserFriendlyMessage, isRetryable } from '@/lib/error';
 
 export default function ReportError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   const msg = getUserFriendlyMessage(error);
   return (
     <div className="flex flex-col items-center justify-center gap-3 p-12 text-center">
-      <div className="text-red-600 text-3xl">⚠️</div>
+      <AlertTriangle size={32} strokeWidth={1.5} className="text-red-600" />
       <h2 className="text-lg font-semibold">报表加载失败</h2>
       <p className="text-sm text-slate-600">{msg}</p>
       {isRetryable(error) && (
