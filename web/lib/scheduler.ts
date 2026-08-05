@@ -449,7 +449,7 @@ async function executeTask(task: {
           await notifyWecom('❌ Token 过期', `**任务**: ${task.name}\n**错误**: ${lastResult.error}`);
           return;
         }
-        verified = true; // 增量不对账，交给每小时 full
+        verified = !lastResult.error; // 铁律③：增量虽不做条数对账，merge 写入失败 → verified=false
       } else {
         for (let attempt = 1; attempt <= MAX_VERIFY_RETRIES; attempt++) {
           console.log(`[scheduler] === 第 ${attempt} 次采集 ${attempt > 1 ? '(对账重试)' : ''} ===`);
@@ -460,16 +460,18 @@ async function executeTask(task: {
             return;
           }
           if (lastResult.apiTotal === 0) { await writeLog(client, task.id, startedAt, new Date(), 'success', 0); return; }
+          // 铁律③：条数达标 AND 落盘无错 才算 verified；transform/merge 失败 → verified=false 触发重试/告警
           const missing = lastResult.apiTotal - lastResult.records.length;
-          verified = lastResult.records.length >= lastResult.apiTotal;
+          verified = lastResult.records.length >= lastResult.apiTotal && !lastResult.error;
           if (verified) { console.log(`[scheduler] ✅ 对账通过: ${lastResult.records.length}/${lastResult.apiTotal}`); break; }
+          const reason = lastResult.error ? `写入失败: ${lastResult.error}` : `缺 ${missing}`;
           if (attempt < MAX_VERIFY_RETRIES) {
-            console.warn(`[scheduler] ⚠️ 对账失败: 缺 ${missing}，5s 后重试`);
+            console.warn(`[scheduler] ⚠️ 对账失败: ${reason}，5s 后重试`);
             await new Promise(r => setTimeout(r, 5000));
           } else {
-            console.error(`[scheduler] ❌ ${MAX_VERIFY_RETRIES} 次失败: 缺 ${missing}`);
-            await notifyWecom('❌ 配送明细采集不完整', `**任务**: ${task.name}\n**日期**: ${dates.from}\n**采集**: ${lastResult.records.length}/${lastResult.apiTotal}\n**缺**: ${missing}`);
-            lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): 缺 ${missing}`;
+            console.error(`[scheduler] ❌ ${MAX_VERIFY_RETRIES} 次失败: ${reason}`);
+            await notifyWecom('❌ 配送明细采集不完整', `**任务**: ${task.name}\n**日期**: ${dates.from}\n**采集**: ${lastResult.records.length}/${lastResult.apiTotal}\n**缺**: ${missing}\n**错误**: ${lastResult.error || '无'}`);
+            lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): ${lastResult.error ? '写入失败' : `缺 ${missing}`}`;
           }
         }
       }
@@ -499,7 +501,7 @@ async function executeTask(task: {
       // 不 triggerCompute（先只落明细，汇总后续）
       const finalStatus = lastResult.error ? 'partial' : 'success';
       await writeLog(client, task.id, startedAt, finishedAt, finalStatus, lastResult.records.length, lastResult.error || undefined,
-        { mode, skipped: lastResult.skipped, storage_path: lastResult.storagePath, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } });
+        { mode, skipped: lastResult.skipped, storage_path: lastResult.storagePath, page_failures: lastResult.pageFailures ?? 0, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } });
       console.log(`[scheduler] 配送明细 ${task.name}: ${finalStatus} ${mode}${lastResult.skipped ? '(skipped)' : `(${lastResult.records.length} 条)`} ${verified ? '✅' : '❌'}`);
 
       // 采集后即时 QA（C0 补当日盲区；与 retail/wholesale 三分支共用）
@@ -543,7 +545,7 @@ async function executeTask(task: {
           await notifyWecom('❌ Token 过期', `**任务**: ${task.name}\n**错误**: ${lastResult.error}`);
           return;
         }
-        verified = true;
+        verified = !lastResult.error; // 铁律③：增量虽不做条数对账，merge 写入失败 → verified=false
       } else {
         for (let attempt = 1; attempt <= MAX_VERIFY_RETRIES; attempt++) {
           console.log(`[scheduler] === 第 ${attempt} 次采集 ${attempt > 1 ? '(对账重试)' : ''} ===`);
@@ -554,16 +556,18 @@ async function executeTask(task: {
             return;
           }
           if (lastResult.apiTotal === 0) { await writeLog(client, task.id, startedAt, new Date(), 'success', 0); return; }
+          // 铁律③：条数达标 AND 落盘无错 才算 verified；transform/merge 失败 → verified=false 触发重试/告警
           const missing = lastResult.apiTotal - lastResult.records.length;
-          verified = lastResult.records.length >= lastResult.apiTotal;
+          verified = lastResult.records.length >= lastResult.apiTotal && !lastResult.error;
           if (verified) { console.log(`[scheduler] ✅ 对账通过: ${lastResult.records.length}/${lastResult.apiTotal}`); break; }
+          const reason = lastResult.error ? `写入失败: ${lastResult.error}` : `缺 ${missing}`;
           if (attempt < MAX_VERIFY_RETRIES) {
-            console.warn(`[scheduler] ⚠️ 对账失败: 缺 ${missing}，5s 后重试`);
+            console.warn(`[scheduler] ⚠️ 对账失败: ${reason}，5s 后重试`);
             await new Promise(r => setTimeout(r, 5000));
           } else {
-            console.error(`[scheduler] ❌ ${MAX_VERIFY_RETRIES} 次失败: 缺 ${missing}`);
-            await notifyWecom('❌ 批发明细采集不完整', `**任务**: ${task.name}\n**日期**: ${dates.from}\n**采集**: ${lastResult.records.length}/${lastResult.apiTotal}\n**缺**: ${missing}`);
-            lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): 缺 ${missing}`;
+            console.error(`[scheduler] ❌ ${MAX_VERIFY_RETRIES} 次失败: ${reason}`);
+            await notifyWecom('❌ 批发明细采集不完整', `**任务**: ${task.name}\n**日期**: ${dates.from}\n**采集**: ${lastResult.records.length}/${lastResult.apiTotal}\n**缺**: ${missing}\n**错误**: ${lastResult.error || '无'}`);
+            lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): ${lastResult.error ? '写入失败' : `缺 ${missing}`}`;
           }
         }
       }
@@ -588,7 +592,7 @@ async function executeTask(task: {
       await client.database.from('collect_tasks').update({ last_run_at: finishedAt.toISOString(), params: { ...params, watermark: newWatermark } }).eq('id', task.id);
       const finalStatus = lastResult.error ? 'partial' : 'success';
       await writeLog(client, task.id, startedAt, finishedAt, finalStatus, lastResult.records.length, lastResult.error || undefined,
-        { mode, skipped: lastResult.skipped, storage_path: lastResult.storagePath, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } });
+        { mode, skipped: lastResult.skipped, storage_path: lastResult.storagePath, page_failures: lastResult.pageFailures ?? 0, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } });
       console.log(`[scheduler] 批发明细 ${task.name}: ${finalStatus} ${mode}${lastResult.skipped ? '(skipped)' : `(${lastResult.records.length} 条)`} ${verified ? '✅' : '❌'}`);
 
       // 采集后即时 QA（C0 补当日盲区；与 retail/delivery 三分支共用）
@@ -638,7 +642,7 @@ async function executeTask(task: {
         await notifyWecom('❌ Token 过期', `**任务**: ${task.name}\n**错误**: ${lastResult.error}`);
         return;
       }
-      verified = true; // 增量不做条数对账，交给每小时 full 核对
+      verified = !lastResult.error; // 铁律③：增量虽不做条数对账，merge 写入失败 → verified=false
     } else {
       // 全量：保留对账重试循环
       for (let attempt = 1; attempt <= MAX_VERIFY_RETRIES; attempt++) {
@@ -659,25 +663,26 @@ async function executeTask(task: {
           return;
         }
 
-        // 对账
+        // 对账（铁律③：条数达标 AND 落盘无错 才算 verified；transform/merge 失败 → verified=false 触发重试/告警）
         const missing = lastResult.apiTotal - lastResult.records.length;
-        verified = lastResult.records.length >= lastResult.apiTotal;
+        verified = lastResult.records.length >= lastResult.apiTotal && !lastResult.error;
 
         if (verified) {
           console.log(`[scheduler] ✅ 对账通过: ${lastResult.records.length}/${lastResult.apiTotal}`);
           break;
         }
 
+        const reason = lastResult.error ? `写入失败: ${lastResult.error}` : `缺少 ${missing} 条`;
         if (attempt < MAX_VERIFY_RETRIES) {
-          console.warn(`[scheduler] ⚠️ 对账失败: 缺少 ${missing} 条，5 秒后重试...`);
+          console.warn(`[scheduler] ⚠️ 对账失败: ${reason}，5 秒后重试...`);
           await new Promise(r => setTimeout(r, 5000));
         } else {
-          console.error(`[scheduler] ❌ ${MAX_VERIFY_RETRIES} 次均失败: 缺少 ${missing} 条`);
+          console.error(`[scheduler] ❌ ${MAX_VERIFY_RETRIES} 次均失败: ${reason}`);
           await notifyWecom(
             '❌ 定时采集不完整（已重试3次）',
-            `**任务**: ${task.name}\n**日期**: ${dates[0]}\n**采集数**: ${lastResult.records.length}\n**API总数**: ${lastResult.apiTotal}\n**缺少**: ${missing} 条\n**建议**: 请检查网络或手动重新采集`
+            `**任务**: ${task.name}\n**日期**: ${dates[0]}\n**采集数**: ${lastResult.records.length}\n**API总数**: ${lastResult.apiTotal}\n**缺少**: ${missing} 条\n**错误**: ${lastResult.error || '无'}\n**建议**: 请检查网络或手动重新采集`
           );
-          lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): 缺少 ${missing} 条`;
+          lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): ${lastResult.error ? '写入失败' : `缺少 ${missing} 条`}`;
         }
       }
     }
@@ -720,6 +725,7 @@ async function executeTask(task: {
         mode,
         skipped: lastResult.skipped,
         storage_path: lastResult.storagePath,
+        page_failures: lastResult.pageFailures ?? 0,
         verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified }
       }
     );

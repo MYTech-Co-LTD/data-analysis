@@ -46,12 +46,12 @@ export async function POST(req: NextRequest) {
         await client.database.from('collect_tasks').update({ last_run_at: new Date().toISOString() }).eq('id', task_id);
         return NextResponse.json({ success: true, rows_collected: 0, dates });
       }
-      verified = lastResult.records.length >= lastResult.apiTotal;
+      verified = lastResult.records.length >= lastResult.apiTotal && !lastResult.error;
       if (verified) break;
       if (attempt < MAX_VERIFY_RETRIES) await new Promise(r => setTimeout(r, 5000));
       else {
-        await notifyWecom('❌ 手动批发采集不完整', `**任务**: ${task.name}\n**采集**: ${lastResult.records.length}/${lastResult.apiTotal}`);
-        lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次)`;
+        await notifyWecom('❌ 手动批发采集不完整', `**任务**: ${task.name}\n**采集**: ${lastResult.records.length}/${lastResult.apiTotal}\n**错误**: ${lastResult.error || '无'}`);
+        lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): ${lastResult.error ? '写入失败' : '条数不足'}`;
       }
     }
     const finishedAt = new Date();
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
       task_id, status: finalStatus, started_at: startedAt.toISOString(), finished_at: finishedAt.toISOString(),
       duration_ms: finishedAt.getTime() - startedAt.getTime(), rows_collected: lastResult.records.length,
       error_message: lastResult.error || null,
-      response_summary: { storage_path: lastResult.storagePath, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } },
+      response_summary: { storage_path: lastResult.storagePath, page_failures: lastResult.pageFailures ?? 0, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } },
     }]);
     return NextResponse.json({
       success: verified && !lastResult.error, rows_collected: lastResult.records.length, dates,

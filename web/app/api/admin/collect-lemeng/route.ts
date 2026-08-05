@@ -105,9 +105,9 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ success: true, rows_collected: 0, dates, branches: branchNums.length });
       }
 
-      // 对账
+      // 对账（铁律③：条数达标 AND 落盘无错 才算 verified；transform/merge 失败 → verified=false 触发重试/告警）
       const missing = lastResult.apiTotal - lastResult.records.length;
-      verified = lastResult.records.length >= lastResult.apiTotal;
+      verified = lastResult.records.length >= lastResult.apiTotal && !lastResult.error;
 
       if (verified) {
         console.log(`[collect-lemeng] ✅ 对账通过: ${lastResult.records.length}/${lastResult.apiTotal}`);
@@ -116,16 +116,17 @@ export async function POST(req: NextRequest) {
 
       retryCount = attempt;
 
+      const reason = lastResult.error ? `写入失败: ${lastResult.error}` : `缺少 ${missing} 条`;
       if (attempt < MAX_VERIFY_RETRIES) {
-        console.warn(`[collect-lemeng] ⚠️ 对账失败: 缺少 ${missing} 条，5 秒后重试...`);
+        console.warn(`[collect-lemeng] ⚠️ 对账失败: ${reason}，5 秒后重试...`);
         await new Promise(r => setTimeout(r, 5000));
       } else {
-        console.error(`[collect-lemeng] ❌ ${MAX_VERIFY_RETRIES} 次均失败: 缺少 ${missing} 条`);
+        console.error(`[collect-lemeng] ❌ ${MAX_VERIFY_RETRIES} 次均失败: ${reason}`);
         await notifyWecom(
           '❌ 手动采集不完整（已重试3次）',
-          `**任务**: ${task.name}\n**日期**: ${dates[0]}\n**采集数**: ${lastResult.records.length}\n**API总数**: ${lastResult.apiTotal}\n**缺少**: ${missing} 条`
+          `**任务**: ${task.name}\n**日期**: ${dates[0]}\n**采集数**: ${lastResult.records.length}\n**API总数**: ${lastResult.apiTotal}\n**缺少**: ${missing} 条\n**错误**: ${lastResult.error || '无'}`
         );
-        lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): 缺少 ${missing} 条`;
+        lastResult.error += `; 对账失败(重试${MAX_VERIFY_RETRIES}次): ${lastResult.error ? '写入失败' : `缺少 ${missing} 条`}`;
       }
     }
 
@@ -146,7 +147,7 @@ export async function POST(req: NextRequest) {
       lastResult.records.length,
       lastResult.error || undefined,
       lastResult.storagePath || undefined,
-      { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified }
+      { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, page_failures: lastResult.pageFailures ?? 0, verified }
     );
 
     return NextResponse.json({
@@ -185,7 +186,7 @@ async function writeLog(
   rowsCollected: number,
   errorMessage?: string,
   storagePath?: string,
-  verification?: { api_total: number; missing: number; verified: boolean }
+  verification?: { api_total: number; missing: number; verified: boolean; page_failures?: number }
 ) {
   await client.database
     .from('collect_logs')

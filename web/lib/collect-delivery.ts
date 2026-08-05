@@ -146,6 +146,7 @@ export function getTodayChina(): string {
 export interface DeliveryCollectResult {
   records: any[]; apiTotal: number; storagePath: string; error: string; newApiTotal: number; skipped: boolean;
   dedupViolations?: { bizday: string; total: number; distinct: number }[]; // 即时去重守卫：写后 total>distinct 的天
+  pageFailures?: number; // 铁律②：页级拉取失败累计次数（含重试后成功/跳过的失败尝试），供对账观察
 }
 export interface DeliveryCollectOptions { mode?: 'full' | 'incremental'; watermarkLastCount?: number; }
 
@@ -216,11 +217,24 @@ export async function collectDeliveryOnce(
   const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
   const randDelay = () => 800 + Math.floor(Math.random() * 1500); // 0.8~2.3秒随机间隔，模仿人避免被封锁
   let consecutiveErrors = 0;
+  result.pageFailures = 0; // 铁律②：页级失败累计（每次失败的页拉取尝试 +1），供对账观察
   while (offset < result.apiTotal) {
-    const bodyStr = buildBody(distributionBranch, dtFrom, dtTo, offset, limit);
-    const pr = await callLemengApi(ENDPOINT_DETAIL, authToken, bodyStr, branchNumsStr);
+    // 铁律②：同 offset 重试 ≤2 次再跳过（callLemengApi 内部已有 HTTP 层重试，此为页级兜底，
+    // 避免单次抖动/间歇失败直接丢整页数据）；fetchComplete（records>=apiTotal）判定保留不变。
+    let bodyStr = buildBody(distributionBranch, dtFrom, dtTo, offset, limit);
+    let pr = await callLemengApi(ENDPOINT_DETAIL, authToken, bodyStr, branchNumsStr);
+    let pageAttempt = 0;
+    while ((!pr.ok || String(pr.data?.code) !== '0') && pageAttempt < 2) {
+      pageAttempt++;
+      result.pageFailures++;
+      console.warn(`[collect-delivery] offset ${offset} error (${pr.error || pr.data?.msg}), retry ${pageAttempt}/2...`);
+      await sleep(randDelay());
+      bodyStr = buildBody(distributionBranch, dtFrom, dtTo, offset, limit);
+      pr = await callLemengApi(ENDPOINT_DETAIL, authToken, bodyStr, branchNumsStr);
+    }
     if (!pr.ok || String(pr.data?.code) !== '0') {
-      console.error(`[collect-delivery] offset ${offset} error: ${pr.error || pr.data?.msg}`);
+      result.pageFailures++;
+      console.error(`[collect-delivery] offset ${offset} failed after ${pageAttempt + 1} attempts: ${pr.error || pr.data?.msg}`);
       consecutiveErrors++;
       if (consecutiveErrors >= 3) { result.error = `Consecutive 3 pages failed at offset ${offset}`; break; }
       offset += limit; await sleep(randDelay()); continue;

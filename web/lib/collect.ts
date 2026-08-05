@@ -208,6 +208,7 @@ export interface CollectResult {
   error: string;
   newApiTotal: number; // 当次 API 总数（供 scheduler 更新水位线；incremental 无新增时 = watermarkLastCount）
   skipped: boolean;    // incremental 模式且无新增数据
+  pageFailures?: number; // 铁律②：页级拉取失败累计次数（含重试后成功/跳过的失败尝试），供对账观察
 }
 
 export interface CollectOptions {
@@ -275,12 +276,24 @@ export async function collectOnce(
   const randDelay = () => 800 + Math.floor(Math.random() * 1500); // 0.8~2.3秒随机间隔，模仿人避免高并发被封锁
   let page = startPage;
   let consecutiveErrors = 0;
+  result.pageFailures = 0; // 铁律②：页级失败累计（每次失败的页拉取尝试 +1），供对账观察
 
   while (page <= totalPages) {
-    const pr = await callLemengApi(ENDPOINT_RETAIL_DETAIL, authToken, buildBody(branchNums, dates, page, pageSize), branchNumsStr);
+    // 铁律②：页失败同页重试 ≤2 次再跳过（callLemengApi 内部已有 HTTP 层重试，此为页级兜底，
+    // 避免单次抖动/间歇失败直接丢整页数据）；fetchComplete（records>=apiTotal）判定保留不变。
+    let pr = await callLemengApi(ENDPOINT_RETAIL_DETAIL, authToken, buildBody(branchNums, dates, page, pageSize), branchNumsStr);
+    let pageAttempt = 0;
+    while ((!pr.ok || pr.data?.code !== 0) && pageAttempt < 2) {
+      pageAttempt++;
+      result.pageFailures++;
+      console.warn(`[collect] Page ${page} error (${pr.error || pr.data?.message}), retry ${pageAttempt}/2...`);
+      await sleep(randDelay());
+      pr = await callLemengApi(ENDPOINT_RETAIL_DETAIL, authToken, buildBody(branchNums, dates, page, pageSize), branchNumsStr);
+    }
     if (!pr.ok || pr.data?.code !== 0) {
+      result.pageFailures++;
       consecutiveErrors++;
-      console.error(`[collect] Page ${page} error: ${pr.error || pr.data?.message}`);
+      console.error(`[collect] Page ${page} failed after ${pageAttempt + 1} attempts: ${pr.error || pr.data?.message}`);
       if (consecutiveErrors >= 3) { result.error = `连续3页失败 at page ${page}`; break; }
       page++; await sleep(randDelay()); continue;
     }
