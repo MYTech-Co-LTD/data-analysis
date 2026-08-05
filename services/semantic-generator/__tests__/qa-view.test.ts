@@ -29,7 +29,7 @@ describe('generateQaView', () => {
     for (const g of groups) {
       const sql = generateQaView(g);
       for (const a of g) {
-        expect(sql).toContain(`SUM(${a.metric}) FROM ${a.view} WHERE ${a.view_sum_filter}`);
+        expect(sql).toContain(`SUM(${a.sum_col ?? a.metric}) FROM ${a.view} WHERE ${a.view_sum_filter}`);
       }
     }
     // 抽验 ref_sql 原文（sale_amount 考核过滤 + sale_target tmv + wholesale_daily LEAST）

@@ -131,6 +131,29 @@ async function main() {
         const achFile = join('../../database/generated', `${achievementViewConfig.view_name}.sql`);
         writeFileSync(achFile, achSql + '\n');
         console.log(`  产出: ${achievementViewConfig.view_name}`);
+
+        // L4 C2：达成视图也产 _qa 对账视图（静态 SQL 入 database/generated，migrate 幂等应用）+ gen 后即时断言。
+        // 长表（每行 target×metric）：view_sum = SUM(actual_value) WHERE metric_code + status='active'
+        //   （closed snapshot 行被 status='active' 排除），ref_sql 独立重算 active total 周期明细，同 runGenerator L72-89 模式。
+        const achAssertions = (qaChecks as ViewAssertion[]).filter((a) => a.view === achievementViewConfig.view_name);
+        if (achAssertions.length) {
+          const achQaSql = generateQaView(achAssertions);
+          const achQaFile = join('../../database/generated', `${achievementViewConfig.view_name}_qa.sql`);
+          writeFileSync(achQaFile, achQaSql + '\n');
+          await client.query(achQaSql); // 建 _qa 视图（gen 期建好，供即时断言）
+          const achQaRows = await client.query(
+            `SELECT metric, view_sum, ref_sum, diff FROM ${achievementViewConfig.view_name}_qa WHERE ABS(diff) > $1`,
+            [0.01],
+          );
+          if (achQaRows.rows.length) {
+            console.error(`  - ${achievementViewConfig.view_name} 断言失败:`);
+            for (const row of achQaRows.rows) {
+              console.error(`    - ${row.metric}: 视图 ${row.view_sum} vs 上游 ${row.ref_sum} (diff ${row.diff})`);
+            }
+            process.exit(1);
+          }
+          console.log(`  产出: ${achievementViewConfig.view_name}_qa`);
+        }
       } catch (e) {
         console.error(`  - ${achievementViewConfig.view_name} 生成失败: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);

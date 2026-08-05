@@ -24,8 +24,9 @@ export interface DetailSource {
 /** 视图上游断言：C2 用（独立重算，不经生成器 AST，保证与视图口径相互独立） */
 export interface ViewAssertion {
   view: string;                          // 视图名（report_*_gen）
-  metric: string;                        // 视图输出列名（含 alias）
+  metric: string;                        // 视图输出列名（含 alias）；长表场景为 metric 标签
   view_sum_filter: string;               // 视图 SUM 过滤（排除合计行等）
   ref_sql: string;                       // 独立重算，返回单值 SUM
   tolerance: number;
+  sum_col?: string;                      // 长表场景 SUM 列（默认 = metric）。achievement 长表（每行 target×metric）用 actual_value，metric 仅作标签
 }

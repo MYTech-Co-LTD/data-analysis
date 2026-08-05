@@ -10,7 +10,9 @@ export function generateQaView(assertions: ViewAssertion[]): string {
   const view = assertions[0].view;
   const rows = assertions
     .map((a) => {
-      const sumCol = a.metric;
+      // 长表视图（achievement：每行 target×metric）SUM 列不是 metric 标签而是 actual_value，
+      // 用 a.sum_col ?? a.metric 兼顾宽表（无 sum_col）与长表（显式 sum_col）。
+      const sumCol = a.sum_col ?? a.metric;
       return `  SELECT '${a.metric}' AS metric,
     COALESCE((SELECT SUM(${sumCol}) FROM ${view} WHERE ${a.view_sum_filter}), 0) AS view_sum,
     COALESCE((${a.ref_sql}), 0) AS ref_sum`;
