@@ -18,6 +18,7 @@ import detailSources from './qa/config/detail-sources.json';
 import { duckQuery } from './qa/duck';
 import { buildDayGlob } from './qa/d1';
 import type { DetailSource } from './qa/types';
+import { tryAcquireLock } from './scheduler-lock';
 
 const INSFORGE_API_BASE = process.env.INSFORGE_API_BASE!;
 const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
@@ -49,13 +50,14 @@ async function duckdbParquetSum(pathGlob: string, valueCol: string): Promise<num
 // 统一挂到 globalThis（同进程同 V8 global）确保唯一实例。
 type SchedulerState = {
   jobs: Map<string, ScheduledTask>;
-  running: Set<string>;
+  // 防重入锁：taskId → 加锁时刻（Date.now()）。Set→Map 以便陈旧锁（>30min）自动释放。
+  running: Map<string, number>;
   initialized: boolean;
 };
 const globalForScheduler = globalThis as unknown as { __schedulerState?: SchedulerState };
 const state: SchedulerState = (globalForScheduler.__schedulerState ??= {
   jobs: new Map<string, ScheduledTask>(),
-  running: new Set<string>(),
+  running: new Map<string, number>(),
   initialized: false,
 });
 
@@ -319,12 +321,11 @@ async function executeTask(task: {
   function_slug: string;
   params: any;
 }, opts?: { reconcile?: boolean }) {
-  // 防重入：已在运行则跳过本次触发
-  if (runningTasks.has(task.id)) {
-    console.warn(`[scheduler] 任务 ${task.name} (${task.id}) 已在运行，跳过本次触发`);
+  // 防重入：已在运行则跳过本次触发；陈旧锁（>30min，任务挂起/finally 未执行残留）自动释放——
+  // 只清锁跳本次、不做并发重入（避免旧 promise 仍存活时双跑），等下次 cron 自然恢复
+  if (!tryAcquireLock(runningTasks, task.id, `任务 ${task.name} (${task.id})`, { logSkip: true })) {
     return;
   }
-  runningTasks.add(task.id);
   const startedAt = new Date();
   const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
 
@@ -795,11 +796,7 @@ function registerContactSyncJob() {
   if (scheduledJobs.has(JOB_KEY)) return;
   if (!cron.validate('17 3 * * *')) return;
   const job = cron.schedule('17 3 * * *', async () => {
-    if (runningTasks.has(JOB_KEY)) {
-      console.warn('[scheduler] 通讯录同步已在运行，跳过本次触发');
-      return;
-    }
-    runningTasks.add(JOB_KEY);
+    if (!tryAcquireLock(runningTasks, JOB_KEY, '通讯录同步', { logSkip: true })) return;
     try {
       console.log('[scheduler] ⏰ 通讯录全量兜底同步触发');
       const resp = await fetch(`${INSFORGE_API_BASE}/functions/wecom-sync-contacts`, {
@@ -830,8 +827,7 @@ function registerCarryDimsJob() {
   if (scheduledJobs.has(JOB_KEY)) return;
   if (!cron.validate("33 4 * * *")) return;
   const job = cron.schedule("33 4 * * *", async () => {
-    if (runningTasks.has(JOB_KEY)) return;
-    runningTasks.add(JOB_KEY);
+    if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
     try {
       console.log("[scheduler] ⏰ 维表 carry 定时兜底触发");
       const resp = await fetch(`${DUCKDB_URL}/carry-dims`, {
@@ -855,8 +851,7 @@ function registerDimCustomerJob() {
   if (scheduledJobs.has(JOB_KEY)) return;
   if (!cron.validate("20 4 * * *")) return;
   const job = cron.schedule("20 4 * * *", async () => {
-    if (runningTasks.has(JOB_KEY)) return;
-    runningTasks.add(JOB_KEY);
+    if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
     try {
       console.log("[scheduler] ⏰ dim_customer 派生定时触发");
       const resp = await fetch(`${DUCKDB_URL}/derive-dim-customer`, {
@@ -887,8 +882,7 @@ function registerDailyReconcileJob() {
   const CRON = "0 2 * * *";
   if (!cron.validate(CRON)) return;
   const job = cron.schedule(CRON, async () => {
-    if (runningTasks.has(JOB_KEY)) return;
-    runningTasks.add(JOB_KEY);
+    if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
     try {
       console.log("[scheduler] ⏰ 每日02:00 明细对账触发（3天窗口）");
       const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
@@ -924,8 +918,7 @@ function registerDailySourceReconcileJob() {
   const CRON = "7 9 * * *";
   if (!cron.validate(CRON)) return;
   const job = cron.schedule(CRON, async () => {
-    if (runningTasks.has(JOB_KEY)) return;
-    runningTasks.add(JOB_KEY);
+    if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
     try {
       const yesterday = getDateOffsetChina(-1);
       const compactDate = yesterday.replace(/-/g, '');
@@ -974,8 +967,7 @@ function registerDailyQaJob() {
   const CRON = "15 9 * * *";   // 09:15，错开 09:07 源对账
   if (!cron.validate(CRON)) return;
   const job = cron.schedule(CRON, async () => {
-    if (runningTasks.has(JOB_KEY)) return;
-    runningTasks.add(JOB_KEY);
+    if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
     try { await runDailyQa('cron'); }
     catch (e: any) { console.error('[scheduler] __qa_full 异常:', e?.message ?? e); }
     finally { runningTasks.delete(JOB_KEY); }
@@ -990,8 +982,7 @@ function registerTargetCloseJob() {
   const CRON = "10 5 * * *";
   if (!cron.validate(CRON)) return;
   const job = cron.schedule(CRON, async () => {
-    if (runningTasks.has(JOB_KEY)) return;
-    runningTasks.add(JOB_KEY);
+    if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
     try {
       console.log("[scheduler] ⏰ 目标固化定时触发（end_date<today 的 active 目标）");
       const dueRes = await fetch(`${POSTGREST_URL}/rpc/get_due_targets`, {
@@ -1030,8 +1021,7 @@ function registerMonitorJobs() {
     if (scheduledJobs.has(key)) continue;
     if (!cron.validate(expr)) continue;
     const job = cron.schedule(expr, async () => {
-      if (runningTasks.has(key)) return;
-      runningTasks.add(key);
+      if (!tryAcquireLock(runningTasks, key, `任务 ${key}`)) return;
       try { await fn(); } finally { runningTasks.delete(key); }
     }, { timezone: 'Asia/Shanghai' });
     scheduledJobs.set(key, job);
