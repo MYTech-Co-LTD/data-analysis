@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseAuditViewNames, computeAuditStats } from '../health';
+import { parseAuditViewNames, computeAuditStats, computeRollupDiff } from '../health';
 
 describe('parseAuditViewNames', () => {
   it('extracts report_*_v_audit from definitions', () => {
@@ -56,6 +56,36 @@ describe('computeAuditStats', () => {
   it('non-array (PostgREST error object) → ok, no crash', () => {
     const errObj = { code: 'PGRST205', message: 'Could not find the table', hint: '', details: '' };
     const s = computeAuditStats(errObj as any);
+    expect(s.status).toBe('ok');
+    expect(s.diffColumns).toEqual([]);
+  });
+});
+
+describe('computeRollupDiff', () => {
+  it('computes region_vs_sub_region/store max diffs + totals + status', () => {
+    const rows = [
+      { target_id: 1, region_total: 100, sub_region_total: 100, store_total: 100 },
+      { target_id: 2, region_total: 200, sub_region_total: 190, store_total: 201 },
+    ];
+    const s = computeRollupDiff(rows as any);
+    expect(s.status).toBe('warn');
+    expect(s.diffColumns.find((d) => d.name === 'region_vs_sub_region_diff')?.maxValue).toBe(10);
+    expect(s.diffColumns.find((d) => d.name === 'region_vs_store_diff')?.maxValue).toBe(1);
+    expect(s.totals.region_total).toBe(300);
+    expect(s.totals.store_total).toBe(301);
+  });
+  it('ok when all diffs < 0.01', () => {
+    const s = computeRollupDiff([{ target_id: 1, region_total: 5, sub_region_total: 5, store_total: 5 }] as any);
+    expect(s.status).toBe('ok');
+    expect(s.diffColumns[0].maxValue).toBe(0);
+  });
+  it('treats null totals as 0, does not crash', () => {
+    const s = computeRollupDiff([{ target_id: 1, region_total: null, sub_region_total: 0, store_total: 0 }] as any);
+    expect(s.status).toBe('ok');
+    expect(s.totals.region_total).toBe(0);
+  });
+  it('empty rows → ok, empty diffColumns', () => {
+    const s = computeRollupDiff([] as any);
     expect(s.status).toBe('ok');
     expect(s.diffColumns).toEqual([]);
   });

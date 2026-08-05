@@ -26,10 +26,13 @@ const pg = loadPg();
 // 用于构建合法检查键集合（--check= 全不匹配时防 CLI 假绿 PASS 0/0）。
 const detailSources = require('../services/semantic-generator/src/detail-sources.json') as Array<{ name: string }>;
 const qaChecks = require('../services/semantic-generator/src/qa-checks.json') as Array<{ view: string }>;
+// C3 层级视图（与 web/lib/qa/c3-runner.ts C3_ROLLUP_VIEWS 对齐；加视图/指标两处都要同步）
+const c3Views = ['report_region_breakdown_gen', 'report_supply_chain_outbound_gen'];
 const validCheckKeys = new Set<string>([
   ...detailSources.map((s) => `D1:${s.name}`),
   ...detailSources.map((s) => `D2:${s.name}`),
   ...qaChecks.map((c) => `C2:${c.view}`),
+  ...c3Views.map((v) => `C3:${v}`),
 ]);
 
 function arg(key: string): string | undefined {
@@ -71,8 +74,14 @@ async function main() {
   await client.connect();
 
   const db = {
-    // qa_d2_dup_rows(TEXT, TEXT[])：p_table 单引号内必须转义；p_keys 拼 ARRAY 字面量
+    // 按 RPC 分派：qa_d2_dup_rows(TEXT, TEXT[]) 参数拼字面量；execute_sql(TEXT) 直执行 raw SQL
+    // （C1/C3 用，query 已是 `SELECT to_jsonb(q) FROM (...) AS q` 包装，返 [{to_jsonb:{...}}] 行）。
+    // 注意：此前 rpc 只硬编码 qa_d2_dup_rows，C1 的 execute_sql 调用会崩；此处泛化修复。
     rpc: async (fn: string, body: Record<string, unknown>) => {
+      if (fn === 'execute_sql') {
+        const r = await client.query(String(body.query));
+        return { data: r.rows };
+      }
       const tbl = String(body.p_table).replace(/'/g, "''");
       const keys = (body.p_keys as string[]).map((k) => `'${k.replace(/'/g, "''")}'`).join(', ');
       const r = await client.query(`SELECT * FROM ${fn}('${tbl}', ARRAY[${keys}]::text[])`);

@@ -6,6 +6,7 @@ import { runD2 } from './qa/d2';
 import { runItemMasterCheck } from './qa/item-master';
 import { runBranchWarzoneCheck } from './qa/branch-warzone';
 import { runC1Checks } from './qa/c1-runner';
+import { runC3Checks } from './qa/c3-runner';
 import detailSources from './qa/config/detail-sources.json';
 import qaChecks from './qa/config/qa-checks.json';
 import type { DetailSource, ViewAssertion, CheckResult, CheckType, QaTrigger } from './qa/types';
@@ -120,6 +121,12 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
   // C1 明细↔聚合对账 + 自动 /compute 重算 retry（fail -> 重算首个差异日 -> 单日重验，≤3 retry）
   if (!opts.checks || opts.checks.some(c => c.startsWith('C1'))) {
     results.push(...await runC1Checks({ db: opts.db, duck: opts.duck, runId: opts.runId, trigger: opts.trigger, checks: opts.checks }));
+  }
+
+  // C3 视图内部 rollup 自洽（战区和=小区和=门店和）：对层级视图 level 列动态 pivot，
+  // 恢复 155 删 _audit 后的 rollup 自洽守护（不改生成器/视图，C2 模式注入）。
+  if (!opts.checks || opts.checks.some(c => c.startsWith('C3'))) {
+    results.push(...await runC3Checks({ db: opts.db, runId: opts.runId, trigger: opts.trigger, checks: opts.checks }));
   }
 
   return results;
