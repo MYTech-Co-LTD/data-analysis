@@ -39,4 +39,12 @@ describe('buildDayGlob', () => {
     const wholesale = detailSources.find((s) => s.name === 'wholesale')! as DetailSource;
     expect(buildDayGlob(wholesale, '20260728')).toBe('s3://lemeng-datasource/lemeng/wholesale_detail/*/20260728/all.parquet');
   });
+  it('item_sales（iso 目录，同 retail_detail 分区分层）：compact 日转 ISO 日期段', () => {
+    const item = detailSources.find((s) => s.name === 'item_sales')! as DetailSource;
+    expect(buildDayGlob(item, '20260728')).toBe('s3://lemeng-datasource/lemeng/retail_detail/*/2026-07-28/all.parquet');
+  });
+  it('wholesale_customer（compact 目录，同 wholesale_detail）：日期段原样替换', () => {
+    const wc = detailSources.find((s) => s.name === 'wholesale_customer')! as DetailSource;
+    expect(buildDayGlob(wc, '20260728')).toBe('s3://lemeng-datasource/lemeng/wholesale_detail/*/20260728/all.parquet');
+  });
 });

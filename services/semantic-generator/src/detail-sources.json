@@ -52,5 +52,39 @@
     "detail_date_expr": "substr(audit_time,1,4)||substr(audit_time,6,2)||substr(audit_time,9,2)",
     "api_count": { "fn": "countWholesaleApi", "dates_iso": false },
     "tolerance": 0.01
+  },
+  {
+    "name": "item_sales",
+    "report_type": "item_sales",
+    "function_slug": "",
+    "glob": "s3://lemeng-datasource/lemeng/retail_detail/*/*-*-*/all.parquet",
+    "glob_date_format": "iso",
+    "natural_key": [],
+    "agg_table": "report_daily_item_sales",
+    "agg_key": ["system_book_code", "item_num", "biz_date"],
+    "agg_metric": [
+      { "detail": "sale_money", "agg": "sale_amount" },
+      { "detail": "profit", "agg": "sale_profit" }
+    ],
+    "brand_expr": "regexp_extract(filename,'retail_detail/([0-9]+)/',1)",
+    "detail_date_expr": "replace(order_detail_bizday,'-','')",
+    "tolerance": 0.01
+  },
+  {
+    "name": "wholesale_customer",
+    "report_type": "wholesale_customer",
+    "function_slug": "",
+    "glob": "s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet",
+    "glob_date_format": "compact",
+    "natural_key": [],
+    "agg_table": "report_daily_wholesale_customer",
+    "agg_key": ["system_book_code", "client_code", "biz_date"],
+    "agg_metric": [
+      { "detail": "wholesale_money", "agg": "wholesale_amount" },
+      { "detail": "wholesale_profit", "agg": "wholesale_profit" }
+    ],
+    "brand_expr": "regexp_extract(filename,'wholesale_detail/([0-9]+)/',1)",
+    "detail_date_expr": "substr(audit_time,1,4)||substr(audit_time,6,2)||substr(audit_time,9,2)",
+    "tolerance": 0.01
   }
 ]

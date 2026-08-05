@@ -80,6 +80,9 @@ export async function runC0Checks(opts: C0RunnerOpts): Promise<CheckResult[]> {
   const toIso = win?.to ?? getDateOffsetChina(-1);
 
   for (const src of detailSources as DetailSource[]) {
+    // C0 只对原始三源（retail/delivery/wholesale）：item 源无 collect 任务（function_slug=''），
+    // countForDay 的 if/else 会落错分支，故跳过。
+    if (src.name !== 'retail' && src.name !== 'delivery' && src.name !== 'wholesale') continue;
     if (checks && !checks.includes(`C0:${src.name}`)) continue;
     try {
       const { data: tasks } = await client.database.from('collect_tasks')

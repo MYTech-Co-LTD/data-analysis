@@ -63,6 +63,8 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
 
   // D1 明细主键唯一性
   for (const src of detailSources as DetailSource[]) {
+    // D1 只对原始三源：item 源 natural_key=[]（item_num 在 retail_detail 非唯一）不适用，跳过。
+    if (src.name !== 'retail' && src.name !== 'delivery' && src.name !== 'wholesale') continue;
     if (!want(opts.checks, 'D1', src.name)) continue;
     try {
       const { dupRows } = await runD1(opts.duck, src, dateFrom, dateTo, opts.d1Globs?.[src.name]);

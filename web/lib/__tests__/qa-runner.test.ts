@@ -30,9 +30,30 @@ describe('runQaChecks', () => {
     const db = makeDb();
     const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
     const results = await runQaChecks({ runId: 'test-1', trigger: 'cron', db, duck });
-    expect(results.filter((r) => r.check_type === 'D1' && r.status === 'pass').length).toBe(detailSources.length);
+    // D1 只跑原始三源（item 源 natural_key 不适用，跳过）；D2 覆盖全部源（聚合表 PK 检查）
+    const raw3 = detailSources.filter((s) => ['retail', 'delivery', 'wholesale'].includes(s.name));
+    expect(results.filter((r) => r.check_type === 'D1' && r.status === 'pass').length).toBe(raw3.length);
     expect(results.filter((r) => r.check_type === 'D2' && r.status === 'pass').length).toBe(detailSources.length);
     expect(db._inserted.length).toBeGreaterThan(0);
+  });
+
+  it('D1 跳过 item 源：C1:item_sales 定向也不会跑 D1', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-skip-item', trigger: 'cron', db, duck, checks: ['D1:item_sales'] });
+    expect(results.filter((r) => r.check_type === 'D1')).toHaveLength(0);
+    // C1 不会因 D1 定向触发；D2 因 want('D2','item_sales') 未命中也不跑
+    expect(results).toHaveLength(0);
+  });
+
+  it('D2 覆盖 item 源：D2:item_sales 跑 RPC 检查聚合表 PK', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
+    const results = await runQaChecks({ runId: 'test-d2-item', trigger: 'cron', db, duck, checks: ['D2:item_sales'] });
+    const d2 = results.find((r) => r.check_type === 'D2' && r.check_name === 'item_sales');
+    expect(d2?.status).toBe('pass');
+    // RPC 收到聚合表与键
+    expect(db.rpc).toHaveBeenCalledWith('qa_d2_dup_rows', { p_table: 'report_daily_item_sales', p_keys: ['system_book_code', 'item_num', 'biz_date'] });
   });
 
   it('D1 有重复行记 fail 且 diff=重复行数', async () => {

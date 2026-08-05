@@ -4,8 +4,9 @@ import qaChecks from '../src/qa-checks.json';
 import type { DetailSource, ViewAssertion } from '../src/qa-types.js';
 
 function isDetailSource(x: any): x is DetailSource {
+  // natural_key 可为空数组：item_sales/wholesale_customer 为派生源（D1 跳过，natural_key 不适用）
   return x && typeof x.name === 'string' && Array.isArray(x.natural_key)
-    && x.natural_key.length > 0 && typeof x.glob === 'string'
+    && typeof x.glob === 'string'
     && x.glob.endsWith('all.parquet') && typeof x.agg_table === 'string'
     && Array.isArray(x.agg_key) && Array.isArray(x.agg_metric)
     && typeof x.brand_expr === 'string' && typeof x.detail_date_expr === 'string'
@@ -14,10 +15,10 @@ function isDetailSource(x: any): x is DetailSource {
 }
 
 describe('qa 配置', () => {
-  it('detail-sources: 三张明细全注册且结构合法', () => {
-    expect(detailSources).toHaveLength(3);
+  it('detail-sources: 五张明细全注册且结构合法', () => {
+    expect(detailSources).toHaveLength(5);
     expect(detailSources.every(isDetailSource)).toBe(true);
-    expect(detailSources.map((s) => s.name).sort()).toEqual(['delivery', 'retail', 'wholesale']);
+    expect(detailSources.map((s) => s.name).sort()).toEqual(['delivery', 'item_sales', 'retail', 'wholesale', 'wholesale_customer']);
   });
   it('detail-sources: natural_key 禁含 id（lemeng 分页每次重新生成 id 致 DISTINCT * 失效）', () => {
     for (const s of detailSources) {
@@ -29,6 +30,8 @@ describe('qa 配置', () => {
       report_daily_sales: ['system_book_code', 'branch_num', 'biz_date', 'total_sale', 'total_profit'],
       report_daily_delivery: ['system_book_code', 'branch_num', 'biz_date', 'category_group', 'out_money', 'profit_money'],
       report_daily_wholesale: ['system_book_code', 'branch_num', 'biz_date', 'category_group', 'wholesale_money', 'wholesale_profit'],
+      report_daily_item_sales: ['system_book_code', 'item_num', 'biz_date', 'sale_amount', 'sale_profit'],
+      report_daily_wholesale_customer: ['system_book_code', 'client_code', 'biz_date', 'wholesale_amount', 'wholesale_profit'],
     };
     for (const s of detailSources) {
       const cols = aggCols[s.agg_table];

@@ -59,7 +59,7 @@ describe('runC1Checks', () => {
       trigger: 'manual',
     });
 
-    expect(results).toHaveLength(3); // retail, delivery, wholesale
+    expect(results).toHaveLength(5); // retail, delivery, wholesale, item_sales, wholesale_customer
     expect(results.every(r => r.status === 'pass')).toBe(true);
     expect(fetch).not.toHaveBeenCalled(); // No /compute
   });
@@ -159,7 +159,56 @@ describe('runC1Checks', () => {
       checks: ['C1'],
     });
 
-    expect(results).toHaveLength(3); // all 3 sources
+    expect(results).toHaveLength(5); // all 5 sources (含 item_sales / wholesale_customer)
+  });
+
+  it('checks filter: C1:item_sales runs only item_sales source', async () => {
+    vi.mocked(runC1).mockImplementation(async (src) => PASS(src.name));
+
+    const results = await runC1Checks({
+      db: makeDb() as any,
+      duck: makeDuck() as any,
+      runId: 'test-run-item',
+      trigger: 'manual',
+      checks: ['C1:item_sales'],
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].check_name).toBe('item_sales');
+    expect(runC1).toHaveBeenCalledTimes(1);
+  });
+
+  it('M19: item_sales（iso 目录）window 传入时 glob 缩为当日分区', async () => {
+    vi.mocked(runC1).mockImplementation(async (src) => PASS(src.name));
+
+    await runC1Checks({
+      db: makeDb() as any,
+      duck: makeDuck() as any,
+      runId: 'test-run-item-glob',
+      trigger: 'collect',
+      checks: ['C1:item_sales'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+    });
+
+    const callArg = vi.mocked(runC1).mock.calls[0][0];
+    expect(callArg.glob).toContain('2026-08-05');
+    expect(callArg.glob).not.toContain('*-*-*');
+  });
+
+  it('M19: wholesale_customer（compact 目录）window 传入时 glob 缩为当日分区', async () => {
+    vi.mocked(runC1).mockImplementation(async (src) => PASS(src.name));
+
+    await runC1Checks({
+      db: makeDb() as any,
+      duck: makeDuck() as any,
+      runId: 'test-run-wc-glob',
+      trigger: 'collect',
+      checks: ['C1:wholesale_customer'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+    });
+
+    const callArg = vi.mocked(runC1).mock.calls[0][0];
+    expect(callArg.glob).toBe('s3://lemeng-datasource/lemeng/wholesale_detail/*/20260805/all.parquet');
   });
 
   it('writes qa_logs for each result', async () => {
