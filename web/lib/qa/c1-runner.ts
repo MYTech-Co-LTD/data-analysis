@@ -12,6 +12,7 @@
 //   不用 execute_sql_rls（040）因其禁查 report_daily_sales 基表（C1 需查基表非 _v 视图，
 //   _v 有 RLS/can_see_cost 脱敏，与 duck 端 raw SUM 不可比）。
 import { runC1 } from './c1';
+import { buildDayGlob } from './d1';
 import detailSources from './config/detail-sources.json';
 import type { DetailSource, CheckResult, QaTrigger } from './types';
 import { getDateOffsetChina } from '../collect';
@@ -81,9 +82,15 @@ export async function runC1Checks(opts: C1RunnerOpts): Promise<CheckResult[]> {
     // 过滤：C1（全部）或 C1:<name>（定向）
     if (checks && !checks.some(c => c === 'C1' || c === `C1:${src.name}`)) continue;
 
+    // M19: window 传入（采集后单日）时用 buildDayGlob 把 glob 缩到当日分区，
+    // 避免每 5 分钟采集后全量历史 parquet 扫描（duckdb 谓词下推无法修剪计算表达式日期过滤）。
+    // 7 天 job（无 window）保持原 glob 全扫（不频繁，OK）。
+    const srcForDay = (dayIso: string): DetailSource =>
+      win ? { ...src, glob: buildDayGlob(src, dayIso.replace(/-/g, '')) } : src;
+
     try {
       // 初始窗口对账（默认 7 天，或 opts.window 指定的单日）
-      let r = await runC1(src, fromIso, toIso, { duck: duckAdapter, pg: pgAdapter });
+      let r = await runC1(srcForDay(fromIso), fromIso, toIso, { duck: duckAdapter, pg: pgAdapter });
       let retries = 0;
 
       // 自动重算 retry：fail -> /compute 首个差异日 -> 单日重验
@@ -95,7 +102,7 @@ export async function runC1Checks(opts: C1RunnerOpts): Promise<CheckResult[]> {
         const iso = `${bizday.slice(0, 4)}-${bizday.slice(4, 6)}-${bizday.slice(6, 8)}`;
 
         await recompute(src.report_type, iso);
-        r = await runC1(src, iso, iso, { duck: duckAdapter, pg: pgAdapter });
+        r = await runC1(srcForDay(iso), iso, iso, { duck: duckAdapter, pg: pgAdapter });
         retries++;
       }
 

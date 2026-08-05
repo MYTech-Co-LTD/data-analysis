@@ -177,4 +177,37 @@ describe('runC1Checks', () => {
     expect(db.from).toHaveBeenCalledWith('qa_logs');
     expect(db.from().insert).toHaveBeenCalledTimes(1);
   });
+
+  it('M19: window 传入时 glob 缩为当日分区（buildDayGlob）', async () => {
+    vi.mocked(runC1).mockImplementation(async (src) => PASS(src.name));
+
+    await runC1Checks({
+      db: makeDb() as any,
+      duck: makeDuck() as any,
+      runId: 'test-run-glob',
+      trigger: 'collect',
+      checks: ['C1:retail'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+    });
+
+    // runC1 被调用时 src.glob 应缩为当日分区（retail=iso 格式 2026-08-05）
+    const callArg = vi.mocked(runC1).mock.calls[0][0];
+    expect(callArg.glob).toContain('2026-08-05');
+    expect(callArg.glob).not.toContain('*-*-*');
+  });
+
+  it('M19: 无 window 时 glob 保持原值（7 天全扫）', async () => {
+    vi.mocked(runC1).mockImplementation(async (src) => PASS(src.name));
+
+    await runC1Checks({
+      db: makeDb() as any,
+      duck: makeDuck() as any,
+      runId: 'test-run-glob2',
+      trigger: 'cron',
+      checks: ['C1:retail'],
+    });
+
+    const callArg = vi.mocked(runC1).mock.calls[0][0];
+    expect(callArg.glob).toBe('s3://lemeng-datasource/lemeng/retail_detail/*/*-*-*/all.parquet');
+  });
 });

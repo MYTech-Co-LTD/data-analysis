@@ -40,6 +40,18 @@ export async function runC1(
         mismatches.push({ sbc: d.sbc, bizday: d.bizday, metric: m.agg, detail_sum: Number(d.detail_sum), agg_sum: agg, diff });
       }
     }
+    // M20: 反向对账--pg 有 duck 无的 key（聚合多算/明细漏算），双向覆盖
+    const duckMap = new Map(duckRows.map((d: any) => [`${d.sbc}|${d.bizday}`, Number(d.detail_sum)]));
+    for (const p of pgRows) {
+      const key = `${p.sbc}|${p.bizday}`;
+      if (!duckMap.has(key)) {
+        const agg = Number(p.agg_sum);
+        const diff = Math.round((0 - agg) * 100) / 100;
+        if (Math.abs(diff) > src.tolerance) {
+          mismatches.push({ sbc: p.sbc, bizday: p.bizday, metric: m.agg, detail_sum: 0, agg_sum: agg, diff });
+        }
+      }
+    }
   }
   return {
     run_id: '',
