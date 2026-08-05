@@ -4,7 +4,7 @@
 
 import cron, { ScheduledTask } from 'node-cron';
 import { createClient } from '@insforge/sdk';
-import { collectOnce, countRetailApi, decodeCompanyId, getYesterdayChina, getTodayChina, getDateOffsetChina, CollectResult } from './collect';
+import { collectOnce, countRetailApi, decodeCompanyId, getYesterdayChina, getTodayChina, getDateOffsetChina, CollectResult, fetchWithTimeout, REQUEST_TIMEOUT } from './collect';
 import { collectDeliveryOnce, countDeliveryApi, type DeliveryCollectResult } from './collect-delivery';
 import { collectWholesaleOnce, countWholesaleApi, type WholesaleCollectResult } from './collect-wholesale';
 import { collectItems, CollectItemsResult } from './collect-items';
@@ -27,9 +27,10 @@ const AGENT_API_KEY = process.env.AGENT_API_KEY!; // duckdb-service 鉴权（/co
 const POSTGREST_URL = process.env.POSTGREST_URL || "http://postgrest:3000"; // PostgREST 直连（gateway 不代理 /rpc，固化 RPC 直连）
 
 // DuckDB 查 parquet 行数（scheduler 对账驱动用：count API total vs 库已采 count，对得上不 full、对不上 full 补采）
+// 30s 超时（fetchWithTimeout）：executeTask 对账路径挂起 → 返 0 → 触发 full 重采，不永久持锁。
 async function duckdbParquetCount(pathGlob: string): Promise<number> {
   try {
-    const r = await fetch(`${DUCKDB_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY }, body: JSON.stringify({ sql: `SELECT count(*) AS c FROM read_parquet('s3://lemeng-datasource/${pathGlob}')` }) });
+    const r = await fetchWithTimeout(`${DUCKDB_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY }, body: JSON.stringify({ sql: `SELECT count(*) AS c FROM read_parquet('s3://lemeng-datasource/${pathGlob}')` }) }, REQUEST_TIMEOUT);
     const d = await r.json();
     return d.data?.[0]?.c || 0;
   } catch { return 0; }
@@ -38,7 +39,7 @@ async function duckdbParquetCount(pathGlob: string): Promise<number> {
 // DuckDB 查 parquet SUM（对账用：parquet 源 SUM vs compute 表 SUM）
 async function duckdbParquetSum(pathGlob: string, valueCol: string): Promise<number> {
   try {
-    const r = await fetch(`${DUCKDB_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY }, body: JSON.stringify({ sql: `SELECT COALESCE(round(sum(CAST(${valueCol} AS DECIMAL(14,2))),2),0) AS s FROM read_parquet('s3://lemeng-datasource/${pathGlob}')` }) });
+    const r = await fetchWithTimeout(`${DUCKDB_URL}/query`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY }, body: JSON.stringify({ sql: `SELECT COALESCE(round(sum(CAST(${valueCol} AS DECIMAL(14,2))),2),0) AS s FROM read_parquet('s3://lemeng-datasource/${pathGlob}')` }) }, REQUEST_TIMEOUT);
     const d = await r.json();
     return d.data?.[0]?.s || 0;
   } catch { return 0; }
@@ -201,11 +202,11 @@ async function triggerCompute(client: any, dates: string[], taskId: string) {
     const startedAt = new Date();
     let status = "failed", rowsWritten: number | null = null, durationMs: number | null = null, error: string | null = null;
     try {
-      const resp = await fetch(`${DUCKDB_URL}/compute`, {
+      const resp = await fetchWithTimeout(`${DUCKDB_URL}/compute`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-agent-key": AGENT_API_KEY },
         body: JSON.stringify({ report_type: r.type, date_from: r.dateFrom, date_to: r.dateTo }),
-      });
+      }, REQUEST_TIMEOUT);
       const data = await resp.json().catch(() => ({} as any));
       if (resp.ok && data.success) {
         status = "success"; rowsWritten = data.rows_written ?? 0; durationMs = data.duration_ms ?? 0;
@@ -235,16 +236,18 @@ async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFr
   const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
   const db = {
     rpc: async (fn: string, body: Record<string, unknown>) => {
-      const r = await fetch(`${POSTGREST_URL}/rpc/${fn}`, {
+      const r = await fetchWithTimeout(`${POSTGREST_URL}/rpc/${fn}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
-      });
+      }, REQUEST_TIMEOUT);
       const json = await r.json();
       if (!r.ok) return { error: json };
       return { data: json };
     },
     from: (t: string) => client.database.from(t),
   } as any;
-  const duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql);
+  // collect 触发（采集后即时 QA，executeTask 内）：duck 查询挂 30s 超时防挂起持锁；
+  // cron 全量（09:15）保留 0=不设超时（D1 全 glob 扫描可能 >30s，且不占 executeTask 锁）。
+  const duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql, trigger === 'collect' ? REQUEST_TIMEOUT : 0);
   // 随机后缀防同毫秒 run_id 撞 qa_logs 的 UNIQUE 约束（采集后 hook 与每日 09:15 可能同毫秒）
   const runId = `${trigger}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const results = await runQaChecks({ runId, trigger, db, duck, checks, dateFrom, dateTo, d1Globs });
@@ -284,16 +287,17 @@ async function runPostCollectQa(
       const c1Client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
       const c1Db = {
         rpc: async (fn: string, body: Record<string, unknown>) => {
-          const r = await fetch(`${POSTGREST_URL}/rpc/${fn}`, {
+          const r = await fetchWithTimeout(`${POSTGREST_URL}/rpc/${fn}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
-          });
+          }, REQUEST_TIMEOUT);
           const json = await r.json();
           if (!r.ok) return { error: json };
           return { data: json };
         },
         from: (t: string) => c1Client.database.from(t),
       } as any;
-      const c1Duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql);
+      // 采集后 QA（executeTask 内）：duck 查询挂 30s 超时防挂起持锁（C1 当日单日窗口，快查询）
+      const c1Duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql, REQUEST_TIMEOUT);
       // 随机后缀防同毫秒 run_id 撞 qa_logs UNIQUE 约束（与 runDailyQa 同模式）
       const c1RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await runC1Checks({ db: c1Db, duck: c1Duck, runId: c1RunId, trigger: 'collect', checks: [`C1:${src.name}`], window: { from: todayIso, to: todayIso } });
@@ -301,7 +305,7 @@ async function runPostCollectQa(
     // C0 源API count ↔ 明细 count（受影响源当日单日，补每日 09:15 盲区；missing 自动 full 补采收敛 ≤3）
     try {
       const c0RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await runC0Checks({ client, duck: (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql), runId: c0RunId, trigger: 'collect', checks: [`C0:${src.name}`], window: { from: todayIso, to: todayIso }, autoBackfill: true });
+      await runC0Checks({ client, duck: (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql, REQUEST_TIMEOUT), runId: c0RunId, trigger: 'collect', checks: [`C0:${src.name}`], window: { from: todayIso, to: todayIso }, autoBackfill: true });
     } catch (e: any) { console.error('[scheduler] 采集后 C0 失败:', e?.message ?? e); }
   } catch (e: any) {
     console.error('[scheduler] 采集后 QA 异常:', e?.message ?? e);

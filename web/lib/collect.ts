@@ -7,7 +7,7 @@ const BASE_URL = "https://sharef.lemengcloud.com";
 const ENDPOINT_RETAIL_DETAIL = "/earth-gateway/amazon-retail/nhsoft.retail.business.posorder.findposorderdetail";
 const ENDPOINT_RETAIL_COUNT = "/earth-gateway/amazon-retail/nhsoft.retail.business.posorder.countposorderdetail";
 
-const REQUEST_TIMEOUT = 30000;
+export const REQUEST_TIMEOUT = 30000;
 const DUCKDB_URL = process.env.DUCKDB_URL || 'http://duckdb:9000';
 const AGENT_API_KEY = process.env.AGENT_API_KEY || ''; // duckdb-service /transform /merge 鉴权
 const LEMENG_SECRET_KEY = process.env.LEMENG_SECRET_KEY || '';
@@ -118,7 +118,9 @@ function flattenRecords(records: any[]): any[] {
 }
 
 // ===== HTTP 工具 =====
-async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+// 带超时的 fetch：timeoutMs 后 AbortController.abort()，防 executeTask 内某步 fetch 永久挂起持锁。
+// 超时抛 Error（AbortError → 'Request timeout after Xms'），调用方 try/catch 兜底（不挂起）。
+export async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {

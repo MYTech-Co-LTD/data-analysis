@@ -15,7 +15,7 @@ import { runC1 } from './c1';
 import { buildDayGlob } from './d1';
 import detailSources from './config/detail-sources.json';
 import type { DetailSource, CheckResult, QaTrigger } from './types';
-import { getDateOffsetChina } from '../collect';
+import { getDateOffsetChina, fetchWithTimeout, REQUEST_TIMEOUT } from '../collect';
 
 const C1_DAYS = 7;      // 昨天回溯 7 天窗口
 const MAX_RETRIES = 3;   // /compute 重算上限
@@ -50,14 +50,15 @@ async function pgQuery(db: C1RunnerOpts['db'], sql: string): Promise<any[]> {
 }
 
 /** POST /compute 重算指定 report_type + 日期。
- *  失败仅记日志不 throw（retry 后 runC1 仍 fail -> 最终告警，不因 /compute 本身崩阻断流程）。 */
+ *  失败仅记日志不 throw（retry 后 runC1 仍 fail -> 最终告警，不因 /compute 本身崩阻断流程）。
+ *  30s 超时（fetchWithTimeout）：采集后 QA（executeTask 内）/compute 挂起 → 超时抛错被 catch，不永久持锁。 */
 async function recompute(report_type: string, dateIso: string): Promise<void> {
   try {
-    const r = await fetch(`${DUCKDB_URL}/compute`, {
+    const r = await fetchWithTimeout(`${DUCKDB_URL}/compute`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY },
       body: JSON.stringify({ report_type, date_from: dateIso, date_to: dateIso }),
-    });
+    }, REQUEST_TIMEOUT);
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       console.error(`[c1-runner] recompute ${report_type} ${dateIso} failed: ${r.status} ${JSON.stringify(j)}`);
