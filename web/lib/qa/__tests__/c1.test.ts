@@ -348,3 +348,81 @@ describe('runC1 wholesale custom_duck_sql', () => {
     expect(pgSql).toContain('SUM(wholesale_money)');
   });
 });
+
+// wholesale_customer：custom_duck_sql 与 wholesale 源同款 64188 dim_branch 重映射（C1 误报修复：
+// 聚合表 report_daily_wholesale_customer 经 157 模板把品品甜 64188 client 归 64188（146,007.80），
+// 但 C1 duck 端默认 brand_expr（regexp_extract filename=3120）把所有 wholesale_detail 归 3120
+// -> 3120 多算 + 64188 反向缺，误报 diff 138,422.75；同款 custom_duck_sql 修复）
+const wholesaleCustomerCfgSrc = detailSources.find((s) => s.name === 'wholesale_customer')! as DetailSource;
+
+describe('runC1 wholesale_customer custom_duck_sql', () => {
+  it('64188 重映射：duck 返重映射后 sbc(3120+64188)，与聚合端一致 -> pass', async () => {
+    const duck = { query: vi.fn().mockResolvedValue([
+      { sbc: '3120', bizday: '20260804', wholesale_money: 19938.92, wholesale_profit: 1000 },
+      { sbc: '64188', bizday: '20260804', wholesale_money: 146007.8, wholesale_profit: 5000 },
+    ]) };
+    const pg = { query: vi.fn()
+      .mockResolvedValueOnce([
+        { sbc: '3120', bizday: '20260804', agg_sum: 19938.92 },
+        { sbc: '64188', bizday: '20260804', agg_sum: 146007.8 },
+      ])   // wholesale_money -> wholesale_amount
+      .mockResolvedValueOnce([
+        { sbc: '3120', bizday: '20260804', agg_sum: 1000 },
+        { sbc: '64188', bizday: '20260804', agg_sum: 5000 },
+      ]),  // wholesale_profit
+    };
+    const r = await runC1(wholesaleCustomerCfgSrc, '2026-08-04', '2026-08-04', { duck, pg });
+    expect(r.status).toBe('pass');
+    expect(r.check_name).toBe('wholesale_customer');
+    expect(r.detail).toBeNull();
+    // 每指标各一次 duck + pg 查询（custom SQL 跑两遍，读各自 m.detail 列）
+    expect(duck.query).toHaveBeenCalledTimes(2);
+    expect(pg.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('不重映射（duck 全归 3120）-> fail（复现误报：3120 多算 + 64188 反向缺）', async () => {
+    const duck = { query: vi.fn().mockResolvedValue([
+      { sbc: '3120', bizday: '20260804', wholesale_money: 165946.72, wholesale_profit: 6000 },
+    ]) };
+    const pg = { query: vi.fn()
+      .mockResolvedValueOnce([
+        { sbc: '3120', bizday: '20260804', agg_sum: 19938.92 },
+        { sbc: '64188', bizday: '20260804', agg_sum: 146007.8 },
+      ])   // wholesale_money -> wholesale_amount
+      .mockResolvedValueOnce([
+        { sbc: '3120', bizday: '20260804', agg_sum: 1000 },
+        { sbc: '64188', bizday: '20260804', agg_sum: 5000 },
+      ]),  // wholesale_profit
+    };
+    const r = await runC1(wholesaleCustomerCfgSrc, '2026-08-04', '2026-08-04', { duck, pg });
+    expect(r.status).toBe('fail');
+    const details = r.detail as any[];
+    // 3120 duck 多算（165946.72 vs 19938.92）正向 diff=146007.8（metric=agg 列 wholesale_amount）
+    expect(details.some((d: any) => d.sbc === '3120' && d.metric === 'wholesale_amount' && d.diff === 146007.8)).toBe(true);
+    // 64188 pg-only（duck 无）反向 diff=-146007.8
+    expect(details.some((d: any) => d.sbc === '64188' && d.metric === 'wholesale_amount' && d.diff === -146007.8)).toBe(true);
+  });
+
+  it('custom_duck_sql：64188 dim_branch 重映射 + 日期占位替换 + 返回列名 sbc/bizday/wholesale_money/wholesale_profit', async () => {
+    const duck = { query: vi.fn().mockResolvedValue([]) };
+    const pg = { query: vi.fn().mockResolvedValue([]) };
+    await runC1(wholesaleCustomerCfgSrc, '2026-08-01', '2026-08-04', { duck, pg });
+    const sql: string = (duck.query as any).mock.calls[0][0];
+    expect(sql).not.toContain('{{fromCompact}}');
+    expect(sql).not.toContain('{{toCompact}}');
+    expect(sql).toContain("BETWEEN '20260801' AND '20260804'");
+    // 复用聚合表 source_pattern（**/all.parquet）
+    expect(sql).toContain("read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/**/all.parquet'");
+    // 64188 重映射：dim_branch by client_name（090 聚合模板同款，与 wholesale 源 custom_duck_sql 一致）
+    expect(sql).toContain("db.system_book_code='64188'");
+    expect(sql).toContain('db.branch_name=w.client_name');
+    expect(sql).toContain("COALESCE(db.system_book_code, regexp_extract(w.filename,'wholesale_detail/([0-9]+)/',1)) AS sbc");
+    // 返回列名与 agg_metric.detail 一致（c1.ts d[m.detail] 读取）
+    expect(sql).toContain('AS wholesale_money');
+    expect(sql).toContain('AS wholesale_profit');
+    // pg 端查 daily_wholesale_customer 聚合表 + wholesale_amount
+    const pgSql: string = (pg.query as any).mock.calls[0][0];
+    expect(pgSql).toContain('FROM report_daily_wholesale_customer');
+    expect(pgSql).toContain('SUM(wholesale_amount)');
+  });
+});
