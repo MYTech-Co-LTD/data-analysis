@@ -48,8 +48,8 @@ export async function getBrandMetric(
     }
   }
 
-  const client = await getClient();
   try {
+    const client = await getClient();
     const { data, error } = await client.database
       .from("report_brand_metric_gen")
       .select("*")
