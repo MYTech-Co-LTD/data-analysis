@@ -3,7 +3,7 @@
 // 最短路径触发 error：targets 表 single() 返 error → 第一个 error 分支（行 ~80）。
 // mock 链：client.database.from("targets").select(...).eq(...).single() → { data, error }
 import { describe, it, expect, vi } from "vitest";
-import { getItemBreakdownTop } from "../item-breakdown";
+import { getItemBreakdownTop, toBoard } from "../item-breakdown";
 
 vi.mock("@/lib/api", () => ({
   getClient: vi.fn(),
@@ -104,5 +104,44 @@ describe("getItemBreakdownTop", () => {
     expect(r.saleDay.rows[0].item_code).toBe("A");
     expect(r.outboundMonth.totalAmount).toBe(50);
     expect(r.defaultDay).toBeTruthy();
+  });
+});
+
+// Task 8 (F2.4): toBoard 脱敏利润不再被压成 0
+describe("toBoard masked profit", () => {
+  it("totalProfit is null when all profit values are null (masked)", () => {
+    const rows = [
+      { item_code: "1", item_name: "A", category_name: null, amount: 100, profit: null },
+      { item_code: "2", item_name: "B", category_name: null, amount: 50, profit: null },
+    ] as Array<Record<string, unknown>>;
+    const board = toBoard(rows, "amount", "profit");
+    expect(board.totalAmount).toBe(150);
+    expect(board.totalProfit).toBeNull(); // 不再被 Number(null||0) 压成 0
+    // 单行 profit 也透传 null（不是 0）
+    expect(board.rows[0].profit).toBeNull();
+    expect(board.rows[1].profit).toBeNull();
+  });
+
+  it("totalProfit sums normally when profit values present", () => {
+    const rows = [
+      { item_code: "1", item_name: "A", category_name: null, amount: 100, profit: 10 },
+      { item_code: "2", item_name: "B", category_name: null, amount: 50, profit: 5 },
+    ] as Array<Record<string, unknown>>;
+    const board = toBoard(rows, "amount", "profit");
+    expect(board.totalAmount).toBe(150);
+    expect(board.totalProfit).toBe(15);
+    expect(board.rows[0].profit).toBe(10);
+  });
+
+  it("totalProfit sums non-null profits even if some rows masked (partial mask)", () => {
+    // 部分行脱敏：只累加可见的利润行，不被 NULL 拖成 0
+    const rows = [
+      { item_code: "1", item_name: "A", category_name: null, amount: 100, profit: 10 },
+      { item_code: "2", item_name: "B", category_name: null, amount: 50, profit: null },
+    ] as Array<Record<string, unknown>>;
+    const board = toBoard(rows, "amount", "profit");
+    expect(board.totalProfit).toBe(10); // 只加非 null 的 10，不当 null 做 0
+    expect(board.rows[0].profit).toBe(10);
+    expect(board.rows[1].profit).toBeNull();
   });
 });

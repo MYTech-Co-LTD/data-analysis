@@ -22,14 +22,14 @@ export interface ItemTopRow {
   item_name: string;
   category_name: string | null;
   amount: number;
-  profit: number; // 销售毛利/出库毛利（脱敏，无成本权限为 NULL->0）
+  profit: number | null; // 销售毛利/出库毛利（脱敏：无成本权限为 NULL 透传，不再压成 0）
   pct: number; // 占总金额比（0-1）
 }
 
 export interface TopBoard {
   rows: ItemTopRow[]; // TOP20
   totalAmount: number; // 全集合计金额（给合计行「总合计」用）
-  totalProfit: number; // 全集合计毛利
+  totalProfit: number | null; // 全集合计毛利（脱敏：全 NULL 时为 null 透传，否则累加非 null）
 }
 
 export interface ItemBreakdownTop {
@@ -48,13 +48,20 @@ export interface ItemBreakdownResult extends ItemBreakdownTop {
 }
 
 // 通用 TopBoard 构造器：按 amtKey 排序 + TOP20 + 利润 + totals（给合计行）
-function toBoard(
+// F2.4: 脱敏利润（NULL）不再被 Number(null||0) 累加成 0——全脱敏 totalProfit=null 透传，
+// 让下游显示「—」而不是误导性的「¥0」（与脱敏单项 profit=NULL 显示「—」一致）。
+export function toBoard(
   rows: Array<Record<string, unknown>>,
   amtKey: string,
   profitKey: string,
 ): TopBoard {
   const totalAmount = rows.reduce((s, r) => s + Number(r[amtKey] || 0), 0);
-  const totalProfit = rows.reduce((s, r) => s + Number(r[profitKey] || 0), 0);
+  // F2.4: 脱敏利润（NULL）透传。全集合 profit 都为 null 时 totalProfit=null（不当 0 累加，
+  // 否则脱敏用户会看到「¥0 合计」误导有成本数据）；存在任一非 null 时只累加非 null 行。
+  const profits: unknown[] = rows.map((r) => r[profitKey]);
+  const totalProfit: number | null = profits.every((p) => p == null)
+    ? null
+    : profits.reduce<number>((s, p) => s + Number(p || 0), 0);
   const sorted = rows
     .slice()
     .sort((a, b) => Number(b[amtKey] || 0) - Number(a[amtKey] || 0));
@@ -63,7 +70,7 @@ function toBoard(
     item_name: String(r.item_name ?? ""),
     category_name: r.category_name == null ? null : String(r.category_name),
     amount: Number(r[amtKey] || 0),
-    profit: Number(r[profitKey] || 0),
+    profit: r[profitKey] == null ? null : Number(r[profitKey]),
     pct: totalAmount > 0 ? Number(r[amtKey] || 0) / totalAmount : 0,
   }));
   return { rows: top, totalAmount, totalProfit };

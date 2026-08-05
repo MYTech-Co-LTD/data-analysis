@@ -16,16 +16,16 @@ import type { TopBoard, ItemBreakdownResult } from "@/lib/report-center/item-bre
 function fmtCurrency(v: number): string {
   return v >= 10000 ? `¥${(v / 10000).toFixed(1)}万` : `¥${v.toFixed(0)}`;
 }
-// 利润格式化：0 显示「-」（脱敏 NULL->0 也走此分支，统一不露成本）
-function fmtProfit(v: number): string {
-  return v > 0 ? fmtCurrency(v) : "-";
+// 利润格式化：null/0/负数均显示「-」（脱敏 NULL 透传，与无成本权限一致不露成本）
+function fmtProfit(v: number | null | undefined): string {
+  return v != null && v > 0 ? fmtCurrency(v) : "-";
 }
-function fmtPct(p: number): string {
-  return `${(p * 100).toFixed(1)}%`;
+function fmtPct(p: number | null | undefined): string {
+  return p != null ? `${(p * 100).toFixed(1)}%` : "-";
 }
 // 毛利率：金额或毛利为 0/NULL 显示「-」
-function fmtMargin(profit: number, amount: number): string {
-  return amount > 0 && profit > 0 ? fmtPct(profit / amount) : "-";
+function fmtMargin(profit: number | null | undefined, amount: number): string {
+  return amount > 0 && profit != null && profit > 0 ? fmtPct(profit / amount) : "-";
 }
 
 // 月榜命名：{startM}月{startD}日-{endM}月{endD}日{suffix}
@@ -65,7 +65,7 @@ const OUTBOUND_COLS: ColDef[] = [
 
 // 单元格值
 function cellText(
-  row: { item_name: string; amount: number; profit: number },
+  row: { item_name: string; amount: number; profit: number | null },
   key: ColKey,
   idx: number,
 ): string {
@@ -102,11 +102,22 @@ function TopBoardCard({
   busy?: boolean;
   dateInput?: React.ReactNode;
 }) {
+  // F2.4: 脱敏利润透传。TOP20 全脱敏（profit=null）-> top20Profit=null（不当 0 累加，
+  // 与 toBoard 的 totalProfit 语义一致）；部分脱敏 -> 只累加非 null 行。
   const top20Amount = board.rows.reduce((s, r) => s + r.amount, 0);
-  const top20Profit = board.rows.reduce((s, r) => s + r.profit, 0);
+  const top20Profit: number | null = board.rows.every((r) => r.profit == null)
+    ? null
+    : board.rows.reduce((s, r) => s + (r.profit ?? 0), 0);
   const { totalAmount, totalProfit } = board;
   const amountPct = totalAmount > 0 ? top20Amount / totalAmount : 0;
-  const profitPct = totalProfit > 0 ? top20Profit / totalProfit : 0;
+  // totalProfit=null（全脱敏）或 top20Profit=null（TOP20 全脱敏）-> profitPct=null（显示「-」），
+  // 否则按原口径（totalProfit>0 才算占比，避免除 0）。
+  const profitPct: number | null =
+    totalProfit == null || top20Profit == null
+      ? null
+      : totalProfit > 0
+        ? top20Profit / totalProfit
+        : 0;
 
   // 合计行单元格
   const summaryCell = (key: ColKey): string => {
@@ -299,9 +310,9 @@ export function useItemDayBoards(
       ]);
       setBoards({
         sale:
-          sRes?.board ?? { rows: [], totalAmount: 0, totalProfit: 0 },
+          sRes?.board ?? { rows: [], totalAmount: 0, totalProfit: null },
         outbound:
-          oRes?.board ?? { rows: [], totalAmount: 0, totalProfit: 0 },
+          oRes?.board ?? { rows: [], totalAmount: 0, totalProfit: null },
       });
     } catch (e) {
       // 取消的请求静默退出，不报错也不清 busy（busy 由 finally 守卫）
@@ -347,8 +358,11 @@ export function SaleTopBoards({
       i + 1,
       r.item_name,
       r.amount,
-      r.profit,
-      r.amount > 0 && r.profit > 0 ? fmtPct(r.profit / r.amount) : "-",
+      // 脱敏 profit=null -> 导出 0（Excel 不接受 null；与显示「-」语义一致：无可视毛利）
+      r.profit ?? 0,
+      r.amount > 0 && r.profit != null && r.profit > 0
+        ? fmtPct(r.profit / r.amount)
+        : "-",
     ]);
     exportExcel(
       [
@@ -452,8 +466,11 @@ export function OutboundTopBoards({
       i + 1,
       r.item_name,
       r.amount,
-      r.profit,
-      r.amount > 0 && r.profit > 0 ? fmtPct(r.profit / r.amount) : "-",
+      // 脱敏 profit=null -> 导出 0（Excel 不接受 null；与显示「-」语义一致）
+      r.profit ?? 0,
+      r.amount > 0 && r.profit != null && r.profit > 0
+        ? fmtPct(r.profit / r.amount)
+        : "-",
     ]);
     exportExcel(
       [
