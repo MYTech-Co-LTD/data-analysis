@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { runQaChecks } from '../web/lib/qa-runner';
 import { duckQuery } from '../web/lib/qa/duck';
 
-// pg 从共享依赖目录解析（同 scripts/reconcile-check.js / generate-views.js 惯例），
+// pg 从共享依赖目录解析（同 scripts/generate-views.js 惯例），
 // 不依赖仓库根 node_modules 预装（根无 package.json，node_modules/ 全部 gitignore）。
 const require = createRequire(import.meta.url);
 function loadPg(): any {
