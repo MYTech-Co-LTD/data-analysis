@@ -9,7 +9,9 @@
 import { useRef, useState } from "react";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { ItemDetailDrawer } from "./item-detail-drawer";
+import { MaskedBadge } from "./masked-badge";
 import { ModuleError } from "./module-error";
+import { useCanSeeCost } from "./use-can-see-cost";
 import type { TopBoard, ItemBreakdownResult } from "@/lib/report-center/item-breakdown";
 
 // 金额格式化：≥10000 用「X.X万」，否则整数，¥ 前缀
@@ -104,6 +106,8 @@ function TopBoardCard({
 }) {
   // F2.4: 脱敏利润透传。TOP20 全脱敏（profit=null）-> top20Profit=null（不当 0 累加，
   // 与 toBoard 的 totalProfit 语义一致）；部分脱敏 -> 只累加非 null 行。
+  // F2.3: costMasked 用于列头挂角标（毛利/毛利率列）。
+  const costMasked = !useCanSeeCost();
   const top20Amount = board.rows.reduce((s, r) => s + r.amount, 0);
   const top20Profit: number | null = board.rows.every((r) => r.profit == null)
     ? null
@@ -182,6 +186,9 @@ function TopBoardCard({
                   className={`px-2 py-1.5 font-medium ${c.align === "right" ? "text-right" : "text-left"} ${c.width ?? ""}`}
                 >
                   {c.label}
+                  {costMasked && (c.key === "profit" || c.key === "margin") && (
+                    <MaskedBadge />
+                  )}
                 </th>
               ))}
             </tr>

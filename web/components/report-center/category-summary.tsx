@@ -6,8 +6,10 @@ import { CategorySummaryRow } from "@/lib/report-center/category-summary";
 import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
 import { CategoryItemDrawer } from "./category-item-drawer";
+import { MaskedBadge } from "./masked-badge";
 import { ModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
+import { useCanSeeCost } from "./use-can-see-cost";
 
 interface CategorySummaryProps {
   result: GetterResult<CategorySummaryRow>;
@@ -35,6 +37,9 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [drawerCat, setDrawerCat] = useState<string | null>(null);
+  // F2.3: costMasked=true 时所有 profit/margin 列头挂角标。
+  // 注意：profit_*_target 是目标值不脱敏（不挂角标）；只 profit_actual/rate/margin + daily_* 挂。
+  const costMasked = !useCanSeeCost();
 
   // 排除「合计」行（视图可能返回），tbody 只展示明细，tfoot 展示合计
   const detailRows = useMemo(
@@ -170,12 +175,22 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
                 <th className="px-3 py-2 text-right font-medium">月销售金额</th>
                 <th className="px-3 py-2 text-right font-medium">月销售完成率</th>
                 <th className="px-3 py-2 text-right font-medium">月毛利目标</th>
-                <th className="px-3 py-2 text-right font-medium">月毛利金额</th>
-                <th className="px-3 py-2 text-right font-medium">月毛利完成率</th>
-                <th className="px-3 py-2 text-right font-medium">月毛利率</th>
+                <th className="px-3 py-2 text-right font-medium">
+                  月毛利金额{costMasked && <MaskedBadge />}
+                </th>
+                <th className="px-3 py-2 text-right font-medium">
+                  月毛利完成率{costMasked && <MaskedBadge />}
+                </th>
+                <th className="px-3 py-2 text-right font-medium">
+                  月毛利率{costMasked && <MaskedBadge />}
+                </th>
                 <th className="px-3 py-2 text-right font-medium">当天出库金额</th>
-                <th className="px-3 py-2 text-right font-medium">当天出库毛利</th>
-                <th className="px-3 py-2 text-right font-medium">当天毛利率</th>
+                <th className="px-3 py-2 text-right font-medium">
+                  当天出库毛利{costMasked && <MaskedBadge />}
+                </th>
+                <th className="px-3 py-2 text-right font-medium">
+                  当天毛利率{costMasked && <MaskedBadge />}
+                </th>
                 <th className="px-3 py-2 text-right font-medium">差额日均毛利目标</th>
               </tr>
             </thead>
@@ -286,7 +301,9 @@ export function CategorySummary({ result, targetMonth, targetId, isMobile = fals
               <tr className="sticky top-0 z-10 bg-slate-50">
                 <th className="px-2 py-2 text-left font-medium">类别</th>
                 <th className="px-2 py-2 text-right font-medium">销售率</th>
-                <th className="px-2 py-2 text-right font-medium">毛利率</th>
+                <th className="px-2 py-2 text-right font-medium">
+                  毛利率{costMasked && <MaskedBadge />}
+                </th>
                 <th className="px-2 py-2 text-right font-medium">当天出库</th>
                 <th className="w-8 px-1 py-2"></th>
               </tr>

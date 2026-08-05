@@ -4,7 +4,9 @@ import { useRef } from "react";
 import { BrandMetricRow } from "@/lib/report-center/brand-metric";
 import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { MaskedBadge } from "./masked-badge";
 import { ModuleError } from "./module-error";
+import { useCanSeeCost } from "./use-can-see-cost";
 
 interface BrandMetricTableProps {
   result: GetterResult<BrandMetricRow>;
@@ -39,6 +41,8 @@ export function BrandMetricTable({ result, targetMonth, isMobile = false }: Bran
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const title = `${targetMonth ?? ""}月品牌×指标`;
+  // F2.3: can_see_cost=false 时 profit/margin 列头挂脱敏角标（NULL 透传由 fmtCurrency/fmtRate 兜「—」）
+  const costMasked = !useCanSeeCost();
 
   const handleExcel = () => {
     const head = [
@@ -106,8 +110,12 @@ export function BrandMetricTable({ result, targetMonth, isMobile = false }: Bran
               <th className="px-3 py-2 text-right font-medium">销售金额</th>
               <th className="px-3 py-2 text-right font-medium">销售完成率</th>
               <th className="px-3 py-2 text-right font-medium">配送金额</th>
-              <th className="px-3 py-2 text-right font-medium">配送毛利</th>
-              <th className="px-3 py-2 text-right font-medium">配送毛利率</th>
+              <th className="px-3 py-2 text-right font-medium">
+                配送毛利{costMasked && <MaskedBadge />}
+              </th>
+              <th className="px-3 py-2 text-right font-medium">
+                配送毛利率{costMasked && <MaskedBadge />}
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">

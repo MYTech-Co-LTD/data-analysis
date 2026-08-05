@@ -12,8 +12,10 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import type { GetterResult } from "@/lib/report-center/types";
 import { ChartActions, exportExcel, exportImage } from "./chart-actions";
+import { MaskedBadge } from "./masked-badge";
 import { ModuleError } from "./module-error";
 import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
+import { useCanSeeCost } from "./use-can-see-cost";
 
 interface SupplyChainOutboundTableProps {
   result: GetterResult<SupplyChainOutboundRow>;
@@ -62,6 +64,8 @@ export function SupplyChainOutboundTable({
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  // F2.3: costMasked=true 时所有 profit/margin 列头挂角标（出库毛利/毛利率/当天出库毛利/当天毛利率）
+  const costMasked = !useCanSeeCost();
 
   // 构建三级树：region -> sub_region -> store
   // parent_code 链：region=NULL / sub_region=region_code(=war_zone) / store=sub_region_code(=region_l2)
@@ -290,11 +294,19 @@ export function SupplyChainOutboundTable({
               <tr className="sticky top-0 z-10 bg-slate-50">
                 <th className="px-3 py-2 text-left font-medium">大区名称</th>
                 <th className="px-3 py-2 text-right font-medium">出库金额</th>
-                <th className="px-3 py-2 text-right font-medium">出库毛利</th>
-                <th className="px-3 py-2 text-right font-medium">毛利率</th>
+                <th className="px-3 py-2 text-right font-medium">
+                  出库毛利{costMasked && <MaskedBadge />}
+                </th>
+                <th className="px-3 py-2 text-right font-medium">
+                  毛利率{costMasked && <MaskedBadge />}
+                </th>
                 <th className="px-3 py-2 text-right font-medium">当天出库金额</th>
-                <th className="px-3 py-2 text-right font-medium">当天出库毛利</th>
-                <th className="px-3 py-2 text-right font-medium">当天毛利率</th>
+                <th className="px-3 py-2 text-right font-medium">
+                  当天出库毛利{costMasked && <MaskedBadge />}
+                </th>
+                <th className="px-3 py-2 text-right font-medium">
+                  当天毛利率{costMasked && <MaskedBadge />}
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -401,7 +413,9 @@ export function SupplyChainOutboundTable({
               <tr className="sticky top-0 z-10 bg-slate-50">
                 <th className="px-2 py-2 text-left font-medium">名称</th>
                 <th className="px-2 py-2 text-right font-medium">出库金额</th>
-                <th className="px-2 py-2 text-right font-medium">毛利率</th>
+                <th className="px-2 py-2 text-right font-medium">
+                  毛利率{costMasked && <MaskedBadge />}
+                </th>
                 <th className="px-2 py-2 text-right font-medium">当天出库</th>
                 <th className="w-8 px-1 py-2"></th>
               </tr>
