@@ -13,7 +13,8 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['lib/**/*.test.ts'],
+    // F2.1: 加 app/**/*.test.ts 让 route handler 测试也被 vitest 收集
+    include: ['lib/**/*.test.ts', 'app/**/*.test.ts'],
     exclude: ['tests/**', 'node_modules/**'],
   },
 });
