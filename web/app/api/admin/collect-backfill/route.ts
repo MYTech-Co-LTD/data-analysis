@@ -2,9 +2,7 @@
 // 按日期补采：指定 task_id + 日期范围，full 模式重采该范围（修复漏采/补历史缺口）
 // 复用 scheduler 的凭证解析 + collect 函数；full 模式覆盖写
 import { NextRequest, NextResponse } from 'next/server';
-import { collectOnce } from '@/lib/collect';
-import { collectDeliveryOnce } from '@/lib/collect-delivery';
-import { collectWholesaleOnce } from '@/lib/collect-wholesale';
+import { runCollectBackfill } from '@/lib/collect-backfill';
 
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
@@ -28,22 +26,10 @@ export async function POST(req: NextRequest) {
   if (!cred.token) return NextResponse.json({ ok: false, error: '无凭证 token（source ' + task.source_id + '）' }, { status: 400 });
   const authToken = cred.token.startsWith('Bearer ') ? cred.token : `Bearer ${cred.token}`;
 
-  const params = task.params || {};
-  const limit = params.page_size || 200;
-  const tt = params.task_type;
+  // 分派逻辑抽到共享 lib（route + scheduler/C0 autoBackfill 共用）
   let result: any;
   try {
-    if (tt === 'delivery') {
-      const dist = Number(params.distribution_branch_num) || 99;
-      result = await collectDeliveryOnce(authToken, dist, String(dist), `${date_from} 00:00:00`, `${date_to} 23:59:59`, limit, { mode: 'full' });
-    } else if (tt === 'wholesale') {
-      const bn = (params.branch_nums || []).join(',');
-      result = await collectWholesaleOnce(authToken, bn, `${date_from} 00:00:00`, `${date_to} 23:59:59`, limit, { mode: 'full' });
-    } else {
-      // retail（默认）：dates=[from,to]
-      const branchNums = (params.branch_nums || []) as number[];
-      result = await collectOnce(authToken, branchNums, branchNums.join(','), [date_from, date_to], limit, { mode: 'full' });
-    }
+    result = await runCollectBackfill(task, authToken, date_from, date_to);
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
   }

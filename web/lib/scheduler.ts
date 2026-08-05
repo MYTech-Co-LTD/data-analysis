@@ -259,6 +259,54 @@ async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFr
 }
 
 /**
+ * 采集后即时 QA（三源共用）：D1+D2 去重守护 + C1 明细↔聚合对账 + C0 源API count↔明细 count（受影响源当日）。
+ *  C0 用当日单日窗口（补每日 09:15 盲区）且 autoBackfill=true（missing → full 重采当日收敛 ≤3）。
+ *  QA 失败只记日志不阻断采集（parquet 已落，采集是主任务）。
+ */
+async function runPostCollectQa(
+  task: { id: string; name: string; source_id: string; function_slug: string; params: any },
+  client: any,
+) {
+  try {
+    const src = (detailSources as DetailSource[]).find((s) => s.function_slug === task.function_slug);
+    if (!src) return;
+    const todayCompact = getDateOffsetChina(0).replace(/-/g, '');
+    const todayIso = getDateOffsetChina(0);
+    // D1+D2 去重守护（当日分区，buildDayGlob 按源目录格式把日期段替换成具体日，避免每 5 分钟全库重扫）
+    try {
+      const dayGlob = buildDayGlob(src, todayCompact);
+      await runDailyQa('collect', [`D1:${src.name}`, `D2:${src.name}`], todayCompact, todayCompact, { [src.name]: dayGlob });
+    } catch (e: any) { console.error('[scheduler] 采集后 D1/D2 失败:', e?.message ?? e); }
+    // C1 明细↔聚合对账（受影响源当日单日，非 7 天）+ 自动 /compute 重算 retry；C1 失败不阻断采集（parquet 已落，采集是主任务）
+    try {
+      const c1Client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
+      const c1Db = {
+        rpc: async (fn: string, body: Record<string, unknown>) => {
+          const r = await fetch(`${POSTGREST_URL}/rpc/${fn}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
+          });
+          const json = await r.json();
+          if (!r.ok) return { error: json };
+          return { data: json };
+        },
+        from: (t: string) => c1Client.database.from(t),
+      } as any;
+      const c1Duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql);
+      // 随机后缀防同毫秒 run_id 撞 qa_logs UNIQUE 约束（与 runDailyQa 同模式）
+      const c1RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await runC1Checks({ db: c1Db, duck: c1Duck, runId: c1RunId, trigger: 'collect', checks: [`C1:${src.name}`], window: { from: todayIso, to: todayIso } });
+    } catch (e: any) { console.error('[scheduler] 采集后 C1 失败:', e?.message ?? e); }
+    // C0 源API count ↔ 明细 count（受影响源当日单日，补每日 09:15 盲区；missing 自动 full 补采收敛 ≤3）
+    try {
+      const c0RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      await runC0Checks({ client, duck: (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql), runId: c0RunId, trigger: 'collect', checks: [`C0:${src.name}`], window: { from: todayIso, to: todayIso }, autoBackfill: true });
+    } catch (e: any) { console.error('[scheduler] 采集后 C0 失败:', e?.message ?? e); }
+  } catch (e: any) {
+    console.error('[scheduler] 采集后 QA 异常:', e?.message ?? e);
+  }
+}
+
+/**
  * 执行单个采集任务（含对账重试）
  * 根据 params.task_type 判断采集类型：
  *   - 'items' → 商品档案采集
@@ -453,6 +501,9 @@ async function executeTask(task: {
       await writeLog(client, task.id, startedAt, finishedAt, finalStatus, lastResult.records.length, lastResult.error || undefined,
         { mode, skipped: lastResult.skipped, storage_path: lastResult.storagePath, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } });
       console.log(`[scheduler] 配送明细 ${task.name}: ${finalStatus} ${mode}${lastResult.skipped ? '(skipped)' : `(${lastResult.records.length} 条)`} ${verified ? '✅' : '❌'}`);
+
+      // 采集后即时 QA（C0 补当日盲区；与 retail/wholesale 三分支共用）
+      await runPostCollectQa(task, client);
       return;
     }
 
@@ -539,6 +590,9 @@ async function executeTask(task: {
       await writeLog(client, task.id, startedAt, finishedAt, finalStatus, lastResult.records.length, lastResult.error || undefined,
         { mode, skipped: lastResult.skipped, storage_path: lastResult.storagePath, verification: { api_total: lastResult.apiTotal, missing: lastResult.apiTotal - lastResult.records.length, verified } });
       console.log(`[scheduler] 批发明细 ${task.name}: ${finalStatus} ${mode}${lastResult.skipped ? '(skipped)' : `(${lastResult.records.length} 条)`} ${verified ? '✅' : '❌'}`);
+
+      // 采集后即时 QA（C0 补当日盲区；与 retail/delivery 三分支共用）
+      await runPostCollectQa(task, client);
       return;
     }
 
@@ -650,36 +704,8 @@ async function executeTask(task: {
       await triggerCompute(client, dates, task.id);
     }
 
-    // L4 采集后即时 QA：D1 去重守护 + C1 明细↔聚合对账（受影响源当日）；QA 失败不阻塞采集流程
-    const src = (detailSources as DetailSource[]).find((s) => s.function_slug === task.function_slug);
-    if (src) {
-      const todayCompact = getDateOffsetChina(0).replace(/-/g, '');
-      const todayIso = getDateOffsetChina(0);
-      // D1+D2 去重守护（当日分区，buildDayGlob 按源目录格式把日期段替换成具体日，避免每 5 分钟全库重扫）
-      try {
-        const dayGlob = buildDayGlob(src, todayCompact);
-        await runDailyQa('collect', [`D1:${src.name}`, `D2:${src.name}`], todayCompact, todayCompact, { [src.name]: dayGlob });
-      } catch (e: any) { console.error('[scheduler] 采集后 D1/D2 失败:', e?.message ?? e); }
-      // C1 明细↔聚合对账（受影响源当日单日，非 7 天）+ 自动 /compute 重算 retry；C1 失败不阻断采集（parquet 已落，采集是主任务）
-      try {
-        const c1Client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
-        const c1Db = {
-          rpc: async (fn: string, body: Record<string, unknown>) => {
-            const r = await fetch(`${POSTGREST_URL}/rpc/${fn}`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json', apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` }, body: JSON.stringify(body),
-            });
-            const json = await r.json();
-            if (!r.ok) return { error: json };
-            return { data: json };
-          },
-          from: (t: string) => c1Client.database.from(t),
-        } as any;
-        const c1Duck = (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql);
-        // 随机后缀防同毫秒 run_id 撞 qa_logs UNIQUE 约束（与 runDailyQa 同模式）
-        const c1RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        await runC1Checks({ db: c1Db, duck: c1Duck, runId: c1RunId, trigger: 'collect', checks: [`C1:${src.name}`], window: { from: todayIso, to: todayIso } });
-      } catch (e: any) { console.error('[scheduler] 采集后 C1 失败:', e?.message ?? e); }
-    }
+    // L4 采集后即时 QA：D1+D2 去重守护 + C1 明细↔聚合对账 + C0 源API count↔明细 count（受影响源当日，三分支共用 helper）
+    await runPostCollectQa(task, client);
 
     const finalStatus = lastResult.error ? 'partial' : 'success';
     await writeLog(
