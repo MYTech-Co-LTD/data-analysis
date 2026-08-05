@@ -78,7 +78,7 @@ export default async function TargetDashboard({
       kpi={kpi}
       regionBreakdown={regionBreakdown}
       categorySummary={categorySummary}
-      brandMetric={brandMetric}
+      brandMetric={brandMetric.rows}
       progress={progress}
       targetMonth={targetMonth}
       freshness={freshness}
@@ -94,7 +94,7 @@ export default async function TargetDashboard({
         kpi={kpi}
         regionBreakdown={regionBreakdown}
         categorySummary={categorySummary}
-        brandMetric={brandMetric}
+        brandMetric={brandMetric.rows}
         progress={progress}
         targetMonth={targetMonth}
         freshness={freshness}
