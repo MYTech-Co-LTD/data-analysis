@@ -1,5 +1,5 @@
 // web/app/api/admin/qa-run/route.ts
-// 手动/外部触发 QA 运行器（D1/D2/C2 + C0 双向 count），记 qa_logs + 企微告警
+// 手动/外部触发 QA 运行器（D1/D2/C2/C5 + C0 双向 count + C1 明细↔聚合自动重算），记 qa_logs + 企微告警
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@insforge/sdk';
 import { requireAdmin } from '@/lib/admin-api-auth';
