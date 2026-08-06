@@ -20,7 +20,10 @@ import type {
 } from "@/lib/report-center/item-breakdown";
 import type { SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import type { WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
-import { formatFreshnessChina } from "@/lib/report-center/freshness";
+import {
+  formatFreshnessChina,
+  type DataFreshness,
+} from "@/lib/report-center/freshness";
 
 export function DesktopDashboard({
   target,
@@ -44,7 +47,7 @@ export function DesktopDashboard({
   brandMetric: GetterResult<BrandMetricRow>;
   progress: number;
   targetMonth: number;
-  freshness: string | null;
+  freshness: DataFreshness | null;
   freshnessFailed: boolean;
   targetId: number;
   itemTop: ItemBreakdownResult;
@@ -84,10 +87,17 @@ export function DesktopDashboard({
           </span>
         </div>
         <div className="mt-0.5 text-xs tabular-nums text-slate-400">
-          {target.start_date} ~ {target.end_date} · 数据更新{" "}
-          {freshnessFailed
-            ? "更新时间获取失败"
-            : (formatFreshnessChina(freshness) ?? "—")}
+          {target.start_date} ~ {target.end_date}
+          {freshnessFailed ? (
+            <> · 更新时间获取失败</>
+          ) : (
+            <>
+              {" · 数据更新 "}
+              {formatFreshnessChina(freshness?.data_updated_at) ?? "—"}
+              {" · 最近查询 "}
+              {formatFreshnessChina(freshness?.last_query_at) ?? "—"}
+            </>
+          )}
         </div>
       </div>
 

@@ -14,6 +14,7 @@ import {
 import { getSupplyChainOutbound, type SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
 import { getWholesaleDaily, type WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
 import { type GetterResult } from "@/lib/report-center/types";
+import type { DataFreshness } from "@/lib/report-center/freshness";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PartialDegradeBanner } from "@/components/report-center/partial-degrade-banner";
@@ -176,14 +177,17 @@ export default async function TargetDashboard({
     wholesaleDaily,
   ].filter((r) => r?.status === "error").length;
 
-  // F5 数据新鲜度：get_data_freshness（3 表最新 /compute 时间的最早）。
-  // RPC 失败/返 error → freshnessFailed=true → 顶部红色横幅「更新时间获取失败」而非「—」。
-  let freshness: string | null = null;
+  // F5 数据新鲜度：get_data_freshness 返回行 { data_updated_at, last_query_at }。
+  //   - data_updated_at：3 表最新 /compute 时间的最早（数据新旧，仅展示）
+  //   - last_query_at：collect_tasks.last_run_at 心跳（系统活跃，陈旧告警据此）
+  // RPC 失败/返 error → freshnessFailed=true → 顶部红色横幅「查询时间获取失败」而非「—」。
+  let freshness: DataFreshness | null = null;
   let freshnessFailed = false;
   try {
     const fr = await client.database.rpc("get_data_freshness");
     if (fr.error) throw fr.error;
-    freshness = fr.data as unknown as string | null;
+    const rows = (fr.data ?? []) as DataFreshness[];
+    freshness = rows[0] ?? null;
   } catch (e) {
     console.error("get_data_freshness failed:", e);
     freshnessFailed = true;
@@ -199,8 +203,11 @@ export default async function TargetDashboard({
   const banner = (
     <>
       {failCount > 0 && <PartialDegradeBanner failCount={failCount} total={7} />}
-      {/* F5：数据陈旧（距今>6h）/ 更新时间获取失败 → 红色横幅 */}
-      <FreshnessStaleBanner freshness={freshness} failed={freshnessFailed} />
+      {/* F5：最近查询停留超 6h（系统停）→ 红色横幅；数据旧（源头没数据）不告警 */}
+      <FreshnessStaleBanner
+        lastQueryAt={freshness?.last_query_at}
+        failed={freshnessFailed}
+      />
       {/* F2.2：限门店用户（如店长）RLS 裁剪提示——内部 fetch /api/me 自判显隐 */}
       <PermissionBanner />
     </>

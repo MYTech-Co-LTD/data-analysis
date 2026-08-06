@@ -1,43 +1,37 @@
 "use client";
 
-// F5 时效陈旧门：数据停留在 X 超阈值 → 顶部红色横幅（与 PartialDegradeBanner/PermissionBanner 同位）。
-// - freshness RPC 失败（failed=true）→ 「更新时间获取失败」
-// - freshness 距今 > 6h → 「数据停留在 YYYY-MM-DD HH:MM，已超 N 小时未更新」
-// - 正常/无数据 → 不渲染。
+// F5 时效陈旧门：基于「最近查询时间」（collect_tasks.last_run_at 心跳，系统活跃）判陈旧。
+// - 系统最近查询停留在 X 超阈值（>6h）→ 顶部红色横幅「系统最近查询停留在 X，已超 N 小时未运行」
+// - 数据旧（源头没数据）不算陈旧——data_updated_at 仅展示（desktop/mobile 头部），不触发横幅。
+// - last_query_at 为空（从未运行）→ 不告警。
+// - freshness RPC 失败（failed=true）→ 「查询时间获取失败」
 // DESIGN.md 禁 emoji——用 lucide AlertTriangle 图标。
 import { AlertTriangle } from "lucide-react";
-import {
-  formatFreshnessChina,
-  FRESHNESS_STALE_HOURS,
-  staleHoursSince,
-} from "@/lib/report-center/freshness";
+import { staleBannerText } from "@/lib/report-center/freshness";
 
 export function FreshnessStaleBanner({
-  freshness,
+  lastQueryAt,
   failed = false,
 }: {
-  freshness: string | null | undefined;
+  lastQueryAt: string | null | undefined;
   failed?: boolean;
 }) {
   if (failed) {
     return (
       <div className="mb-3 flex items-center gap-1.5 rounded-md border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800">
         <AlertTriangle size={16} strokeWidth={1.5} className="shrink-0" />
-        <span>更新时间获取失败</span>
+        <span>查询时间获取失败</span>
       </div>
     );
   }
 
-  const hours = staleHoursSince(freshness);
-  if (hours == null || hours <= FRESHNESS_STALE_HOURS) return null;
+  const text = staleBannerText(lastQueryAt);
+  if (!text) return null;
 
-  const display = formatFreshnessChina(freshness) ?? freshness ?? "";
   return (
     <div className="mb-3 flex items-center gap-1.5 rounded-md border border-red-300 bg-red-50 px-4 py-2 text-sm text-red-800">
       <AlertTriangle size={16} strokeWidth={1.5} className="shrink-0" />
-      <span>
-        数据停留在 {display}，已超 {hours} 小时未更新
-      </span>
+      <span>{text}</span>
     </div>
   );
 }
