@@ -88,6 +88,10 @@ ALTER VIEW report_achievement_v SET (security_invoker=true);
 GRANT SELECT ON report_achievement_v TO authenticated, anon;
 
 -- 数据新鲜度: 3 表最早 updated_at(/compute 时间)，报表显示用
+-- 幂等：071_freshness_max 把返回类型从 TIMESTAMPTZ 改为 TABLE 行，CREATE OR REPLACE 不允许改返回类型，
+-- 必须先 DROP IF EXISTS 再重建（本迁移重跑时库里已是 071 的 TABLE 版，直接 CREATE OR REPLACE 会报
+-- "cannot change return type of existing function"，导致 migrate.sh 每次部署重跑全部迁移时失败）。
+DROP FUNCTION IF EXISTS get_data_freshness();
 CREATE OR REPLACE FUNCTION get_data_freshness() RETURNS TIMESTAMPTZ
 LANGUAGE sql SECURITY DEFINER AS $$
   SELECT LEAST(
