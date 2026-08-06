@@ -261,4 +261,94 @@ describe('runC0Checks', () => {
     expect(res[0].status).toBe('error');
     expect(runC0).not.toHaveBeenCalled();
   });
+
+  // ===== no-data（数据未到：源 API 成功 0 + parquet 缺失）=====
+
+  const NO_DATA = (): CheckResult => ({
+    run_id: '', trigger: 'collect', check_type: 'C0', check_name: 'retail',
+    status: 'no-data', diff: null,
+    detail: [{ day: '2026-08-05', api: 0, lib: 0, verdict: 'no-data' }],
+  });
+  const ERR = (): CheckResult => ({
+    run_id: '', trigger: 'collect', check_type: 'C0', check_name: 'retail',
+    status: 'error', diff: null,
+    detail: [{ day: '2026-08-05', api: -1, lib: 0, verdict: 'error' }],
+  });
+
+  it('no-data: API 成功返回 0 + duck 抛 No files found → runC0 收 libMissing（非 api:-1 error）', async () => {
+    vi.mocked(countRetailApi).mockResolvedValue(0);
+    const duck = vi.fn().mockRejectedValue(new Error('duckdb: No files found that match the pattern ...'));
+    vi.mocked(runC0).mockResolvedValue(NO_DATA());
+
+    const res = await runC0Checks({
+      client: makeClient() as any,
+      duck: duck as any,
+      runId: 'r-nodata',
+      trigger: 'collect',
+      checks: ['C0:retail'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+    });
+
+    // 分开 try 后：API count 成功(0)，不设 apiFailed；duck 抛 No files found → libMissing=true
+    expect(vi.mocked(runC0).mock.calls[0][4]).toEqual({ apiFailed: false, libMissing: true });
+    expect(res[0].status).toBe('no-data');
+    expect(runCollectBackfill).not.toHaveBeenCalled();
+  });
+
+  it('no-data 不触发 autoBackfill（数据未到≠漏采，补也白补）', async () => {
+    vi.mocked(countRetailApi).mockResolvedValue(0);
+    const duck = vi.fn().mockRejectedValue(new Error('duckdb: No files found'));
+    vi.mocked(runC0).mockResolvedValue(NO_DATA());
+
+    const res = await runC0Checks({
+      client: makeClient() as any,
+      duck: duck as any,
+      runId: 'r-nodata2',
+      trigger: 'collect',
+      checks: ['C0:retail'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+      autoBackfill: true,
+    });
+
+    expect(runCollectBackfill).not.toHaveBeenCalled();
+    expect(res[0].status).toBe('no-data');
+  });
+
+  it('API count 调用失败 → runC0 收 apiFailed（真异常 error，非 no-data）', async () => {
+    vi.mocked(countRetailApi).mockRejectedValue(new Error('network timeout'));
+    vi.mocked(runC0).mockResolvedValue(ERR());
+
+    const res = await runC0Checks({
+      client: makeClient() as any,
+      duck: makeDuck() as any,
+      runId: 'r-apifail',
+      trigger: 'collect',
+      checks: ['C0:retail'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+    });
+
+    expect(vi.mocked(runC0).mock.calls[0][4]).toEqual({ apiFailed: true, libMissing: false });
+    expect(res[0].status).toBe('error');
+    expect(runCollectBackfill).not.toHaveBeenCalled();
+  });
+
+  it('duck 其它错误（非 No files found，如连接拒绝）→ rethrow → error 结果（不误判 no-data）', async () => {
+    vi.mocked(countRetailApi).mockResolvedValue(100);
+    const duck = vi.fn().mockRejectedValue(new Error('duckdb: connection refused'));
+    vi.mocked(runC0).mockResolvedValue(PASS('x'));
+
+    const res = await runC0Checks({
+      client: makeClient() as any,
+      duck: duck as any,
+      runId: 'r-duckerr',
+      trigger: 'collect',
+      checks: ['C0:retail'],
+      window: { from: '2026-08-05', to: '2026-08-05' },
+    });
+
+    expect(res).toHaveLength(1);
+    expect(res[0].status).toBe('error');
+    expect(res[0].check_name).toBe('retail');  // 外层 catch 记源级 error
+    expect(runC0).not.toHaveBeenCalled();
+  });
 });

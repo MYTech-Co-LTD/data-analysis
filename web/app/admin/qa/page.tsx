@@ -7,16 +7,19 @@ type QaLog = {
   trigger: string;
   check_type: string;
   check_name: string;
-  status: 'pass' | 'fail' | 'error';
+  status: 'pass' | 'fail' | 'error' | 'no-data';
   diff: number | null;
   detail: unknown | null;
   run_at: string;
 };
 
+type FilterMode = 'all' | 'fail' | 'no-data';
+
 const STATUS_META: Record<string, { label: string; cls: string }> = {
   pass: { label: '通过', cls: 'bg-green-100 text-green-700' },
   fail: { label: '失败', cls: 'bg-red-100 text-red-700' },
   error: { label: '异常', cls: 'bg-amber-100 text-amber-700' },
+  'no-data': { label: '未到', cls: 'bg-blue-100 text-blue-700' },
 };
 
 const fmtTime = (iso: string) => {
@@ -36,12 +39,12 @@ const detailSummary = (detail: unknown) => {
 
 export default function QaPage() {
   const [logs, setLogs] = useState<QaLog[]>([]);
-  const [onlyFail, setOnlyFail] = useState(false);
+  const [filter, setFilter] = useState<FilterMode>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const url = `/api/admin/qa-log${onlyFail ? '?status=fail' : ''}`;
+    const url = `/api/admin/qa-log${filter === 'fail' ? '?status=fail' : filter === 'no-data' ? '?status=no-data' : ''}`;
     fetch(url, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => {
@@ -51,23 +54,27 @@ export default function QaPage() {
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
-  }, [onlyFail]);
+  }, [filter]);
 
-  // 顶部摘要：按 check_type 汇总本次加载区间的 pass/fail 计数（fail 视图则为 fail/error 计数）
+  // 顶部摘要：按 check_type 汇总本次加载区间的 pass/fail/noData 计数。
+  // no-data 单独计数，不从 else fail++（数据未到 ≠ 失败）。
   const summary = useMemo(() => {
-    const m = new Map<string, { pass: number; fail: number }>();
+    const m = new Map<string, { pass: number; fail: number; noData: number }>();
     for (const l of logs) {
-      const c = m.get(l.check_type) || { pass: 0, fail: 0 };
+      const c = m.get(l.check_type) || { pass: 0, fail: 0, noData: 0 };
       if (l.status === 'pass') c.pass++;
+      else if (l.status === 'no-data') c.noData++;
       else c.fail++;
       m.set(l.check_type, c);
     }
     return [...m.entries()]
       .map(([type, c]) => ({ type, ...c }))
-      .sort((a, b) => b.fail - a.fail || b.pass - a.pass);
+      .sort((a, b) => b.fail - a.fail || b.noData - a.noData || b.pass - a.pass);
   }, [logs]);
 
-  const badCount = logs.filter((l) => l.status !== 'pass').length;
+  // 真异常 = fail/error；no-data 独立计数（不混入 badCount，不触发"异常"红色徽章）
+  const badCount = logs.filter((l) => l.status === 'fail' || l.status === 'error').length;
+  const noDataCount = logs.filter((l) => l.status === 'no-data').length;
 
   return (
     <div className="p-4 space-y-4">
@@ -75,16 +82,22 @@ export default function QaPage() {
         <h1 className="text-xl font-bold">数据质量</h1>
         <div className="flex gap-2">
           <button
-            onClick={() => setOnlyFail(false)}
-            className={`px-3 py-1 text-sm rounded ${!onlyFail ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            onClick={() => setFilter('all')}
+            className={`px-3 py-1 text-sm rounded ${filter === 'all' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
             全部
           </button>
           <button
-            onClick={() => setOnlyFail(true)}
-            className={`px-3 py-1 text-sm rounded ${onlyFail ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            onClick={() => setFilter('fail')}
+            className={`px-3 py-1 text-sm rounded ${filter === 'fail' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
           >
             只看失败/异常
+          </button>
+          <button
+            onClick={() => setFilter('no-data')}
+            className={`px-3 py-1 text-sm rounded ${filter === 'no-data' ? 'bg-primary text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+          >
+            只看未到
           </button>
         </div>
       </div>
@@ -92,16 +105,18 @@ export default function QaPage() {
       {/* 摘要 */}
       {!loading && !error && summary.length > 0 && (
         <div className="flex flex-wrap gap-2 text-sm">
-          <span className={`px-3 py-1 rounded ${badCount === 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-            {onlyFail
+          <span className={`px-3 py-1 rounded ${badCount === 0 && (filter !== 'fail') ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+            {filter === 'fail'
               ? `本次加载 ${logs.length} 条异常记录`
-              : badCount === 0
-                ? `✓ 最近 ${logs.length} 条全部通过`
-                : `✗ 最近 ${logs.length} 条中 ${badCount} 条异常`}
+              : filter === 'no-data'
+                ? `本次加载 ${logs.length} 条未到记录`
+                : badCount === 0 && noDataCount === 0
+                  ? `✓ 最近 ${logs.length} 条全部通过`
+                  : `✗ 最近 ${logs.length} 条中 ${badCount} 条异常${noDataCount ? `、${noDataCount} 条未到` : ''}`}
           </span>
           {summary.map((s) => (
             <span key={s.type} className="px-3 py-1 rounded bg-gray-100 text-gray-700">
-              {s.type}：通过 {s.pass} / 失败 {s.fail}
+              {s.type}：通过 {s.pass} / 失败 {s.fail}{s.noData > 0 ? ` / 未到 ${s.noData}` : ''}
             </span>
           ))}
         </div>
@@ -117,7 +132,7 @@ export default function QaPage() {
         <div className="text-gray-400 text-sm">加载中…</div>
       ) : logs.length === 0 ? (
         <div className="text-gray-400 text-sm">
-          {onlyFail ? '暂无失败/异常记录' : '暂无巡检记录'}
+          {filter === 'fail' ? '暂无失败/异常记录' : filter === 'no-data' ? '暂无未到记录' : '暂无巡检记录'}
         </div>
       ) : (
         <table className="w-full text-sm border">

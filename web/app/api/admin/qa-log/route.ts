@@ -21,7 +21,9 @@ export async function GET(req: NextRequest) {
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(1, Math.floor(limitRaw)), 100) : 20;
 
   let qs = `select=*&order=run_at.desc&limit=${limit}`;
+  // fail 视图只含真异常 fail/error（no-data 不进失败视图）；no-data 独立筛（?status=no-data）
   if (status === 'fail') qs += '&status=in.(fail,error)';
+  else if (status === 'no-data') qs += '&status=eq.no-data';
 
   const r = await fetch(`${POSTGREST_URL}/qa_logs?${qs}`, { headers: H, cache: 'no-store' });
   if (!r.ok) {

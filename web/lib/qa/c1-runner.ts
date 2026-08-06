@@ -117,14 +117,17 @@ export async function runC1Checks(opts: C1RunnerOpts): Promise<CheckResult[]> {
       const ins = await db.from('qa_logs').insert([result]);
       if (ins.error) console.error('[c1-runner] qa_logs insert failed:', ins.error);
     } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      // 数据未到（parquet 未创建/无文件）→ no-data 独立预警，不混 fail/error（真异常=duckdb 不可用等）
+      const status: CheckResult['status'] = msg.includes('No files found') ? 'no-data' : 'error';
       const errResult: CheckResult = {
         run_id: runId,
         trigger,
         check_type: 'C1',
         check_name: src.name,
-        status: 'error',
+        status,
         diff: null,
-        detail: [{ error: String(e instanceof Error ? e.message : e) }],
+        detail: [{ error: msg }],
       };
       results.push(errResult);
       const ins = await db.from('qa_logs').insert([errResult]);

@@ -132,6 +132,24 @@ describe('runC1Checks', () => {
     expect(fetch).not.toHaveBeenCalled(); // No /compute on error
   });
 
+  it('no-data: runC1 throws No files found -> no-data（数据未到，非 error）', async () => {
+    vi.mocked(runC1).mockRejectedValue(new Error('duckdb: No files found that match the pattern ...'));
+
+    const results = await runC1Checks({
+      db: makeDb() as any,
+      duck: makeDuck() as any,
+      runId: 'test-run-nodata',
+      trigger: 'manual',
+      checks: ['C1:retail'],
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('no-data');
+    expect(results[0].diff).toBeNull();
+    expect((results[0].detail as any[])[0].error).toContain('No files found');
+    expect(fetch).not.toHaveBeenCalled(); // no-data 不触发 /compute 重算
+  });
+
   it('checks filter: C1:retail only checks retail source', async () => {
     vi.mocked(runC1).mockImplementation(async (src) => PASS(src.name));
 

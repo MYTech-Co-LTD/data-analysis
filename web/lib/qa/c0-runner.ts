@@ -42,7 +42,10 @@ function isoDaysBetween(from: string, to: string): string[] {
   return days;
 }
 
-/** 单源单日 count：API count vs parquet count（三源各自目录/日期格式）。 */
+/** 单源单日 count：API count vs parquet count（三源各自目录/日期格式）。
+ *  API count 与 duck count 分开 try：API 失败（网络/鉴权）→ apiFailed → error；
+ *  duck 抛 No files found（parquet 未创建）→ libMissing → no-data（数据未到，非漏采/非异常）。
+ *  其它 duck 错误（duckdb 不可用等）rethrow → 外层 catch 记 error，不误判 no-data。 */
 async function countForDay(
   src: DetailSource,
   task: any,
@@ -50,25 +53,43 @@ async function countForDay(
   companyId: string,
   dayIso: string,
   duck: (sql: string) => Promise<Record<string, unknown>[]>,
-): Promise<{ apiCount: number; libCount: number }> {
+): Promise<{ apiCount: number; libCount: number; apiFailed: boolean; libMissing: boolean }> {
   const dayCompact = dayIso.replace(/-/g, '');
   let apiCount = -1;
   let libCount = 0;
+  let apiFailed = false;
+  let libMissing = false;
   try {
     if (src.name === 'retail') {
       const bn: number[] = task.params?.branch_nums || [];
       apiCount = await countRetailApi(authToken, bn, bn.join(','), [dayIso, dayIso]);
-      libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/retail_detail/${companyId}/${dayIso}/all.parquet')`))[0]?.c as number || 0;
     } else if (src.name === 'delivery') {
       const dbn = Number(task.params?.distribution_branch_num) || 99;
       apiCount = await countDeliveryApi(authToken, dbn, String(dbn), `${dayIso} 00:00:00`, `${dayIso} 23:59:59`);
-      libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/${companyId}/${dayCompact}/all.parquet')`))[0]?.c as number || 0;
     } else {
       apiCount = await countWholesaleApi(authToken, '99', `${dayIso} 00:00:00`, `${dayIso} 23:59:59`);
+    }
+  } catch (e) {
+    apiFailed = true;
+    apiCount = -1;
+  }
+  try {
+    if (src.name === 'retail') {
+      libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/retail_detail/${companyId}/${dayIso}/all.parquet')`))[0]?.c as number || 0;
+    } else if (src.name === 'delivery') {
+      libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/${companyId}/${dayCompact}/all.parquet')`))[0]?.c as number || 0;
+    } else {
       libCount = (await duck(`SELECT COUNT(*) AS c FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/${companyId}/${dayCompact}/all.parquet')`))[0]?.c as number || 0;
     }
-  } catch (e) { apiCount = -1; }
-  return { apiCount, libCount };
+  } catch (e) {
+    const msg = String(e instanceof Error ? e.message : e);
+    if (msg.includes('No files found')) {
+      libMissing = true;
+    } else {
+      throw e;
+    }
+  }
+  return { apiCount, libCount, apiFailed, libMissing };
 }
 
 export async function runC0Checks(opts: C0RunnerOpts): Promise<CheckResult[]> {
@@ -103,10 +124,11 @@ export async function runC0Checks(opts: C0RunnerOpts): Promise<CheckResult[]> {
         for (const dayIso of isoDaysBetween(fromIso, toIso)) {
           const checkName = `${src.name}:${companyId}:${dayIso}`;
           let counts = await countForDay(src, task, authToken, companyId, dayIso, duck);
-          let r = await runC0(src, dayIso, counts.apiCount, counts.libCount);
+          let r = await runC0(src, dayIso, counts.apiCount, counts.libCount, { apiFailed: counts.apiFailed, libMissing: counts.libMissing });
 
           // C0 missing 自动补采：full 重采当日 → 单日 C0 收敛（≤3 retry，仿 c1-runner）。
           // 仅当源 count 取数正常且 verdict==='missing'（库<源）才补；dup-suspect/error 不动。
+          // no-data（数据未到，parquet 未创建）status 非 fail → 不触发补采（非漏采，补也白补）。
           if (autoBackfill && r.status === 'fail' && (r.detail as any[])?.[0]?.verdict === 'missing') {
             let retries = 0;
             while (r.status === 'fail' && retries < MAX_RETRIES && (r.detail as any[])?.[0]?.verdict === 'missing') {
@@ -116,7 +138,7 @@ export async function runC0Checks(opts: C0RunnerOpts): Promise<CheckResult[]> {
                 console.error('[c0-runner] backfill 失败:', e instanceof Error ? e.message : e);
               }
               counts = await countForDay(src, task, authToken, companyId, dayIso, duck);
-              r = await runC0(src, dayIso, counts.apiCount, counts.libCount);
+              r = await runC0(src, dayIso, counts.apiCount, counts.libCount, { apiFailed: counts.apiFailed, libMissing: counts.libMissing });
               retries++;
             }
           }

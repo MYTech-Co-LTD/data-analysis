@@ -75,7 +75,9 @@ export async function runQaChecks(opts: RunQaOpts): Promise<CheckResult[]> {
         await record('D1', src.name, 'pass', 0, null);
       }
     } catch (e) {
-      await record('D1', src.name, 'error', null, [{ error: String(e instanceof Error ? e.message : e) }]);
+      const msg = String(e instanceof Error ? e.message : e);
+      // 数据未到（parquet 未创建/无文件）→ no-data 独立预警，不混 fail/error（真异常=duckdb 不可用等）
+      await record('D1', src.name, msg.includes('No files found') ? 'no-data' : 'error', null, [{ error: msg }]);
     }
   }
 

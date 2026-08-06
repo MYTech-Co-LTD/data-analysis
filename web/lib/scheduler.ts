@@ -14,6 +14,7 @@ import { runServiceDownBucket, runCollectTokenBucket, runHourlyBucket, runDailyB
 import { runQaChecks } from './qa-runner';
 import { runC0Checks } from './qa/c0-runner';
 import { runC1Checks } from './qa/c1-runner';
+import { partitionQaResults } from './qa/alert';
 import detailSources from './qa/config/detail-sources.json';
 import { duckQuery } from './qa/duck';
 import { buildDayGlob } from './qa/d1';
@@ -257,11 +258,15 @@ async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFr
   if (!checks || checks.some((c) => c.startsWith('C0:'))) {
     results.push(...await runC0Checks({ client, duck, runId, trigger, checks, autoBackfill: true }));
   }
-  const failed = results.filter((r) => r.status !== 'pass');
+  // fail/error（真异常）与 no-data（数据未到）分开告警：no-data 不混入 fail/error 告警，走独立「数据未到」。
+  const { failed, noData } = partitionQaResults(results);
   if (failed.length) {
     await notifyWecom('⚠️ 每日数据质量巡检异常', `${failed.length}/${results.length} 项失败:\n${failed.slice(0, 10).map((r) => `${r.check_type}:${r.check_name} ${r.status}`).join('\n')}`).catch(() => {});
   }
-  console.log(`[scheduler] __qa_${trigger}: ${results.length} 检查, 失败 ${failed.length}`);
+  if (noData.length) {
+    await notifyWecom('⏳ 每日数据未到', `${noData.length} 项数据未到（源无数据/parquet 未创建）:\n${noData.slice(0, 10).map((r) => `${r.check_type}:${r.check_name}`).join('\n')}`).catch(() => {});
+  }
+  console.log(`[scheduler] __qa_${trigger}: ${results.length} 检查, 失败 ${failed.length}, 未到 ${noData.length}`);
   return results;
 }
 

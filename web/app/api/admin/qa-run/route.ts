@@ -6,6 +6,7 @@ import { requireAdmin } from '@/lib/admin-api-auth';
 import { runQaChecks } from '@/lib/qa-runner';
 import { runC0Checks } from '@/lib/qa/c0-runner';
 import { duckQuery } from '@/lib/qa/duck';
+import { partitionQaResults } from '@/lib/qa/alert';
 import { notifyWecom } from '@/lib/notify';
 import type { CheckResult } from '@/lib/qa/types';
 
@@ -45,11 +46,16 @@ export async function POST(req: NextRequest) {
   // C0 双向 count（共享执行器，route 与 scheduler 每日 job 共用）——需 token + 源 API，仅 web 上下文可跑
   results.push(...await runC0Checks({ client, duck, runId, trigger, checks }));
 
-  const failed = results.filter((r) => r.status !== 'pass');
+  // fail/error（真异常）与 no-data（数据未到）分开告警：no-data 不混入 fail/error 告警，走独立「数据未到」。
+  const { failed, noData } = partitionQaResults(results);
   if (failed.length) {
     await notifyWecom('⚠️ 数据质量巡检异常', `${failed.length}/${results.length} 项失败:\n${failed.slice(0, 15).map((r) => `${r.check_type}:${r.check_name} ${r.status} diff=${r.diff}`).join('\n')}`).catch(() => {});
-  } else {
+  }
+  if (noData.length) {
+    await notifyWecom('⏳ 数据未到', `${noData.length} 项数据未到（源无数据/parquet 未创建）:\n${noData.slice(0, 15).map((r) => `${r.check_type}:${r.check_name}`).join('\n')}`).catch(() => {});
+  }
+  if (!failed.length && !noData.length) {
     await notifyWecom('✅ 数据质量巡检通过', `${results.length} 项全部对齐`).catch(() => {});
   }
-  return NextResponse.json({ run_id: runId, total: results.length, failed_count: failed.length, results });
+  return NextResponse.json({ run_id: runId, total: results.length, failed_count: failed.length, no_data_count: noData.length, results });
 }

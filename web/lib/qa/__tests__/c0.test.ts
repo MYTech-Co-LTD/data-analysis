@@ -43,6 +43,33 @@ describe('runC0', () => {
     expect(C0_EPSILON).toBe(0);  // 分毫不差：精确匹配
   });
 
+  it('apiFailed: 源 API count 调用失败 → error（网络/鉴权真异常，非数据未到）', async () => {
+    const r = await runC0(src, '2026-07-28', -1, 0, { apiFailed: true });
+    expect(r.status).toBe('error');
+    expect(r.diff).toBeNull();
+    expect(r.detail![0]).toMatchObject({ verdict: 'error' });
+  });
+
+  it('no-data: 源 API 成功返回 0 + parquet 缺失(libMissing) → no-data（数据未到，独立预警）', async () => {
+    const r = await runC0(src, '2026-07-28', 0, 0, { libMissing: true });
+    expect(r.status).toBe('no-data');
+    expect(r.diff).toBeNull();
+    expect(r.detail![0]).toMatchObject({ verdict: 'no-data', day: '2026-07-28', api: 0, lib: 0 });
+  });
+
+  it('no-data: libMissing 时即使 api>0（parquet 缺失优先）→ no-data，不算 missing fail', async () => {
+    const r = await runC0(src, '2026-07-28', 120, 0, { libMissing: true });
+    expect(r.status).toBe('no-data');
+    expect(r.diff).toBeNull();
+    expect(r.detail![0]).toMatchObject({ verdict: 'no-data' });
+  });
+
+  it('apiFailed 优先于 libMissing：源取数失败且 parquet 缺失 → error（真异常优先）', async () => {
+    const r = await runC0(src, '2026-07-28', -1, 0, { apiFailed: true, libMissing: true });
+    expect(r.status).toBe('error');
+    expect(r.detail![0]).toMatchObject({ verdict: 'error' });
+  });
+
   it('missing: 库比源少 1 行也 fail（分毫不差）', async () => {
     const r = await runC0(src, '2026-07-28', 100, 99);
     expect(r.status).toBe('fail');

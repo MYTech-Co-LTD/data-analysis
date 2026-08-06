@@ -41,7 +41,7 @@ export interface CheckResult {
   trigger: QaTrigger;
   check_type: CheckType;
   check_name: string;
-  status: 'pass' | 'fail' | 'error';
+  status: 'pass' | 'fail' | 'error' | 'no-data';  // no-data：数据未到（源无数据/parquet 未创建），不与 fail/error 混告警
   diff: number | null;
   detail: unknown[] | null;
 }

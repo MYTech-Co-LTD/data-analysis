@@ -64,6 +64,31 @@ describe('runQaChecks', () => {
     expect(db.rpc).toHaveBeenCalledWith('qa_d2_dup_rows', { p_table: 'report_daily_item_sales', p_keys: ['system_book_code', 'item_num', 'biz_date'] });
   });
 
+  it('D1 数据未到：duck 抛 No files found → no-data（独立预警，非 error）', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => {
+      throw new Error('duckdb: No files found that match the pattern ...');
+    });
+    const results = await runQaChecks({ runId: 'test-nodata-d1', trigger: 'cron', db, duck, checks: ['D1:retail'] });
+    const d1 = results.find((r) => r.check_type === 'D1');
+    expect(d1?.status).toBe('no-data');
+    expect(d1?.diff).toBeNull();
+    expect((d1?.detail as any[])[0].error).toContain('No files found');
+    // 写库的是 no-data 行
+    const inserted = (db as any)._inserted.find((r: any) => r.check_type === 'D1');
+    expect(inserted?.status).toBe('no-data');
+  });
+
+  it('D1 数据未到：duck 抛其它错误（连接拒绝）→ error（真异常，不误判 no-data）', async () => {
+    const db = makeDb();
+    const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => {
+      throw new Error('duckdb: connection refused');
+    });
+    const results = await runQaChecks({ runId: 'test-err-d1', trigger: 'cron', db, duck, checks: ['D1:retail'] });
+    const d1 = results.find((r) => r.check_type === 'D1');
+    expect(d1?.status).toBe('error');
+  });
+
   it('D1 有重复行记 fail 且 diff=重复行数', async () => {
     const db = makeDb();
     const duck = vi.fn(async (_sql: string): Promise<Record<string, unknown>[]> => []);
