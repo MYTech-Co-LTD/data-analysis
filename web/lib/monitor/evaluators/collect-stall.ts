@@ -27,13 +27,75 @@ export function stallMinutesFor(cron: string): number {
   return 26 * 60;
 }
 
-// 全量扫描：返回所有陈旧任务（brief 接口，deps-only）。engine 的 evalCollectStall 复用它按 rule.target 过滤。
+// 中国时区当前小时（0-23）。与 collect.ts 的 +8h 口径一致（中国固定 UTC+8、无夏令时）：
+// 显式用 Intl Asia/Shanghai 取墙钟小时（不受服务器本地时区影响），失败兜底 +8h 平移。
+function chinaHourOf(date: Date): number {
+  try {
+    const h = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getHours();
+    if (!Number.isNaN(h)) return h;
+  } catch {
+    /* fallthrough */
+  }
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).getUTCHours();
+}
+
+// 活跃小时集合转人读文案：连续区间折叠为 `8-23`、单值 `3`、多段 `0,5,10,15,20`。
+function formatActiveHours(hours: Set<number>): string {
+  const sorted = [...hours].sort((a, b) => a - b);
+  if (sorted.length === 0) return '全天';
+  const ranges: string[] = [];
+  let start = sorted[0];
+  let prev = sorted[0];
+  for (let i = 1; i <= sorted.length; i++) {
+    const h = sorted[i];
+    if (h === prev + 1) {
+      prev = h;
+      continue;
+    }
+    ranges.push(start === prev ? `${start}` : `${start}-${prev}`);
+    start = h;
+    prev = h;
+  }
+  return ranges.join(',');
+}
+
+// 解析 cron 小时字段（第 2 字段）为活跃小时集合（0-23）。分钟级字段（*/5 等）不影响小时。
+// 支持：`*` → [0..23]；单值 `3` → [3]；区间 `8-23` → [8..23]；区间+步长 `8-23/2` → [8,10,...,22]；
+// 逗号列表 `1,3,5` → 各子项并集；脏 cron（缺字段/解析失败）→ 全天活跃（保守，避免误报停采窗口外）。
+export function cronActiveHours(cron: string): Set<number> {
+  const hourField = (cron ?? '').trim().split(/\s+/)[1];
+  if (!hourField || hourField === '*') return new Set(Array.from({ length: 24 }, (_, i) => i));
+  const hours = new Set<number>();
+  for (const part of hourField.split(',')) {
+    const [range, stepStr] = part.split('/');
+    const step = stepStr ? parseInt(stepStr, 10) : 1;
+    if (Number.isNaN(step) || step < 1) continue;
+    if (range === '*') {
+      for (let h = 0; h < 24; h += step) hours.add(h);
+    } else if (range.includes('-')) {
+      const [s, e] = range.split('-').map((x) => parseInt(x, 10));
+      if (Number.isNaN(s) || Number.isNaN(e)) continue;
+      for (let h = s; h <= e; h += step) hours.add(h);
+    } else {
+      const v = parseInt(range, 10);
+      if (!Number.isNaN(v)) hours.add(v);
+    }
+  }
+  return hours.size > 0 ? hours : new Set(Array.from({ length: 24 }, (_, i) => i));
+}
+
+// 全量扫描：返回所有任务的评估结果（brief 接口，deps-only）。engine 的 evalCollectStall 复用它按 rule.target 过滤。
+// cron 活跃窗口判定（修复夜间误报）：当前中国时区小时不在 cron 活跃小时 → 正常停采，返回 firing:false（不告警），
+// reason 标「停采窗口外」；活跃窗口内且 last_run_at 陈旧 > 阈值 → firing。
+// nowHour 仅测试注入（中国时区小时 0-23），缺省从 deps.now 推导。
 export async function collectStallEvaluator(
   deps: EvalDeps,
   thresholdOverrides: Record<string, number> = {},
+  nowHour?: number,
 ): Promise<CollectStallHit[]> {
   const tasks = await deps.getCollectTasks();
   const nowMs = deps.now.getTime();
+  const chinaHour = nowHour ?? chinaHourOf(deps.now);
   const hits: CollectStallHit[] = [];
 
   for (const t of tasks) {
@@ -42,6 +104,22 @@ export async function collectStallEvaluator(
     if (Number.isNaN(lastMs)) continue;
     const elapsedMinutes = Math.round((nowMs - lastMs) / 60000);
     const thresholdMinutes = thresholdOverrides[t.id] ?? stallMinutesFor(t.schedule_cron);
+
+    // 停采窗口外（如夜间 8-23 窗口外的 23:55-次日 8:00）：正常停采，不判定采集停
+    const activeHours = cronActiveHours(t.schedule_cron);
+    if (!activeHours.has(chinaHour)) {
+      hits.push({
+        firing: false,
+        reason: `停采窗口外（当前 ${chinaHour} 点，活跃 ${formatActiveHours(activeHours)} 点），属正常停采`,
+        taskId: t.id,
+        taskName: t.name,
+        elapsedMinutes,
+        thresholdMinutes,
+        lastRunAt: t.last_run_at,
+      });
+      continue;
+    }
+
     if (elapsedMinutes > thresholdMinutes) {
       hits.push({
         firing: true,
@@ -74,7 +152,8 @@ export const evalCollectStall: Evaluator = async (rule, deps): Promise<EvalResul
   const hit = hits.find((h) => h.taskId === taskId);
 
   return {
-    firing: !!hit,
+    // hit 可能是「停采窗口外」的非 firing 记录（reason 含停采窗口外），不能仅凭存在判定 firing
+    firing: hit?.firing === true,
     alert_key: alertKey,
     context: hit
       ? {
