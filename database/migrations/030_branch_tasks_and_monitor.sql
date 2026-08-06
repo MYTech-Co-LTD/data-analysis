@@ -4,12 +4,12 @@
 
 INSERT INTO collect_tasks (id, name, source_id, function_slug, schedule_cron, params, enabled) VALUES
  ('a0000000-0000-0000-0000-000000000004'::uuid, '乐檬-3120-门店档案采集',
-  'a0000000-0000-0000-0000-000000000001'::uuid, 'collect-branches', '0 4 * * *',
+  'a0000000-0000-0000-0000-000000000001'::uuid, 'collect-branches', '6 19 * * *',
   '{"task_type":"branches","company_id":3120,"page_size":200}'::jsonb, true),
  ('c0000000-0000-0000-0000-000000000004'::uuid, '乐檬-64188-门店档案采集',
-  'c0000000-0000-0000-0000-000000000001'::uuid, 'collect-branches', '30 4 * * *',
+  'c0000000-0000-0000-0000-000000000001'::uuid, 'collect-branches', '9 19 * * *',
   '{"task_type":"branches","company_id":64188,"page_size":200}'::jsonb, true)
-ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, params = EXCLUDED.params;
+ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, schedule_cron = EXCLUDED.schedule_cron, params = EXCLUDED.params;
 
 -- 门店采集失败告警（每日，consecutive=1）
 INSERT INTO monitor_rules (name, check_type, target, threshold, severity, template, suppress_window_seconds, enabled) VALUES

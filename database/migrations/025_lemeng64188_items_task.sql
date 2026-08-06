@@ -8,11 +8,12 @@ VALUES (
     '乐檬-64188-商品档案采集',
     'c0000000-0000-0000-0000-000000000001'::uuid,
     'collect-items',
-    '30 3 * * *',                                   -- 与 3120（0 3）错峰半小时
+    '3 19 * * *',                                   -- 每天 19:03（与 3120 商品档案 19:00 错峰 3 分钟）
     '{"task_type":"items","page_size":200,"branch_id":21170}'::jsonb,
     true
 ) ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
+    schedule_cron = EXCLUDED.schedule_cron,
     params = EXCLUDED.params;
 
 -- 64188 数据源 auth_config 补 branch_id（统一来源记录）

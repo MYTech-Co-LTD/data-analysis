@@ -47,14 +47,14 @@ VALUES (
     api_endpoint = EXCLUDED.api_endpoint,
     auth_config = EXCLUDED.auth_config;
 
--- 采集任务配置（每天凌晨 3:00）
+-- 采集任务配置（每天 19:00）
 INSERT INTO collect_tasks (id, name, source_id, function_slug, schedule_cron, params, enabled)
 VALUES (
     'a0000000-0000-0000-0000-000000000002'::uuid,
     '乐檬商品档案采集',
     'a0000000-0000-0000-0000-000000000001'::uuid,
     'collect-items',
-    '0 3 * * *',
+    '0 19 * * *',
     '{"task_type": "items", "page_size": 200, "branch_id": 28444}'::jsonb,
     true
 ) ON CONFLICT (id) DO UPDATE SET
