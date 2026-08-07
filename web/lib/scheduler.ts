@@ -945,9 +945,9 @@ function registerDimCustomerJob() {
 function registerDailyReconcileJob() {
   const JOB_KEY = "__daily_reconcile";
   if (scheduledJobs.has(JOB_KEY)) return;
-  // 每日 02:00 + 12:00 两次明细对账（P1b 晚到单检测提前）：晚落账单据过去只靠 02:00 兜底（滞后 24h+），
-  // 加午间一次把发现时间缩到 ~12h。executeTask(reconcile:true) 内部按源对最近 RECONCILE_DAYS 天，缺数自动 full 补采 + 触发 compute。
-  const CRON = "0 2,12 * * *";
+  // 每日 02:00/12:00/19:00 三次明细对账（P1b 晚到单检测提前）：晚落账单据过去只靠 02:00 兜底（滞后 24h+），
+  // 加密到午间+傍晚把发现时间缩到 ~几小时。executeTask(reconcile:true) 内部按源对最近 RECONCILE_DAYS 天，缺数自动 full 补采 + 触发 compute。
+  const CRON = "0 2,12,19 * * *";
   if (!cron.validate(CRON)) return;
   const job = cron.schedule(CRON, async () => {
     if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
@@ -974,7 +974,7 @@ function registerDailyReconcileJob() {
     }
   }, { timezone: "Asia/Shanghai" });
   scheduledJobs.set(JOB_KEY, job);
-  console.log("[scheduler] 注册每日02:00/12:00明细对账 (0 2,12 * * *, Asia/Shanghai)");
+  console.log("[scheduler] 注册每日02:00/12:00/19:00明细对账 (0 2,12,19 * * *, Asia/Shanghai)");
 }
 
 /**
