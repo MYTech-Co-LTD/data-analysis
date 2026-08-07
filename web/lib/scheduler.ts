@@ -320,6 +320,19 @@ async function runPostCollectQa(
 }
 
 /**
+ * 水位线日界重置：watermark.last_count 是单任务跨日计数器（date 字段存当天日期但从未被检查），
+ * 前一天的高水位（如 64188 的 5880）会挡住第二天低于它的当天增量——incremental 的
+ * `apiTotal <= watermark` 整天 skip，漏采当天数据（2026-08-07 品品甜当天 0 行即此 bug）。
+ * 修复：watermark.date !== 当天 → last_count 归 0（新一天重新起算）；同天用 Number() 强转，
+ * 避免 lemeng 返回的字符串总数（如 "5163"）与字符串水位线做字典序比较导致误判。
+ */
+function watermarkLastCountFor(params: any, today: string): number {
+  const wm = params.watermark || {};
+  if (wm.date !== today) return 0;
+  return Number(wm.last_count) || 0;
+}
+
+/**
  * 执行单个采集任务（含对账重试）
  * 根据 params.task_type 判断采集类型：
  *   - 'items' → 商品档案采集
@@ -362,8 +375,21 @@ async function executeTask(task: {
       return;
     }
 
-    // 2. 根据任务类型选择采集逻辑
-    const params = task.params || {};
+    // 2. 每次从 DB 重读任务 params（闭包快照的 task.params 会陈旧——cron 注册时快照的水位线
+    //    写回 DB 后永远不会被读到，导致水位线冻结在高位、当天增量整天 skip。必须重读最新 params）。
+    let params = task.params || {};
+    try {
+      const { data: fresh } = await client.database
+        .from('collect_tasks')
+        .select('params')
+        .eq('id', task.id)
+        .single();
+      if (fresh?.params) params = fresh.params;
+    } catch (e: any) {
+      console.error(`[scheduler] 任务 ${task.name}: 重读 params 失败，用传入快照`, e?.message ?? e);
+    }
+
+    // 3. 根据任务类型选择采集逻辑
 
     if (params.task_type === 'items') {
       // ===== 商品档案采集 =====
@@ -430,7 +456,7 @@ async function executeTask(task: {
       const today = getTodayChina();
       // 模式判定（同 retail：新一天/距上次全量≥55min/无水位线 → full；否则 incremental）
       const watermark = params.watermark || {};
-      const watermarkLastCount: number = watermark.last_count || 0;
+      const watermarkLastCount: number = watermarkLastCountFor(params, today);
       // 对账驱动：新一天对账前一日；同一天每小时对账当天；其余纯增量
       const companyId = decodeCompanyId(authToken);
       let mode: 'full' | 'incremental';
@@ -503,9 +529,12 @@ async function executeTask(task: {
       const finishedAt = new Date();
       const nowMs = finishedAt.getTime();
       const persistOk = !lastResult.error;
+      // 多日范围（full 补采 from!=to，如 02:00 reconcile 回溯 3 天）不写当天增量水位线：
+      // 否则把 3 天 apiTotal 存进 last_count，会挡住当天 incremental（当天单日总量 < 多日总量整天 skip）。
+      const isSingleDay = dates && String(dates.from).slice(0, 10) === String(dates.to).slice(0, 10);
       const newWatermark = {
         date: today,
-        last_count: persistOk ? lastResult.newApiTotal : watermarkLastCount,
+        last_count: persistOk ? (isSingleDay ? (Number(lastResult.newApiTotal) || 0) : 0) : watermarkLastCount,
         last_full_ts: (mode === 'full' && persistOk) ? nowMs : (watermark.last_full_ts || nowMs),
       };
       await client.database.from('collect_tasks').update({ last_run_at: finishedAt.toISOString(), params: { ...params, watermark: newWatermark } }).eq('id', task.id);
@@ -528,7 +557,7 @@ async function executeTask(task: {
       const limit = params.page_size || 200;
       const today = getTodayChina();
       const watermark = params.watermark || {};
-      const watermarkLastCount: number = watermark.last_count || 0;
+      const watermarkLastCount: number = watermarkLastCountFor(params, today);
       // 对账驱动：新一天对账前一日；同一天每小时对账当天；其余纯增量
       const companyId = decodeCompanyId(authToken);
       let mode: 'full' | 'incremental';
@@ -596,9 +625,12 @@ async function executeTask(task: {
       const finishedAt = new Date();
       const nowMs = finishedAt.getTime();
       const persistOk = !lastResult.error;
+      // 多日范围（full 补采 from!=to，如 02:00 reconcile 回溯 3 天）不写当天增量水位线：
+      // 否则把 3 天 apiTotal 存进 last_count，会挡住当天 incremental（当天单日总量 < 多日总量整天 skip）。
+      const isSingleDay = dates && String(dates.from).slice(0, 10) === String(dates.to).slice(0, 10);
       const newWatermark = {
         date: today,
-        last_count: persistOk ? lastResult.newApiTotal : watermarkLastCount,
+        last_count: persistOk ? (isSingleDay ? (Number(lastResult.newApiTotal) || 0) : 0) : watermarkLastCount,
         last_full_ts: (mode === 'full' && persistOk) ? nowMs : (watermark.last_full_ts || nowMs),
       };
       await client.database.from('collect_tasks').update({ last_run_at: finishedAt.toISOString(), params: { ...params, watermark: newWatermark } }).eq('id', task.id);
@@ -620,7 +652,7 @@ async function executeTask(task: {
 
     // 模式判定：新一天 / 距上次全量≥55min / 无水位线 → full（覆盖+核对）；否则 incremental（续采尾部）
     const watermark = params.watermark || {};
-    const watermarkLastCount: number = watermark.last_count || 0;
+    const watermarkLastCount: number = watermarkLastCountFor(params, today);
     // 对账驱动：新一天对账前一日(通过 incremental / 失败 full)；同一天每小时对账当天；其余纯增量
     const companyId = decodeCompanyId(authToken);
     let mode: 'full' | 'incremental';
@@ -703,9 +735,12 @@ async function executeTask(task: {
     const finishedAt = new Date();
     const nowMs = finishedAt.getTime();
     const persistOk = !lastResult.error;
+    // 多日范围（full 补采 from!=to，如 02:00 reconcile 回溯 3 天）不写当天增量水位线：
+    // 否则把 3 天 apiTotal 存进 last_count，会挡住当天 incremental（当天单日总量 < 多日总量整天 skip）。
+    const isSingleDay = Array.isArray(dates) && dates.length === 2 && dates[0] === dates[1];
     const newWatermark = {
       date: today,
-      last_count: persistOk ? lastResult.newApiTotal : watermarkLastCount,
+      last_count: persistOk ? (isSingleDay ? (Number(lastResult.newApiTotal) || 0) : 0) : watermarkLastCount,
       last_full_ts: (mode === 'full' && persistOk) ? nowMs : (watermark.last_full_ts || nowMs),
     };
     await client.database
