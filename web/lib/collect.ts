@@ -202,6 +202,31 @@ export async function countRetailApi(authToken: string, branchNums: number[], br
   return (countResult.ok && countResult.data?.code === 0) ? (countResult.data.result || 0) : -1;
 }
 
+// 拉取指定日期零售明细并求和（只读，不落库）——P2a 金额级源校验用。
+// C0 只对数量：若 sale_money 字段映射/口径错，会系统性差金额且无告警。此函数拿 API 真实金额合计与 parquet 对比。
+export async function sumRetailApi(
+  authToken: string,
+  branchNums: number[],
+  branchNumsStr: string,
+  dates: string[],
+  pageSize: number = 200,
+): Promise<{ count: number; sum: number }> {
+  const countResult = await callLemengApi(ENDPOINT_RETAIL_COUNT, authToken, buildBody(branchNums, dates, 1, pageSize), branchNumsStr);
+  if (!countResult.ok || countResult.data?.code !== 0) return { count: -1, sum: -1 };
+  const count = Number(countResult.data.result || 0);
+  if (count <= 0) return { count, sum: 0 };
+  let sum = 0;
+  const totalPages = Math.ceil(count / pageSize);
+  for (let page = 1; page <= totalPages; page++) {
+    const pr = await callLemengApi(ENDPOINT_RETAIL_DETAIL, authToken, buildBody(branchNums, dates, page, pageSize), branchNumsStr);
+    if (!pr.ok || pr.data?.code !== 0) continue; // 页失败跳过（count 对账已覆盖，金额校验容差兜底）
+    const recs = pr.data.result || [];
+    for (const r of recs) sum += Number(r.sale_money || 0);
+    if (recs.length < pageSize) break;
+  }
+  return { count, sum: Math.round(sum * 100) / 100 };
+}
+
 // ===== 单次采集 + 转换 =====
 export interface CollectResult {
   records: any[];

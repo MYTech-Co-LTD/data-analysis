@@ -4,7 +4,7 @@
 
 import cron, { ScheduledTask } from 'node-cron';
 import { createClient } from '@insforge/sdk';
-import { collectOnce, countRetailApi, decodeCompanyId, getYesterdayChina, getTodayChina, getDateOffsetChina, CollectResult, fetchWithTimeout, REQUEST_TIMEOUT } from './collect';
+import { collectOnce, countRetailApi, decodeCompanyId, getYesterdayChina, getTodayChina, getDateOffsetChina, CollectResult, fetchWithTimeout, REQUEST_TIMEOUT, sumRetailApi } from './collect';
 import { collectDeliveryOnce, countDeliveryApi, type DeliveryCollectResult } from './collect-delivery';
 import { collectWholesaleOnce, countWholesaleApi, type WholesaleCollectResult } from './collect-wholesale';
 import { collectItems, CollectItemsResult } from './collect-items';
@@ -977,6 +977,37 @@ function registerDailyReconcileJob() {
   console.log("[scheduler] 注册每日02:00/12:00/19:00明细对账 (0 2,12,19 * * *, Asia/Shanghai)");
 }
 
+// P2a 金额级源校验：完结日（昨日）API 金额 vs parquet 金额。
+// C0 只对数量（countposorderdetail 无金额汇总），若 sale_money 字段映射/口径错会系统性差金额且无告警。
+// 每日 09:07 源对账时跑一次：拉取零售源昨日明细求和（只读 sumRetailApi），与 parquet 对比，1% 容差。
+async function runSourceAmountCheck(client: any, yesterday: string): Promise<string[]> {
+  const alerts: string[] = [];
+  const { data: retailTasks } = await client.database.from('collect_tasks')
+    .select('id, source_id, params').eq('function_slug', 'collect-lemeng').eq('enabled', true);
+  for (const task of (retailTasks ?? []) as any[]) {
+    try {
+      const { data: cred } = await client.database.from('auth_credentials').select('credential_data').eq('source_id', task.source_id).single();
+      let token = '';
+      try { token = JSON.parse(cred?.credential_data || '{}').token || ''; } catch { /* ignore */ }
+      if (!token) continue;
+      const authToken = token.startsWith('Bearer ') ? token : 'Bearer ' + token;
+      const companyId = decodeCompanyId(authToken);
+      const bn: number[] = task.params?.branch_nums || [];
+      const api = await sumRetailApi(authToken, bn, bn.join(','), [yesterday, yesterday]);
+      if (api.count < 0) { console.warn(`[scheduler] P2a ${companyId} API金额取数失败`); continue; }
+      if (api.count <= 0) continue; // 当日源无数据
+      const parquetSum = await duckdbParquetSum(`lemeng/retail_detail/${companyId}/${yesterday}/all.parquet`, 'sale_money');
+      const diff = Math.round((parquetSum - api.sum) * 100) / 100;
+      const ok = Math.abs(diff) <= Math.max(1, api.sum * 0.01); // 1% 容差
+      console.log(`[scheduler] P2a 源金额 ${companyId} ${yesterday}: API=${api.sum} parquet=${parquetSum} 差=${diff} ${ok ? '✅' : '❌'}`);
+      if (!ok) alerts.push(`P2a ${companyId} ${yesterday}: API金额 ${api.sum} / parquet ${parquetSum} / 差 ${diff}`);
+    } catch (e: any) {
+      console.error(`[scheduler] P2a 源金额校验 ${task.id} 异常:`, e?.message ?? e);
+    }
+  }
+  return alerts;
+}
+
 /**
  * 每日源对账（09:07）：pipeline 表 SUM vs DuckDB parquet SUM，差>1元告警。
  * 确保 compute 表与 parquet 源精确一致，任何计算/去重 bug 都能自动发现。
@@ -1017,6 +1048,8 @@ function registerDailySourceReconcileJob() {
         if (!ok) alerts.push(`${c.metric}: 表 ${tableSum} / parquet ${parquetSum} / 差 ${diff}`);
         console.log(`[scheduler] 对账 ${c.metric}: 表=${tableSum} parquet=${parquetSum} 差=${diff} ${ok ? '✅' : '❌'}`);
       }
+      // P2a 金额级源校验：API 金额 vs parquet 金额（C0 只对数量，抓 sale_money 字段口径错）
+      alerts.push(...(await runSourceAmountCheck(client, yesterday).catch((e: any) => { console.error('[scheduler] P2a 源金额校验异常:', e?.message ?? e); return [] as string[]; })));
       if (alerts.length) await notifyWecom('⚠️ 每日源对账异常', `**日期**: ${yesterday}\n${alerts.join('\n')}`);
       else console.log(`[scheduler] ✅ 每日源对账全通过: ${yesterday}`);
     } catch (e: any) { console.error('[scheduler] 每日源对账异常:', e?.message ?? e); }
