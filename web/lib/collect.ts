@@ -264,15 +264,19 @@ export async function collectOnce(
   // ===== 分页拉取（串行 + 随机间隔，模仿人避免被封锁；以 records>=apiTotal 判定结束）=====
   const totalPages = Math.ceil(result.apiTotal / pageSize);
   let startPage = 1;
-  // 增量模式：总数未超水位线 → 无新增跳过；否则从水位线页（重叠 1 页兜底边界）续采尾部
+  // 增量模式：总数未超水位线 → 无新增跳过；否则从第 1 页全量拉取。
+  // 实测 2026-08-07：retail 的 findposorderdetail 分页按 branch+order_no 排序，**不是全局按时间**——
+  // 新订单落在前面 branch 的单号段就出现在前几页，旧的"从水位线页续采尾部"取不到 → 当天 parquet
+  // 与 API 差 ~5%（64188 差 ~200 行/3120 差 ~490 行，full 补采 6332=API 6326 分毫不差）。
+  // 全量拉取 + /merge 去重保证与源一致；水位线只剩"count 没涨就跳过"的省 API 作用。
   if (mode === 'incremental') {
     if (result.apiTotal <= watermarkLastCount) {
       console.log(`[collect] Incremental: apiTotal ${result.apiTotal} <= watermark ${watermarkLastCount}, no new data, skip`);
       result.skipped = true;
       return result;
     }
-    startPage = Math.max(1, Math.floor(watermarkLastCount / pageSize));
-    console.log(`[collect] Incremental: resume from page ${startPage} (watermark ${watermarkLastCount}, total ${result.apiTotal})`);
+    startPage = 1;
+    console.log(`[collect] Incremental: 全量拉取 (total ${result.apiTotal})`);
   }
   const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
   const randDelay = () => 800 + Math.floor(Math.random() * 1500); // 0.8~2.3秒随机间隔，模仿人避免高并发被封锁
