@@ -945,12 +945,15 @@ function registerDimCustomerJob() {
 function registerDailyReconcileJob() {
   const JOB_KEY = "__daily_reconcile";
   if (scheduledJobs.has(JOB_KEY)) return;
-  const CRON = "0 2 * * *";
+  // 每日 02:00 + 12:00 两次明细对账（P1b 晚到单检测提前）：晚落账单据过去只靠 02:00 兜底（滞后 24h+），
+  // 加午间一次把发现时间缩到 ~12h。executeTask(reconcile:true) 内部按源对最近 RECONCILE_DAYS 天，缺数自动 full 补采 + 触发 compute。
+  const CRON = "0 2,12 * * *";
   if (!cron.validate(CRON)) return;
   const job = cron.schedule(CRON, async () => {
     if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return;
     try {
-      console.log("[scheduler] ⏰ 每日02:00 明细对账触发（3天窗口）");
+      const hour = new Date().getHours();
+      console.log(`[scheduler] ⏰ 每日${String(hour).padStart(2, '0')}:00 明细对账触发（3天窗口）`);
       const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
       const { data: allTasks, error } = await client.database.from("collect_tasks")
         .select("id, name, source_id, function_slug, schedule_cron, params")
@@ -961,9 +964,9 @@ function registerDailyReconcileJob() {
       const tasks = (allTasks ?? []).filter((t: any) => RECONCILE_SLUGS.includes(t.function_slug));
       for (const task of tasks) {
         try { await executeTask(task, { reconcile: true }); }
-        catch (e: any) { console.error(`[scheduler] 02:00对账 ${task.name} 异常:`, e?.message ?? e); }
+        catch (e: any) { console.error(`[scheduler] ${String(hour).padStart(2, '0')}:00对账 ${task.name} 异常:`, e?.message ?? e); }
       }
-      console.log("[scheduler] 每日02:00 明细对账完成");
+      console.log(`[scheduler] 每日${String(hour).padStart(2, '0')}:00 明细对账完成`);
     } catch (e: any) {
       console.error("[scheduler] 每日对账异常:", e?.message ?? e);
     } finally {
@@ -971,7 +974,7 @@ function registerDailyReconcileJob() {
     }
   }, { timezone: "Asia/Shanghai" });
   scheduledJobs.set(JOB_KEY, job);
-  console.log("[scheduler] 注册每日02:00明细对账 (0 2 * * *, Asia/Shanghai)");
+  console.log("[scheduler] 注册每日02:00/12:00明细对账 (0 2,12 * * *, Asia/Shanghai)");
 }
 
 /**
