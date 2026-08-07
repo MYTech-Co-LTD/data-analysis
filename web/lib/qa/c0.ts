@@ -12,6 +12,9 @@ export interface C0Flags {
   apiFailed?: boolean;
   /** parquet 缺失（duck 抛 No files found）→ 数据未到 no-data */
   libMissing?: boolean;
+  /** 当天粗粒度健康检查：lib 跟随 api（≥50%）即 pass，仅大偏差（结构性损坏）才 fail，且不触发 autoBackfill。
+   *  当天源在持续增长，ε=0 精确匹配必误报（采集后窗口竞态）；精确对账交给次日完结日 C0。 */
+  coarse?: boolean;
 }
 
 export async function runC0(
@@ -34,6 +37,16 @@ export async function runC0(
     // 源 API 成功返回 0（当日源无数据）但 parquet 未创建 → 数据未到，独立 no-data（不触发补采/不混 fail 告警）
     status = 'no-data';
     detail = [{ day, api: apiN, lib: libN, verdict: 'no-data', reason: 'parquet not found' }];
+  } else if (flags?.coarse) {
+    // 当天粗粒度健康检查：lib 跟随 api（≥ 50%）即视为健康；仅大偏差（结构性损坏，
+    // 如采集整日 0 行而源在涨）才 fail。小偏差是当天流式数据的正常竞态，不算漏采。
+    if (apiN > 0 && libN < apiN * 0.5) {
+      status = 'fail';
+      detail = [{ day, api: apiN, lib: libN, verdict: 'gross-missing' }];
+      diff = libN - apiN;
+    } else {
+      diff = 0;
+    }
   } else if (libN !== apiN) {
     status = 'fail';
     const verdict = libN < apiN ? 'missing' : 'dup-suspect';

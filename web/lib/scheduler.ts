@@ -14,6 +14,7 @@ import { runServiceDownBucket, runCollectTokenBucket, runHourlyBucket, runDailyB
 import { runQaChecks } from './qa-runner';
 import { runC0Checks } from './qa/c0-runner';
 import { runC1Checks } from './qa/c1-runner';
+import { runProgressGuard } from './qa/progress-guard';
 import { partitionQaResults } from './qa/alert';
 import detailSources from './qa/config/detail-sources.json';
 import { duckQuery } from './qa/duck';
@@ -272,7 +273,8 @@ async function runDailyQa(trigger: 'cron' | 'collect', checks?: string[], dateFr
 
 /**
  * 采集后即时 QA（三源共用）：D1+D2 去重守护 + C1 明细↔聚合对账 + C0 源API count↔明细 count（受影响源当日）。
- *  C0 用当日单日窗口（补每日 09:15 盲区）且 autoBackfill=true（missing → full 重采当日收敛 ≤3）。
+ *  C0 用当日单日窗口 + coarseToday（粗粒度健康检查，不 autoBackfill，避免当天流式增长触发反复 full 重采）；
+ *  C6 采集无进展守卫（仅零售任务）兜"任务在跑但 0 行、源在涨"的结构性损坏，立即告警。
  *  QA 失败只记日志不阻断采集（parquet 已落，采集是主任务）。
  */
 async function runPostCollectQa(
@@ -309,11 +311,29 @@ async function runPostCollectQa(
       const c1RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       await runC1Checks({ db: c1Db, duck: c1Duck, runId: c1RunId, trigger: 'collect', checks: [`C1:${src.name}`], window: { from: todayIso, to: todayIso } });
     } catch (e: any) { console.error('[scheduler] 采集后 C1 失败:', e?.message ?? e); }
-    // C0 源API count ↔ 明细 count（受影响源当日单日，补每日 09:15 盲区；missing 自动 full 补采收敛 ≤3）
+    // C0 源API count ↔ 明细 count：当天窗口用粗粒度健康检查（coarseToday，lib≥50% api 即 pass），
+    // 不触发 autoBackfill——当天源持续增长，full 重采移动目标无意义且反复打乐檬 API；
+    // 精确对账+补采交给每日 09:15 完结日窗口（coarseToday 不传）。
     try {
       const c0RunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      await runC0Checks({ client, duck: (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql, REQUEST_TIMEOUT), runId: c0RunId, trigger: 'collect', checks: [`C0:${src.name}`], window: { from: todayIso, to: todayIso }, autoBackfill: true });
+      await runC0Checks({ client, duck: (sql: string) => duckQuery(DUCKDB_URL, AGENT_API_KEY!, sql, REQUEST_TIMEOUT), runId: c0RunId, trigger: 'collect', checks: [`C0:${src.name}`], window: { from: todayIso, to: todayIso }, autoBackfill: false, coarseToday: true });
     } catch (e: any) { console.error('[scheduler] 采集后 C0 失败:', e?.message ?? e); }
+    // C6 采集无进展守卫（仅 3120/64188 销售明细 collect-lemeng）：任务在跑但连续 30 分钟 0 行、
+    // 同时源 api_total 在增长 → 结构性损坏（水位线/查询失效），立即告警，不等次日对账。
+    // 只在 fail 时写 qa_logs（健康守卫不刷 pass 行，qa_logs 每 5 分钟已有很多 C0/C1 记录）。
+    try {
+      const pgRunId = `collect-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const pg = await runProgressGuard({ db: client.database, task, runId: pgRunId, trigger: 'collect' });
+      if (pg.result.status === 'fail') {
+        await client.database.from('qa_logs').insert([pg.result]);
+        if (pg.notify) {
+          await notifyWecom(
+            '⚠️ 采集无进展（当天漏采风险）',
+            `**任务**: ${task.name}\n${(pg.result.detail as any[])?.[0]?.reason || '连续 30 分钟 0 行但源在增长'}`
+          ).catch(() => {});
+        }
+      }
+    } catch (e: any) { console.error('[scheduler] 采集后 C6 无进展守卫失败:', e?.message ?? e); }
   } catch (e: any) {
     console.error('[scheduler] 采集后 QA 异常:', e?.message ?? e);
   }
