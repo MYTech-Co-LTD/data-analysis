@@ -163,12 +163,12 @@ export function WholesaleDailyTable({
   }
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <div className="rounded-lg border border-slate-200 bg-white p-4 md:h-full md:flex md:flex-col">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-700">{title}</h3>
         <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} isMobile={isMobile} />
       </div>
-      <div ref={tableRef} className="overflow-x-auto">
+      <div ref={tableRef} className="overflow-x-auto md:flex-1 md:min-h-0 md:overflow-auto">
         <table className="w-full text-xs tabular-nums">
           <thead className="bg-slate-50 text-slate-500">
             <tr className="sticky top-0 z-10 bg-slate-50">

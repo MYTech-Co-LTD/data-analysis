@@ -40,6 +40,6 @@ export function marginAchievement(margin: number | null, target = 0.12): number 
 // 用于比率对比固定目标（毛利率 vs 12%、配销比 vs 配销比目标）。
 // 区别于现有 KPI 卡/表的相对进度 rateColor(rate, progress)。
 export function absoluteThreeColor(rate: number | null): string {
-  if (rate == null) return "text-slate-300";
-  return rate >= 1 ? "text-green-600" : rate >= 0.8 ? "text-amber-600" : "text-red-600";
+  if (rate == null) return 'text-slate-300';
+  return rate >= 1 ? 'text-green-600' : rate >= 0.8 ? 'text-amber-600' : 'text-red-600';
 }
