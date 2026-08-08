@@ -84,3 +84,15 @@ describe('runC0', () => {
     expect(r.detail).toBeNull();
   });
 });
+
+  it('coarse + merge-accumulation: lib>api → fail（/merge 累积，增量只追加不删除，parquet>count 必异常）', async () => {
+    const r = await runC0(src, '2026-08-08', 14762, 14792, { coarse: true });
+    expect(r.status).toBe('fail');
+    expect(r.diff).toBe(30);
+    expect((r.detail as any[])[0].verdict).toBe('merge-accumulation');
+  });
+
+  it('coarse 正常增量: lib<api（还没追完）→ pass（不误报）', async () => {
+    const r = await runC0(src, '2026-08-08', 10000, 9000, { coarse: true });
+    expect(r.status).toBe('pass');
+  });

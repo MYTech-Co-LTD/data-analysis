@@ -40,9 +40,16 @@ export async function runC0(
   } else if (flags?.coarse) {
     // 当天粗粒度健康检查：lib 跟随 api（≥ 50%）即视为健康；仅大偏差（结构性损坏，
     // 如采集整日 0 行而源在涨）才 fail。小偏差是当天流式数据的正常竞态，不算漏采。
+    // 但 lib > api（parquet 行数超过源）一定异常——增量只追加不删除，
+    // 正常 parquet ≤ lemeng count（还没追完）；parquet > count 说明 /merge 累积了
+    // lemeng 已删除的行（退款重开/冲正致 key 变化），精确告警不误报（实测坑 2026-08-08：+30 行/2967元）。
     if (apiN > 0 && libN < apiN * 0.5) {
       status = 'fail';
       detail = [{ day, api: apiN, lib: libN, verdict: 'gross-missing' }];
+      diff = libN - apiN;
+    } else if (libN > apiN && apiN > 0) {
+      status = 'fail';
+      detail = [{ day, api: apiN, lib: libN, verdict: 'merge-accumulation' }];
       diff = libN - apiN;
     } else {
       diff = 0;
