@@ -111,9 +111,12 @@ fi
 
 # 由 SSO_DOMAIN 生成 nginx sso.conf（Casdoor SSO 反代 → casdoor:8000）。
 # 机制与 server.conf 相同：模板 + sed → user_conf.d/，nginx-certbot 镜像自动签发证书。
-: "${SSO_DOMAIN:=sso.shanhaiyiguo.com}"
-sed "s/__SSO_DOMAIN__/$SSO_DOMAIN/g" nginx/sso.conf.tpl > nginx/user_conf.d/sso.conf
-echo "  ✅ nginx SSO 配置已生成（server_name ${SSO_DOMAIN} → casdoor:8000）"
+if [ -n "${SSO_DOMAIN:-}" ]; then
+  sed "s/__SSO_DOMAIN__/$SSO_DOMAIN/g" nginx/sso.conf.tpl > nginx/user_conf.d/sso.conf
+  echo "  ✅ nginx SSO 配置已生成（server_name ${SSO_DOMAIN} → casdoor:8000）"
+else
+  echo "  ⚠ SSO_DOMAIN 未设置，nginx sso.conf 未生成（Casdoor SSO 不可达）" >&2
+fi
 
 # 起 web（用本地刚 build 的镜像，--force-recreate 确保用新镜像）+ nginx（首次自动 pull xuanyuan.run 公共镜像）+ duckdb
 $COMPOSE up -d --force-recreate web nginx duckdb

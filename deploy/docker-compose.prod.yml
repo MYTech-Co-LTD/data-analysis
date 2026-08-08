@@ -117,9 +117,14 @@ services:
       # 企微可信域名验证文件（WW_verify_*.txt）
       - ./nginx/verify:/etc/nginx/verify:ro
     depends_on:
-      - web
-      - insforge
-      - openclaw
+      web:
+        condition: service_started
+      insforge:
+        condition: service_started
+      openclaw:
+        condition: service_started
+      casdoor:
+        condition: service_healthy
     networks:
       - insforge-network
 
