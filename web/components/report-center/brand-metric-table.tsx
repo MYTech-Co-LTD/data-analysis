@@ -21,6 +21,7 @@ import { TotalAnomalyBadge } from "./data-guard-badges";
 import { MaskedBadge } from "./masked-badge";
 import { ModuleError, formatModuleError } from "./module-error";
 import { useCanSeeCost } from "./use-can-see-cost";
+import { actualRatio, formatRatio } from "@/lib/report-center/ratio";
 
 interface BrandMetricTableProps {
   result: GetterResult<BrandMetricRow>;
@@ -85,6 +86,7 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
         deliveryAmount > 0 && deliveryProfit != null
           ? deliveryProfit / deliveryAmount
           : null,
+      deliverySaleRatio: saleAmount > 0 ? deliveryAmount / saleAmount : null,
     };
   }, [detailRows]);
   const totalAnomaly = useMemo(() => {
@@ -96,7 +98,13 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
       numMatch(frontTotals.deliveryAmount, vr.delivery_amount, 1, amountsClose) &&
       numMatch(frontTotals.deliveryProfit, vr.delivery_profit, 1, amountsClose) &&
       numMatch(frontTotals.saleRate, vr.sale_rate, 1e-3, ratesClose) &&
-      numMatch(frontTotals.deliveryMargin, vr.delivery_margin, 1e-3, ratesClose)
+      numMatch(frontTotals.deliveryMargin, vr.delivery_margin, 1e-3, ratesClose) &&
+      numMatch(
+        frontTotals.deliverySaleRatio,
+        vr.sale_amount > 0 ? vr.delivery_amount / vr.sale_amount : null,
+        1e-3,
+        ratesClose,
+      )
     );
   }, [rows, detailRows, frontTotals]);
 
@@ -107,6 +115,7 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
       "销售金额",
       "销售完成率",
       "配送金额",
+      "配销比",
       "配送毛利",
       "配送毛利率",
     ];
@@ -118,6 +127,7 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
       r.sale_amount,
       r.sale_rate == null ? "—" : `${(r.sale_rate * 100).toFixed(1)}%`,
       r.delivery_amount,
+      formatRatio(actualRatio(r.delivery_amount, r.sale_amount)),
       r.delivery_profit == null ? "—" : r.delivery_profit,
       r.delivery_margin == null ? "—" : `${(r.delivery_margin * 100).toFixed(1)}%`,
     ]);
@@ -166,6 +176,7 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
               <th className="px-3 py-2 text-right font-medium">销售金额</th>
               <th className="px-3 py-2 text-right font-medium">销售完成率</th>
               <th className="px-3 py-2 text-right font-medium">配送金额</th>
+              <th className="px-3 py-2 text-right font-medium">配销比</th>
               <th className="px-3 py-2 text-right font-medium">
                 配送毛利{costMasked && <MaskedBadge />}
               </th>
@@ -177,7 +188,7 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
           <tbody className="divide-y divide-slate-100">
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-8 text-center text-slate-400">
+                <td colSpan={8} className="px-3 py-8 text-center text-slate-400">
                   暂无品牌数据
                 </td>
               </tr>
@@ -222,6 +233,9 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
                   </td>
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryAmount, "text-slate-700")}`} title={suspiciousTitle(s.deliveryAmount)}>
                     {fmtCurrency(r.delivery_amount)}
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousMargin(actualRatio(r.delivery_amount, r.sale_amount)), "text-slate-700")}`} title={suspiciousTitle(isSuspiciousMargin(actualRatio(r.delivery_amount, r.sale_amount)))}>
+                    {formatRatio(actualRatio(r.delivery_amount, r.sale_amount))}
                   </td>
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryProfit, "text-slate-700")}`} title={suspiciousTitle(s.deliveryProfit)}>
                     {fmtCurrency(r.delivery_profit)}
