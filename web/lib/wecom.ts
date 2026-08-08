@@ -71,6 +71,6 @@ export function buildCasdoorAuthUrl(
     scope: "openid profile",
     state,
   });
-  if (provider) params.set("provider", provider); // Task 5 Step 4 验证支持则用
+  if (provider) params.set("provider_hint", provider); // Casdoor 预选参数名是 provider_hint(实测 Task 6,非 provider)
   return `${issuer}/login/oauth/authorize?${params.toString()}`;
 }
