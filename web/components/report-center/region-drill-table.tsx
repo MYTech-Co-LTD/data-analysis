@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 import type { GetterResult } from "@/lib/report-center/types";
-import { actualRatio, targetRatio, formatRatio } from "@/lib/report-center/ratio";
+import { actualRatio, targetRatio, ratioAchievement, formatRatio, absoluteThreeColor } from "@/lib/report-center/ratio";
 import {
   isSuspiciousAmount,
   isSuspiciousRate,
@@ -148,7 +148,7 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
       { label: "剩余日均销售目标", value: fmtCurrency(d.remaining_daily_sale_target), color: suspiciousClass(isSuspiciousAmount(d.remaining_daily_sale_target), "text-slate-800") },
       { label: "剩余日均配送目标", value: fmtCurrency(d.remaining_daily_delivery_target), color: suspiciousClass(isSuspiciousAmount(d.remaining_daily_delivery_target), "text-slate-800") },
       { label: "配销比目标", value: formatRatio(targetRatio(d.delivery_target, d.sale_target)), color: suspiciousClass(isSuspiciousMargin(targetRatio(d.delivery_target, d.sale_target)), "text-slate-800") },
-      { label: "配销比", value: formatRatio(actualRatio(d.delivery_actual, d.sale_actual)), color: suspiciousClass(isSuspiciousMargin(actualRatio(d.delivery_actual, d.sale_actual)), "text-slate-800") },
+      { label: "配销比", value: formatRatio(actualRatio(d.delivery_actual, d.sale_actual)), color: suspiciousClass(isSuspiciousMargin(actualRatio(d.delivery_actual, d.sale_actual)), absoluteThreeColor(ratioAchievement(d.delivery_actual, d.sale_actual, d.delivery_target, d.sale_target))) },
     ];
   }
 
@@ -261,7 +261,7 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.remainingSale, "text-slate-700")}`} title={suspiciousTitle(s.remainingSale)}>{fmtCurrency(node.data.remaining_daily_sale_target)}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.remainingDelivery, "text-slate-700")}`} title={suspiciousTitle(s.remainingDelivery)}>{fmtCurrency(node.data.remaining_daily_delivery_target)}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.ratioTarget, "text-slate-400")}`} title={suspiciousTitle(s.ratioTarget)}>{formatRatio(targetRatio(node.data.delivery_target, node.data.sale_target))}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.ratioActual, "text-slate-700")}`} title={suspiciousTitle(s.ratioActual)}>{formatRatio(actualRatio(node.data.delivery_actual, node.data.sale_actual))}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.ratioActual, absoluteThreeColor(ratioAchievement(node.data.delivery_actual, node.data.sale_actual, node.data.delivery_target, node.data.sale_target)))}`} title={suspiciousTitle(s.ratioActual)}>{formatRatio(actualRatio(node.data.delivery_actual, node.data.sale_actual))}</td>
                   </tr>
                 );
               })}
