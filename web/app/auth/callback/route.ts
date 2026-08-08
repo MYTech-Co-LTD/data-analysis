@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
-import { exchangeWecomCode } from "@/lib/wecom";
+import { exchangeCasdoorCode } from "@/lib/wecom";
 
 /**
- * 企微 OAuth 回调
+ * Casdoor OIDC 回调
  * state 参数格式：URL 编码的目标路径（如 /reports/123）
+ *
+ * 流程：Casdoor authorize 回跳带 code → 调 wecom-oidc-callback function
+ * 换 PostgREST JWT → 写 cookie（middleware + PostgREST 消费，RLS 依赖）。
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -21,13 +24,16 @@ export async function GET(req: Request) {
   const proto = req.headers.get("x-forwarded-proto") || "https";
   const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
   const origin = `${proto}://${host}`;
+  // redirect_uri 必须与浏览器跳转 Casdoor 时用的一致（env 优先，回退到当前 origin）。
+  const redirectUri =
+    process.env.NEXT_PUBLIC_CASDOOR_REDIRECT_URI || `${origin}/auth/callback`;
 
   const login = (err: string) =>
     NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(err)}`, origin));
 
   if (!code) return login("missing_code");
 
-  const { data, error } = await exchangeWecomCode(code);
+  const { data, error } = await exchangeCasdoorCode(code, redirectUri);
   if (error || !data?.ok || !data.access_token) {
     return login(String((data as any)?.error ?? error ?? "exchange_failed"));
   }
