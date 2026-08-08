@@ -47,6 +47,10 @@
 │  │  Agent                                                              │   │
 │  │  ├── openclaw（18789）       → 智能助手 + 自然语言查询              │   │
 │  │                                                                     │   │
+│  │  统一身份（2026-08-08，详见 §6）                                       │   │
+│  │  ├── casdoor（8000）          → 统一身份 IdP（SSO，复用 postgres）  │   │
+│  │                                  sso.shanhaiyiguo.com                │   │
+│  │                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -59,7 +63,7 @@
 │  │  ├── 饿了么 API               → 待接入                              │   │
 │  │                                                                     │   │
 │  │  企业微信                                                           │   │
-│  │  ├── OAuth                    → 用户登录                            │   │
+│  │  ├── OAuth → Casdoor(WeCom provider) → 用户登录（身份层，§6.1）     │   │
 │  │  ├── 通讯录 API               → 部门/用户同步                       │   │
 │  │  └── 消息推送                 → 告警通知                            │   │
 │  │                                                                     │   │
@@ -550,37 +554,51 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 ## 六、鉴权系统
 
-### 6.1 登录流程
+### 6.1 登录流程（身份/权限分层，2026-08-08 架构变更）
+
+> **核心原则——身份层与数据权限层分离**：
+> - **身份层（Casdoor 统一）**：Casdoor（`sso.shanhaiyiguo.com`，独立子域名，复用现有 postgres）作为统一身份 IdP，持有企微 WeCom provider，负责"这人是谁（`wecom_id`）+ SSO 会话"。后续每接一个系统只需在 Casdoor 注册一个 OIDC client，不重复对接企微 API。
+> - **数据权限层（data-analysis 自签）**：data-analysis 拿到 `wecom_id` 后，自查本地 `org_users` / `get_user_perms`（`departments`、`branch_nums`、`can_see_cost`），**自签 PostgREST JWT**（复用现有 `signJwt` + `JWT_SECRET`）。
+> - **零改动**：`JWT_SECRET`、PostgREST 验签、PostgreSQL RLS 策略、权限表全部不变。这些是 data-analysis 特有的细粒度数据权限（非标准身份字段，塞不进任何标准 IdP 的 token），故必须保留在自签 JWT 里。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                                                                         │
-│  用户访问                                                                │
+│  身份层（Casdoor，sso.shanhaiyiguo.com）                                  │
+│  用户访问 → middleware 检查 cookie，无 → 跳 Casdoor /authorize            │
+│  Casdoor 检查自身 SSO 会话：                                             │
+│  ├── 有会话 → 静默回调（不再碰企微，跨系统 SSO 体现）                     │
+│  └── 无会话 → 跳企微 WeCom provider：                                    │
+│        ├── 企微内（Silent / snsapi_base 静默）                           │
+│        └── PC 外（Normal / 扫码）                                        │
+│      → Casdoor 建/更用户（wecom_id）→ 建 Casdoor 会话                     │
+│  → 回调 data.shanhaiyiguo.com/auth/callback?code=<Casdoor code>          │
 │       │                                                                 │
 │       ▼                                                                 │
-│  判断环境                                                                │
-│  ├── 企微环境 → 静默 OAuth                                               │
-│  ├── 浏览器 → 扫码登录                                                   │
-│       │                                                                 │
-│       ▼                                                                 │
-│  wecom-oauth function                                                    │
-│  ├── 企微 code → userid                                                  │
-│  ├── upsert org_users                                                    │
-│  ├── 签 JWT（含 departments）                                            │
+│  数据权限层（data-analysis 自签 JWT）                                    │
+│  web callback → functions/wecom-oidc-callback：                         │
+│  ├── Casdoor code → /token → /userinfo（sub=wecom_id）                  │
+│  ├── upsert org_users                                                   │
+│  ├── 查 get_user_perms（branch_nums / can_see_cost 等）                 │
+│  └── 自签 PostgREST JWT（现状 claims 结构 + JWT_SECRET，不变）           │
 │       │                                                                 │
 │       ▼                                                                 │
 │  callback 页面                                                           │
-│  ├── 写 httpOnly cookie                                                  │
+│  ├── 写 httpOnly cookie（insforge_access_token）                        │
 │  └── 写 localStorage（userid 展示）                                      │
 │       │                                                                 │
 │       ▼                                                                 │
-│  middleware                                                              │
-│  ├── 检查 cookie                                                         │
-│  ├── 无 → 重定向 /login                                                  │
-│  ├── 有 → 继续访问                                                        │
-│                                                                         │
+│  middleware 检查 cookie → 有则继续访问                                    │
+│  后续 PostgREST 请求：验 JWT_SECRET（不变）→ RLS（不变）                  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+**WeCom provider 双模式**（Casdoor provider 级 `method` 是单值，故配两个 provider 都指向 App A）：
+- `wecom_silent`（Silent）：企微内静默（`snsapi_base`）。App A 登录凭证（`WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET`）已挪入 Casdoor 此 provider，`functions/wecom-oauth` 的登录职责由 `functions/wecom-oidc-callback` 取代。
+- `wecom_scan`（Normal）：PC 外部扫码。
+
+> `functions/wecom-oauth` 的 `signJwt` 能力仍被 `agent-query` 网关复用（§4.2），文件保留不删。
+>
+> 端到端企微登录验证待部署后进行（Casdoor WeCom provider 源码已实测 + postgres 部署已验证；公网 `sso` 域名 + 企微可信域名配置属部署后验证）。
 
 ### 6.2 PostgreSQL RLS 鉴权
 
@@ -620,7 +638,7 @@ WHERE departments ?| current_setting('request.jwt.claims.departments')
 
 | 应用 | 可见范围 | 用途 | secret |
 |---|---|---|---|
-| **App A · 报表应用**（Agent 1000008） | 仅有权限的人 | OAuth 登录 + 报表页展示（软门禁） | `WECOM_SECRET` |
+| **App A · 报表应用**（Agent 1000008） | 仅有权限的人 | OAuth 登录（**凭证迁 Casdoor WeCom provider，§6.1**）+ 报表页展示（软门禁） | `WECOM_SECRET`（已挪 Casdoor provider；本仓 `deploy-functions.sh` 不再注入登录用） |
 | **App B · 同步/通知应用**（新建） | **全部成员** + 通讯录读取 | ① 通讯录全量同步 ② 统一消息通知 | `WECOM_OPS_SECRET` / `WECOM_OPS_AGENT_ID` |
 | **App C · OpenClaw bot** | 按需 | OpenClaw 对话 channel（收发 DM） | openclaw 容器 env（不在 web 管辖） |
 
@@ -631,12 +649,14 @@ WHERE departments ?| current_setting('request.jwt.claims.departments')
 **功能矩阵：**
 | 功能 | API | 走哪个应用 | 状态 |
 |------|-----|-----------|------|
-| 登录 OAuth | `/cgi-bin/oauth2/authorize` | App A | ✅ |
-| 用户信息 | `/cgi-bin/auth/getuserinfo` | App A | ✅ |
+| 登录 OAuth | `/cgi-bin/oauth2/authorize` | App A（经 Casdoor WeCom provider，§6.1） | ✅ |
+| 用户信息 | `/cgi-bin/auth/getuserinfo` | App A（经 Casdoor WeCom provider，§6.1） | ✅ |
 | 通讯录全量同步（兜底） | `/cgi-bin/department/list`、`/cgi-bin/user/list` | App B | ✅（每日 03:17 全量兜底，详见 §7.1.2） |
 | 通讯录实时同步 | `change_contact` 回调（create/update/delete_user、create/update/delete_party） | **通讯录同步功能（非应用）** | 🆕 `web/app/api/wecom-contacts-webhook/route.ts`（详见 §7.1.2） |
 | 消息通知（统一） | `/cgi-bin/message/send` | App B（`functions/wecom-notify`） | ✅ |
 | OpenClaw 对话 | 回调收消息 + 主动消息 | App C | ✅ |
+
+> 2026-08-08 起：登录 OAuth + 用户信息两条由 Casdoor 的 WeCom provider 调用（凭证挪入 Casdoor），data-analysis 不再直连企微登录 API；App B / App C 调用方不变。
 
 ### 7.1.1 统一消息通知服务（`functions/wecom-notify`，2026-07-07）
 
@@ -824,6 +844,9 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | 企微应用拓扑 | 三应用隔离：报表/同步通知/bot 各一 | 2026-07-07 |
 | 统一通知服务 | edge function `wecom-notify`（App B，凭据单点） | 2026-07-07 |
 | 监控告警体系 | 复用 web node-cron + 结构化规则表(monitor_rules) + 状态表(monitor_alerts)；7 个 check_type；wecom-notify 主通道 + web 直连企微兜底(InsForge-down) | 2026-07-08 |
+| 统一身份 IdP | Casdoor（独立子域名 `sso.shanhaiyiguo.com`，WeCom Internal provider 双模式 Silent+Normal）；App A 登录凭证挪入 Casdoor provider | 2026-08-08 |
+| 身份/权限分层 | Casdoor 管身份（`wecom_id`）+ SSO 会话；data-analysis 拿 `wecom_id` 后自查 `perms` 自签 PostgREST JWT（`JWT_SECRET` / RLS / 权限表不变） | 2026-08-08 |
+| Casdoor 存储复用 | 复用现有 postgres（独立 `casdoor` 角色 + `casdoor` 库，零新 DB 容器），非 sqlite（官方镜像 CGO_ENABLED=0 无 sqlite 驱动） | 2026-08-08 |
 
 ---
 

@@ -89,6 +89,8 @@ WeCom: {
 ### 3.5 端到端实测边界
 代码层实测已**确定性地**确认方案成立。真正"跳企微拿 userid"的端到端联通,需公网 `sso` 域名 + 企微后台可信域名配置 → 属于**部署后验证**(部署 Casdoor 上线后验),不阻塞设计定稿。
 
+> **2026-08-08 实施回填**:代码层实测已完成(Casdoor WeCom provider 源码双模式确认 + postgres 部署验证,`deploy/casdoor/conf/app.conf` `driverName = postgres` 复用现有 postgres 独立 `casdoor` 角色 + `casdoor` 库,非 sqlite)。端到端企微登录验证待部署后(Task 5 / 部署上线后)。
+
 ---
 
 ## 4. 目标架构(身份/权限分层)
