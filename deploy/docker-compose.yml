@@ -165,12 +165,36 @@ services:
       retries: 3
       start_period: 10s
 
+  casdoor:
+    image: casbin/casdoor:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: /bin/sh -c './server --createDatabase=true'
+    environment:
+      RUNNING_IN_DOCKER: "true"
+    volumes:
+      - ./casdoor/conf:/conf:ro
+      - casdoor-data:/data
+      - casdoor-logs:/logs
+    networks:
+      - insforge-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 volumes:
   postgres-data:
   deno_cache:
   storage-data:
   insforge-logs:
   duckdb-cache:
+  casdoor-data:
+  casdoor-logs:
 
 networks:
   insforge-network:
