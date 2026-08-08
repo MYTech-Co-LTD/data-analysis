@@ -116,7 +116,7 @@ export function KpiCards({
     );
   }
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
       {METRIC_ORDER.map((code) => {
         const r = typedRows.find((x) => x.metric_code === code);
         if (!r) return null;
