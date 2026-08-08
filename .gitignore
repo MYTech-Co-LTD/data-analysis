@@ -33,8 +33,9 @@ dist/
 *.log
 npm-debug.log*
 
-# nginx 运行时生成配置（deploy.sh 从 server.conf.tpl + DOMAIN 生成）
+# nginx 运行时生成配置（deploy.sh 从 *.tpl + DOMAIN/SSO_DOMAIN 生成）
 deploy/nginx/user_conf.d/server.conf
+deploy/nginx/user_conf.d/sso.conf
 
 # OpenClaw 环境变量（包含 API Key）
 openclaw/.env

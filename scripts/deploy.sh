@@ -98,15 +98,22 @@ docker build \
 # 推天翼云（国内→国内）；失败不阻断 —— 本地 build 的同名镜像可直接起
 docker push "$WEB_IMAGE" || echo "  ⚠ push 天翼云失败，使用本地镜像继续"
 
-# 由 DOMAIN 生成 nginx server.conf（模板在 nginx/server.conf.tpl，输出到 user_conf.d/）。
+# 由 DOMAIN / SSO_DOMAIN 生成 nginx user_conf.d/ 下各 server.conf（模板在 nginx/*.tpl）。
 # 模板绝不能留在 user_conf.d/ —— 它会被挂载进容器，certbot 会拿字面量 __DOMAIN__ 去签证书而失败。
+mkdir -p nginx/user_conf.d
+
 if [ -n "${DOMAIN:-}" ]; then
-  mkdir -p nginx/user_conf.d
   sed "s/__DOMAIN__/$DOMAIN/g" nginx/server.conf.tpl > nginx/user_conf.d/server.conf
   echo "  ✅ nginx 配置已生成（server_name ${DOMAIN}）"
 else
   echo "  ⚠ DOMAIN 未设置，nginx server.conf 未生成 —— Let's Encrypt 签发会失败" >&2
 fi
+
+# 由 SSO_DOMAIN 生成 nginx sso.conf（Casdoor SSO 反代 → casdoor:8000）。
+# 机制与 server.conf 相同：模板 + sed → user_conf.d/，nginx-certbot 镜像自动签发证书。
+: "${SSO_DOMAIN:=sso.shanhaiyiguo.com}"
+sed "s/__SSO_DOMAIN__/$SSO_DOMAIN/g" nginx/sso.conf.tpl > nginx/user_conf.d/sso.conf
+echo "  ✅ nginx SSO 配置已生成（server_name ${SSO_DOMAIN} → casdoor:8000）"
 
 # 起 web（用本地刚 build 的镜像，--force-recreate 确保用新镜像）+ nginx（首次自动 pull xuanyuan.run 公共镜像）+ duckdb
 $COMPOSE up -d --force-recreate web nginx duckdb
