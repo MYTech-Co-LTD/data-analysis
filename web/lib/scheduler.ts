@@ -438,6 +438,18 @@ async function executeTask(task: {
       );
 
       console.log(`[scheduler] 商品档案采集完成: ${result.collected}/${result.total} 条, DB ${result.dbCount}, 校验 ${result.verified ? '✅' : '❌'}`);
+
+      // 商品采集成功后立即 carry-dims 同步 parquet（/compute 用 dim_item.parquet 不用 PG），
+      // 否则新商品要等次日 04:33 carry-dims 才进 parquet——当天配送/出库映射不到归"其他"（实测坑 2026-08-08）
+      if (!result.error) {
+        try {
+          const cr = await fetch(`${DUCKDB_URL}/carry-dims`, {
+            method: 'POST', headers: { 'x-agent-key': AGENT_API_KEY },
+          });
+          const cd = await cr.json().catch(() => ({}));
+          console.log(`[scheduler] 商品采集后 carry-dims: ${cr.status} dim_item=${(cd as any)?.results?.find((r: any) => r.name === 'dim_item')?.records ?? '?'}`);
+        } catch (e: any) { console.error('[scheduler] 商品采集后 carry-dims 失败:', e?.message ?? e); }
+      }
       return;
     }
 
@@ -464,6 +476,13 @@ async function executeTask(task: {
         result.error || undefined, { total: result.total, dbCount: result.dbCount, verified: result.verified }
       );
       console.log(`[scheduler] 门店档案采集完成: ${result.collected}/${result.total}, DB ${result.dbCount}, 校验 ${result.verified ? '✅' : '❌'}`);
+      // 门店采集成功后立即 carry-dims 同步 dim_branch parquet（同商品档案原理）
+      if (!result.error) {
+        try {
+          const cr = await fetch(`${DUCKDB_URL}/carry-dims`, { method: 'POST', headers: { 'x-agent-key': AGENT_API_KEY } });
+          console.log(`[scheduler] 门店采集后 carry-dims: ${cr.status}`);
+        } catch (e: any) { console.error('[scheduler] 门店采集后 carry-dims 失败:', e?.message ?? e); }
+      }
       return;
     }
 
