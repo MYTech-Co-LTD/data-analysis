@@ -129,7 +129,7 @@ export function DesktopDashboard({
       {/* 类别出库报表 */}
       <CategorySummary result={categorySummary} targetMonth={targetMonth} targetId={targetId} progress={progress} />
 
-      {/* 供应链出库层级 + 外部批发日报（2 看板并排） */}
+      {/* 供应链出库层级 + 外部批发日报（2 看板并排；供应链高度权威，批发随高滚动） */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <SupplyChainOutboundTable
           result={supplyChain}
@@ -137,12 +137,16 @@ export function DesktopDashboard({
           endDate={target.end_date}
           targetId={targetId}
         />
-        <WholesaleDailyTable
-          result={wholesaleDaily}
-          startDate={target.start_date}
-          endDate={target.end_date}
-          targetId={targetId}
-        />
+        <div className="md:relative">
+          <div className="md:absolute md:inset-0 md:overflow-y-auto">
+            <WholesaleDailyTable
+              result={wholesaleDaily}
+              startDate={target.start_date}
+              endDate={target.end_date}
+              targetId={targetId}
+            />
+          </div>
+        </div>
       </div>
 
       {/* 出库商品 TOP（月度+日，2 列并排，日榜带日期选择器） */}

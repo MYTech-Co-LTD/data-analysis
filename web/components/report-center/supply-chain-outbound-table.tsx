@@ -332,7 +332,7 @@ export function SupplyChainOutboundTable({
 
       {/* 桌面：7 列宽表（原样不动） */}
       {!isMobile && (
-        <div ref={tableRef} className="max-h-[28rem] overflow-auto">
+        <div ref={tableRef} className="overflow-x-auto">
           <table className="w-full text-xs tabular-nums">
             <thead className="bg-slate-50 text-slate-500">
               <tr className="sticky top-0 z-10 bg-slate-50">
