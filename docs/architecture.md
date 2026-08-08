@@ -48,8 +48,8 @@
 │  │  ├── openclaw（18789）       → 智能助手 + 自然语言查询              │   │
 │  │                                                                     │   │
 │  │  统一身份（2026-08-08，详见 §6）                                       │   │
-│  │  ├── casdoor（8000）          → 统一身份 IdP（SSO，复用 postgres）  │   │
-│  │                                  sso.shanhaiyiguo.com                │   │
+│  │  └── OIDC client             → 接控制面 Casdoor（身份层，§6.1）      │   │
+│  │                                  sso.shanhaiyiguo.com（控制面部署）  │   │
 │  │                                                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -846,7 +846,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | 监控告警体系 | 复用 web node-cron + 结构化规则表(monitor_rules) + 状态表(monitor_alerts)；7 个 check_type；wecom-notify 主通道 + web 直连企微兜底(InsForge-down) | 2026-07-08 |
 | 统一身份 IdP | Casdoor（独立子域名 `sso.shanhaiyiguo.com`，WeCom Internal provider 双模式 Silent+Normal）；App A 登录凭证挪入 Casdoor provider | 2026-08-08 |
 | 身份/权限分层 | Casdoor 管身份（`wecom_id`）+ SSO 会话；data-analysis 拿 `wecom_id` 后自查 `perms` 自签 PostgREST JWT（`JWT_SECRET` / RLS / 权限表不变） | 2026-08-08 |
-| Casdoor 存储复用 | 复用现有 postgres（独立 `casdoor` 角色 + `casdoor` 库，零新 DB 容器），非 sqlite（官方镜像 CGO_ENABLED=0 无 sqlite 驱动） | 2026-08-08 |
+| Casdoor 独立化 | Casdoor 从 data-analysis 寄生迁到控制面（113.249.101.33 `/opt/casdoor`，独立 docker compose + **独立 postgres**），成平台级身份基础设施；data-analysis 退化为普通 OIDC client；Caddy 反代 sso 域名（specs/2026-08-09-casdoor-independent-design.md） | 2026-08-09 |
 
 ---
 

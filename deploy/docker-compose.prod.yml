@@ -123,8 +123,6 @@ services:
         condition: service_started
       openclaw:
         condition: service_started
-      casdoor:
-        condition: service_healthy
     networks:
       - insforge-network
 
