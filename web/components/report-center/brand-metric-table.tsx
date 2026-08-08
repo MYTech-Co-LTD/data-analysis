@@ -21,7 +21,7 @@ import { TotalAnomalyBadge } from "./data-guard-badges";
 import { MaskedBadge } from "./masked-badge";
 import { ModuleError, formatModuleError } from "./module-error";
 import { useCanSeeCost } from "./use-can-see-cost";
-import { actualRatio, formatRatio } from "@/lib/report-center/ratio";
+import { actualRatio, formatRatio, marginAchievement, absoluteThreeColor } from "@/lib/report-center/ratio";
 
 interface BrandMetricTableProps {
   result: GetterResult<BrandMetricRow>;
@@ -240,7 +240,7 @@ export function BrandMetricTable({ result, targetMonth, progress, isMobile = fal
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryProfit, "text-slate-700")}`} title={suspiciousTitle(s.deliveryProfit)}>
                     {fmtCurrency(r.delivery_profit)}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryMargin, "text-slate-700")}`} title={suspiciousTitle(s.deliveryMargin)}>
+                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryMargin, absoluteThreeColor(marginAchievement(r.delivery_margin, 0.12)))}`} title={suspiciousTitle(s.deliveryMargin)}>
                     {fmtRate(r.delivery_margin)}
                   </td>
                 </tr>
