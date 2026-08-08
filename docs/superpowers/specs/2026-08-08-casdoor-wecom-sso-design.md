@@ -89,7 +89,9 @@ WeCom: {
 ### 3.5 端到端实测边界
 代码层实测已**确定性地**确认方案成立。真正"跳企微拿 userid"的端到端联通,需公网 `sso` 域名 + 企微后台可信域名配置 → 属于**部署后验证**(部署 Casdoor 上线后验),不阻塞设计定稿。
 
-> **2026-08-08 实施回填**:代码层实测已完成(Casdoor WeCom provider 源码双模式确认 + postgres 部署验证,`deploy/casdoor/conf/app.conf` `driverName = postgres` 复用现有 postgres 独立 `casdoor` 角色 + `casdoor` 库,非 sqlite)。端到端企微登录验证待部署后(Task 5 / 部署上线后)。
+> **2026-08-08 实施回填**:代码层实测已完成(Casdoor WeCom provider 源码双模式确认 + postgres 部署验证,`deploy/casdoor/conf/app.conf` `driverName = postgres` 复用现有 postgres 独立 `casdoor` 角色 + `casdoor` 库,非 sqlite)。
+>
+> **2026-08-08 部署后端到端验证通过** ✅:Casdoor 上线(`sso.shanhaiyiguo.com`,复用 postgres,镜像 via `xuanyuan.run` pull-through 绕过 docker hub 超时)+ WeCom provider 双模式(`wecom_silent` 企微内 snsapi 静默 + `wecom_scan` PC 扫码)+ JIT 建用户(`shanhai` org)+ `wecom-oidc-callback` function(Casdoor code→PostgREST JWT,只查 org_users 不 upsert)→ **企微内静默登录 + PC 扫码登录均端到端跑通,进 data-analysis 报表**。部署中填的 5 个 Casdoor 配置坑(均非代码设计问题,是 Casdoor 默认值/参数名):① `provider_hint`(预选参数名,非 `provider`)② `enableSignUp`+`canSignUp`(JIT 建用户)③ `cert`+`tokenFormat`(masked-update 损坏,恢复 cert-built-in/JWT-Standard)④ `organization=shanhai`(非 built-in 管理员 org)⑤ `expireInHours -1→168`(默认 -1 致 token 立即过期)。
 
 ---
 
