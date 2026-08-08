@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { actualRatio, targetRatio, ratioAchievement, formatRatio } from '../ratio';
+import { actualRatio, targetRatio, ratioAchievement, formatRatio, marginAchievement, absoluteThreeColor } from '../ratio';
 
 describe('actualRatio', () => {
   it('正常 = 配送/销售', () => {
@@ -53,5 +53,42 @@ describe('formatRatio', () => {
   });
   it('0 → 0%', () => {
     expect(formatRatio(0)).toBe('0%');
+  });
+});
+
+describe('marginAchievement', () => {
+  it('正常 = 毛利率/目标', () => {
+    expect(marginAchievement(0.18, 0.12)).toBeCloseTo(1.5);
+  });
+  it('默认目标 0.12', () => {
+    expect(marginAchievement(0.12)).toBeCloseTo(1);
+  });
+  it('null 毛利率（脱敏）→ null', () => {
+    expect(marginAchievement(null)).toBeNull();
+  });
+  it('负毛利（亏损）→ 负达成率', () => {
+    expect(marginAchievement(-0.05, 0.12)).toBeCloseTo(-0.416666, 5);
+  });
+  it('目标 0 → null（除零保护）', () => {
+    expect(marginAchievement(0.18, 0)).toBeNull();
+  });
+});
+
+describe('absoluteThreeColor', () => {
+  it('>=1 绿', () => {
+    expect(absoluteThreeColor(1)).toBe('text-green-600');
+    expect(absoluteThreeColor(1.5)).toBe('text-green-600');
+  });
+  it('>=0.8 琥珀', () => {
+    expect(absoluteThreeColor(0.8)).toBe('text-amber-600');
+    expect(absoluteThreeColor(0.99)).toBe('text-amber-600');
+  });
+  it('<0.8 红', () => {
+    expect(absoluteThreeColor(0.79)).toBe('text-red-600');
+    expect(absoluteThreeColor(0)).toBe('text-red-600');
+    expect(absoluteThreeColor(-1)).toBe('text-red-600');
+  });
+  it('null → 灰', () => {
+    expect(absoluteThreeColor(null)).toBe('text-slate-300');
   });
 });
