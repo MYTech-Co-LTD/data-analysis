@@ -1,22 +1,7 @@
 import { NextResponse, NextRequest } from "next/server";
 import { isWecomClient, isMobileDevice } from "@/lib/device";
 import { ADMIN_USERIDS } from "@/lib/auth";
-
-function buildWecomAuthUrl(redirectUri: string, state: string): string {
-  const corpId = process.env.NEXT_PUBLIC_WECOM_CORP_ID;
-  const agentId = process.env.NEXT_PUBLIC_WECOM_AGENT_ID;
-  if (!corpId || !agentId) return "";
-
-  const params = new URLSearchParams({
-    appid: corpId,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    scope: "snsapi_base",
-    state,
-    agentid: agentId,
-  });
-  return `https://open.weixin.qq.com/connect/oauth2/authorize?${params.toString()}#wechat_redirect`;
-}
+import { buildCasdoorAuthUrl } from "@/lib/wecom";
 
 export async function middleware(req: NextRequest) {
   const ua = req.headers.get("user-agent")?.toLowerCase() || "";
@@ -60,6 +45,44 @@ export async function middleware(req: NextRequest) {
   return response;
 }
 
+// redirectToCasdoor: 未登录用户统一改跳 Casdoor /login/oauth/authorize。
+//
+// - redirect_uri 与 web/app/auth/callback/route.ts 保持一致（env 优先，回退 origin）。
+// - state = URL 编码的目标路径，callback 回跳用它回到原页。
+// - provider 按 UA 路由：企微内 wxwork → wecom_silent（Silent snsapi）；
+//   PC → wecom_scan（Normal 扫码，需 Task 6 在 Casdoor 配该 provider）。
+// - Casdoor env 未配置（buildCasdoorAuthUrl 返回 ""）→ 回退到旧 /login?next 行为，
+//   保底不让用户卡死。
+function redirectToCasdoor(req: NextRequest, targetPath: string): NextResponse {
+  const proto = req.headers.get("x-forwarded-proto") || "https";
+  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+  const origin = `${proto}://${host}`;
+  // 与 auth/callback 一致：env 优先，回退当前 origin。
+  const redirectUri =
+    process.env.NEXT_PUBLIC_CASDOOR_REDIRECT_URI || `${origin}/auth/callback`;
+
+  const ua = req.headers.get("user-agent")?.toLowerCase() || "";
+  // wxwork = 企微客户端内置 UA。wecom_scan 在 Task 6 配置 Casdoor provider 前是占位串，
+  // 那之前 PC 走的 Casdoor 会用其默认登录页（QR/账号），Task 6 后才精确路由到企微扫码。
+  const provider = ua.includes("wxwork") ? "wecom_silent" : "wecom_scan";
+
+  const authUrl = buildCasdoorAuthUrl(
+    redirectUri,
+    encodeURIComponent(targetPath),
+    provider
+  );
+
+  if (!authUrl) {
+    // Casdoor 未配置 → 回退到 /login 兜底页（旧路径）。
+    const url = req.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("next", targetPath);
+    return NextResponse.redirect(url);
+  }
+
+  return NextResponse.redirect(authUrl, 307);
+}
+
 async function handleWecomClient(req: NextRequest) {
   const token = req.cookies.get("insforge_access_token")?.value;
 
@@ -74,34 +97,18 @@ async function handleWecomClient(req: NextRequest) {
     return NextResponse.next({ request: req });
   }
 
+  // 未登录：跳 Casdoor（Silent provider，企微内无感）。
   const targetPath = req.nextUrl.pathname + req.nextUrl.search;
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-  const origin = `${proto}://${host}`;
-
-  const authUrl = buildWecomAuthUrl(
-    `${origin}/auth/callback`,
-    encodeURIComponent(targetPath)
-  );
-
-  if (!authUrl) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", targetPath);
-    return NextResponse.redirect(url);
-  }
-
-  return NextResponse.redirect(authUrl, 307);
+  return redirectToCasdoor(req, targetPath);
 }
 
 async function handleRegularBrowser(req: NextRequest) {
   const token = req.cookies.get("insforge_access_token")?.value;
 
   if (!token) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", req.nextUrl.pathname + req.nextUrl.search);
-    return NextResponse.redirect(url);
+    // 未登录：跳 Casdoor（wecom_scan provider，PC 扫码）。
+    const targetPath = req.nextUrl.pathname + req.nextUrl.search;
+    return redirectToCasdoor(req, targetPath);
   }
 
   const isBlacklisted = await checkTokenBlacklist(token);
