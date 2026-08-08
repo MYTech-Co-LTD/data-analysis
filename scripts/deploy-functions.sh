@@ -137,5 +137,9 @@ set_secret "INSFORGE_BASE_URL" "${INSFORGE_BASE_URL:-http://insforge:7130}"
 set_secret "INSFORGE_API_KEY" "${INSFORGE_API_KEY:-}"
 set_secret "ANON_KEY" "${NEXT_PUBLIC_INSFORGE_ANON_KEY:-}"
 set_secret "REPORT_URL" "${REPORT_URL:-https://${DOMAIN:-localhost}}"
+# Casdoor SSO（wecom-oidc-callback 用；值由 Task 4 Casdoor 应用配置产出，填入 deploy/.env）
+set_secret "CASDOOR_ISSUER" "${CASDOOR_ISSUER:-}"
+set_secret "CASDOOR_CLIENT_ID" "${CASDOOR_CLIENT_ID:-}"
+set_secret "CASDOOR_CLIENT_SECRET" "${CASDOOR_CLIENT_SECRET:-}"
 
 echo "✅ function 部署完成"
