@@ -166,7 +166,7 @@ services:
       start_period: 10s
 
   casdoor:
-    image: casbin/casdoor:latest
+    image: caj9ik14016wep.xuanyuan.run/casbin/casdoor:latest
     restart: unless-stopped
     depends_on:
       postgres:
