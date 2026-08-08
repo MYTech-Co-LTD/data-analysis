@@ -77,14 +77,13 @@ module.exports = async function (req) {
     const wecomUserId = userData.sub;
     if (!wecomUserId) return json({ error: "failed_to_get_wecom_id", detail: userData }, 401);
 
-    // 3. upsert org_users + 查部门(与 wecom-oauth 同款；createClient 全局注入)
+    // 3. 查 org_users 拿部门/姓名(只读,不 upsert)。
+    //    org_users 由企微通讯录同步(App B 回调 + 每日全量)独占维护,登录不写,避免双写不一致。
+    //    createClient 全局注入。通讯录未同步到该用户时 user=null → departmentIds/name 走兜底。
     const client = createClient({
       baseUrl: Deno.env.get("INSFORGE_API_BASE") || "http://insforge:7130",
       anonKey: Deno.env.get("ANON_KEY"),
     });
-    await client.database.from("org_users").upsert(
-      { wecom_id: wecomUserId }, { onConflict: "wecom_id" },
-    );
     const { data: user } = await client.database
       .from("org_users").select("department_ids, name")
       .eq("wecom_id", wecomUserId).single();
