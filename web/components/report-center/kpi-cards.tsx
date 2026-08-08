@@ -2,7 +2,8 @@
 
 import { METRICS, METRIC_ORDER, MetricCode } from "@/lib/report-center/metric-source";
 import { statusToZh } from "@/lib/report-center/status-i18n";
-import { isSuspiciousRate, suspiciousClass } from "@/lib/report-center/guard";
+import { isSuspiciousRate, isSuspiciousMargin, suspiciousClass } from "@/lib/report-center/guard";
+import { actualRatio, marginAchievement, absoluteThreeColor } from "@/lib/report-center/ratio";
 import type { TargetKpiRow } from "@/lib/report-center/targets";
 import type { GetterResult } from "@/lib/report-center/types";
 import { SuspiciousBadge } from "./data-guard-badges";
@@ -171,6 +172,43 @@ export function KpiCards({
           </div>
         );
       })}
+      {/* 比率卡（派生值，不落库）：配销比现状卡 + 毛利率(12%)绝对三色卡。
+          复用 4 张金额卡的 typedRows 分量相除（逐行聚合值相除 = ratio-of-sums）。
+          无 data_status 徽章（派生值，状态看 4 张源卡）、无 tooltip（副行已展示分子分母）。 */}
+      {(() => {
+        const sale = typedRows.find((x) => x.metric_code === "sale");
+        const delivery = typedRows.find((x) => x.metric_code === "delivery");
+        const outboundAmt = typedRows.find((x) => x.metric_code === "outbound_amt");
+        const outboundProfit = typedRows.find((x) => x.metric_code === "outbound_profit");
+        const ratioCards = [
+          { key: "delivery_sale_ratio", label: "总配销比", num: delivery?.actual_value ?? null, den: sale?.actual_value ?? null, numLabel: "配送", denLabel: "销售", colored: false },
+          { key: "outbound_margin", label: "毛利率", num: outboundProfit?.actual_value ?? null, den: outboundAmt?.actual_value ?? null, numLabel: "毛利", denLabel: "出库", colored: true },
+        ];
+        return ratioCards.map((c) => {
+          // actualRatio 为通用 num/den，但仅处理 den=0；num=null（毛利脱敏）须前置守卫 → null
+          const ratio: number | null = c.num == null || !c.den ? null : actualRatio(c.num, c.den);
+          const susp = isSuspiciousMargin(ratio);
+          const bigDisplay = ratio == null || !Number.isFinite(ratio) ? "—" : `${(ratio * 100).toFixed(1)}%`;
+          const bigColor = c.colored
+            ? suspiciousClass(susp, absoluteThreeColor(marginAchievement(ratio, 0.12)))
+            : suspiciousClass(susp, "text-slate-800");
+          const numStr = c.num == null ? "—" : fmtWan(c.num);
+          const denStr = c.den == null ? "—" : fmtWan(c.den);
+          return (
+            <div key={c.key} className="rounded-md border p-4 text-left border-slate-200 bg-white">
+              <span className="text-xs leading-tight text-slate-500">{c.label}</span>
+              <div className={`mt-1 flex items-baseline gap-1 text-2xl font-semibold tabular-nums ${bigColor}`}>
+                {bigDisplay}
+                {susp && <SuspiciousBadge />}
+              </div>
+              <div className="mt-1 text-xs tabular-nums text-slate-400">
+                {c.numLabel}{numStr} / {c.denLabel}{denStr}
+                {c.colored && " · 目标 12%"}
+              </div>
+            </div>
+          );
+        });
+      })()}
     </div>
   );
 }
