@@ -4,6 +4,11 @@
 //      → ③ SQL 白名单 → ④/⑤ 引擎路由（明细→DuckDB 权限视图；汇总→PostgREST execute_sql_rls 走 RLS）
 //      → ⑥ 审计(agent_query_logs)
 // CommonJS（InsForge edge function runtime 要求），Deno 运行时，全局 fetch 可用。
+// 共享打包（P3 铺开）：b64url/signJwt 与 CORS/json 提取到 ../_shared（jwt.ts / cors.ts）。
+// 源码直接 require 共享模块，部署/校验时由 esbuild --bundle --format=cjs 打进单文件
+// （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
+const { signJwt } = require("../_shared/jwt");
+const { json: sharedJson } = require("../_shared/cors");
 
 // ===== 配置 =====
 const AGENT_API_KEY = Deno.env.get("AGENT_API_KEY");
@@ -65,28 +70,6 @@ async function loadRegistry() {
   return REG_CACHE;
 }
 
-// ===== JWT（复用 wecom-oauth 的 signJwt，HS256 + JWT_SECRET）=====
-function b64url(bytes) {
-  let s = "";
-  for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-async function signJwt(payload, secret) {
-  const enc = new TextEncoder();
-  const h = b64url(enc.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const p = b64url(enc.encode(JSON.stringify(payload)));
-  const data = `${h}.${p}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(data));
-  return `${data}.${b64url(sig)}`;
-}
-
 // 服务级短时 JWT（role=authenticated）：网关直连 PostgREST 用。
 // PostgREST 不认 InsForge 的 anon_key（非 JWT），用 JWT_SECRET 自签的 JWT 它才认。
 async function serviceJwt() {
@@ -95,16 +78,14 @@ async function serviceJwt() {
 }
 
 // ===== 工具 =====
+// CORS 契约与 _shared 默认不同（methods 仅 POST/OPTIONS；Allow-Headers 多 x-agent-key）：
+// 用 _shared 的 json + 本地覆盖这两键，响应头逐字节不变（只换来源，不改行为）。
+const AGENT_CORS = {
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-agent-key",
+};
 function json(data, status) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-agent-key",
-      "Content-Type": "application/json",
-    },
-  });
+  return sharedJson(data, status, AGENT_CORS);
 }
 function sqlLit(s) {
   return "'" + String(s).replace(/'/g, "''") + "'"; // branch_num 等数值字符串

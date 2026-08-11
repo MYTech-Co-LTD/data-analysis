@@ -1,0 +1,19 @@
+{
+  "slug": "wecom-oauth",
+  "runtime": "commonjs",
+  "secrets": ["WECOM_CORP_ID", "WECOM_SECRET", "WECOM_AGENT_ID", "JWT_SECRET", "ANON_KEY"],
+  "schedule": null,
+  "contract": {
+    "auth": "none",
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "description": "企微 H5 OAuth code（GET ?code= 或 POST body.code），前端跳企微授权后回调本 function",
+      "properties": { "code": { "type": "string" } },
+      "required": ["code"]
+    },
+    "response": {
+      "200": { "type": "object", "properties": { "ok": true, "wecom_userid": "string", "wecom_name": "string", "access_token": "string" } }
+    }
+  }
+}

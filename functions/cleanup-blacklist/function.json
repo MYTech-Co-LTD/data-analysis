@@ -1,0 +1,17 @@
+{
+  "slug": "cleanup-blacklist",
+  "runtime": "commonjs",
+  "secrets": ["JWT_SECRET"],
+  "schedule": "0 3 * * *",
+  "contract": {
+    "auth": "none",
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "description": "定时清理已过期黑名单记录（建议每日 03:00，见源码注释）"
+    },
+    "response": {
+      "200": { "type": "object", "properties": { "ok": true, "cleaned": "integer" } }
+    }
+  }
+}

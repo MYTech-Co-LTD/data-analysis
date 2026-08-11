@@ -1,0 +1,22 @@
+{
+  "slug": "wecom-oidc-callback",
+  "runtime": "commonjs",
+  "secrets": ["CASDOOR_ISSUER", "CASDOOR_CLIENT_ID", "CASDOOR_CLIENT_SECRET", "JWT_SECRET", "ANON_KEY"],
+  "schedule": null,
+  "contract": {
+    "auth": "none",
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "description": "Casdoor OIDC authorization code + redirect_uri（POST body），换取 userinfo(sub=wecom_id) 后签会话 JWT",
+      "properties": {
+        "code": { "type": "string" },
+        "redirect_uri": { "type": "string" }
+      },
+      "required": ["code", "redirect_uri"]
+    },
+    "response": {
+      "200": { "type": "object", "properties": { "ok": true, "wecom_userid": "string", "wecom_name": "string", "access_token": "string" } }
+    }
+  }
+}

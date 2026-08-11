@@ -4,43 +4,14 @@
 // 所需 secrets：WECOM_CORP_ID / WECOM_OPS_SECRET / WECOM_OPS_AGENT_ID（App B）
 // 注意：InsForge OSS runtime 用 CommonJS + 全局注入（createClient、Deno），
 //       不要用 ESM 的 import/export。
-// HS256 JWT 签发（deno runtime 内联——InsForge function 单文件部署，无法 require 共享模块）。
+// 共享打包（P3 铺开）：b64url/signJwt 与 corsHeaders/json 提取到 ../_shared（jwt.ts / cors.ts）。
+// 源码直接 require 共享模块，部署/校验时由 esbuild --bundle --format=cjs 打进单文件
+// （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 // 推送时用 role=authenticated 的 token 读 reports/写 query_logs（anon 已被 REVOKE SELECT）。
-function b64url(bytes) {
-  let s = "";
-  for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-async function signJwt(payload, secret) {
-  const enc = new TextEncoder();
-  const h = b64url(enc.encode(JSON.stringify({ alg: "HS256", typ: "JWT" })));
-  const p = b64url(enc.encode(JSON.stringify(payload)));
-  const data = `${h}.${p}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(data));
-  return `${data}.${b64url(sig)}`;
-}
+const { signJwt } = require("../_shared/jwt");
+const { corsHeaders, json } = require("../_shared/cors");
 
 module.exports = async function (req) {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  };
-
-  function json(data, status) {
-    return new Response(JSON.stringify(data), {
-      status,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }

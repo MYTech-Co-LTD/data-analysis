@@ -1,37 +1,29 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
 
 import { getDeviceType } from "@/lib/get-device-type";
 import { getClient } from "@/lib/api";
-import { getTargetKpi, type TargetKpiRow } from "@/lib/report-center/targets";
-import { getRegionBreakdown, type RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
-import { getCategorySummary, type CategorySummaryRow } from "@/lib/report-center/category-summary";
-import { getBrandMetric, type BrandMetricRow } from "@/lib/report-center/brand-metric";
-import {
-  getItemBreakdownTop,
-  type ItemBreakdownResult,
-  type TopBoard,
-} from "@/lib/report-center/item-breakdown";
-import { getSupplyChainOutbound, type SupplyChainOutboundRow } from "@/lib/report-center/supply-chain-outbound";
-import { getWholesaleDaily, type WholesaleDailyRow } from "@/lib/report-center/wholesale-daily";
 import { type GetterResult } from "@/lib/report-center/types";
 import type { DataFreshness } from "@/lib/report-center/freshness";
+import { formatFreshnessChina } from "@/lib/report-center/freshness";
+import { BOARDS } from "@/lib/report-center/boards/registry";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PartialDegradeBanner } from "@/components/report-center/partial-degrade-banner";
 import { PermissionBanner } from "@/components/report-center/permission-banner";
 import { FreshnessStaleBanner } from "@/components/report-center/freshness-stale-banner";
-import { DesktopDashboard } from "./desktop";
-import { MobileDashboard } from "./mobile";
 
 export const dynamic = "force-dynamic";
 
 // 空的 GetterResult（用于 allSettled rejected 兜底——getter 内部已 catch，
 // 理论上不会 reject；这里防御性，确保不抛 unhandled promise rejection）。
-function errResult<T>(): GetterResult<T> {
+function errResult(): GetterResult<unknown> {
   return { rows: [], status: "error" };
 }
 
-// 看板页：取数 + 按设备分发。PC Header+Sidebar，移动 Header only（参照 reports/[id]/layout.tsx）。
+// 看板页（P4 注册表驱动）：读 BOARDS → Promise.allSettled 每个 serverGet → 渲染 board.Desktop/Mobile。
+// PC Header+Sidebar，移动 Header only（参照 reports/[id]/layout.tsx）。
 export default async function TargetDashboard({
   params,
 }: {
@@ -72,7 +64,7 @@ export default async function TargetDashboard({
   if (!totalFailed && !totalRows?.length) notFound();
 
   // 取数失败：不 notFound，渲染降级页（横幅 + Header/Sidebar 外壳保持一致）
-  // M9：total 查询失败≠模块 getter 失败（7 个 getter 根本没跑），不再显示 "7/7 个模块加载失败"
+  // M9：total 查询失败≠模块 getter 失败（模块 getter 根本没跑），不再显示 "N/7 个模块加载失败"
   //（错误计数无意义），改 variant="total-failed" 显示「看板数据加载失败」，保留重试。
   if (totalFailed || !totalRows?.length) {
     const fallback = (
@@ -110,72 +102,19 @@ export default async function TargetDashboard({
   const closed = t.status === "closed";
 
   // F1.2: Promise.allSettled + GetterResult——单 getter 失败不挂整页。
-  // 7 个 getter 内部已 catch（返 status:'error'），allSettled 是双保险。
-  const results = await Promise.allSettled([
-    getTargetKpi(targetId),
-    getRegionBreakdown(id, closed),
-    getCategorySummary(id, closed),
-    getBrandMetric(targetId, closed),
-    getItemBreakdownTop(targetId, closed),
-    getSupplyChainOutbound(targetId, closed),
-    getWholesaleDaily(targetId, closed),
-  ]);
-
-  const kpi =
-    results[0].status === "fulfilled"
-      ? results[0].value
-      : errResult<TargetKpiRow>();
-  const regionBreakdown =
-    results[1].status === "fulfilled"
-      ? results[1].value
-      : errResult<RegionBreakdownRow>();
-  const categorySummary =
-    results[2].status === "fulfilled"
-      ? results[2].value
-      : errResult<CategorySummaryRow>();
-  const brandMetric =
-    results[3].status === "fulfilled"
-      ? results[3].value
-      : errResult<BrandMetricRow>();
-  const itemTop: ItemBreakdownResult =
-    results[4].status === "fulfilled"
-      ? results[4].value
-      : (() => {
-          // M10：TopBoard.totalProfit 契约是 number|null（脱敏全 null 时透传 null），
-          // rejected 兜底空 board 用 null 而非 0，与脱敏语义一致（0 会误导显示 ¥0）。
-          const emptyBoard: TopBoard = {
-            rows: [],
-            totalAmount: 0,
-            totalProfit: null,
-          };
-          return {
-            saleMonth: { ...emptyBoard },
-            saleDay: { ...emptyBoard },
-            outboundMonth: { ...emptyBoard },
-            outboundDay: { ...emptyBoard },
-            defaultDay: "",
-            status: "error",
-          };
-        })();
-  const supplyChain =
-    results[5].status === "fulfilled"
-      ? results[5].value
-      : errResult<SupplyChainOutboundRow>();
-  const wholesaleDaily =
-    results[6].status === "fulfilled"
-      ? results[6].value
-      : errResult<WholesaleDailyRow>();
+  // 各板块 serverGet 内部已 catch（返 status:'error'），allSettled 是双保险。
+  const results = await Promise.allSettled(
+    BOARDS.map((board) => board.serverGet(targetId, { closed })),
+  );
+  const outcome = (i: number) =>
+    results[i].status === "fulfilled" ? results[i].value : errResult();
 
   // 统计失败模块数（getter 内部 catch 走 status:'error'；或 allSettled rejected）
-  const failCount = [
-    kpi,
-    regionBreakdown,
-    categorySummary,
-    brandMetric,
-    itemTop,
-    supplyChain,
-    wholesaleDaily,
-  ].filter((r) => r?.status === "error").length;
+  const failCount = results.filter(
+    (r) =>
+      r.status === "rejected" ||
+      (r.status === "fulfilled" && r.value.status === "error"),
+  ).length;
 
   // F5 数据新鲜度：get_data_freshness 返回行 { data_updated_at, last_query_at }。
   //   - data_updated_at：3 表最新 /compute 时间的最早（数据新旧，仅展示）
@@ -202,7 +141,9 @@ export default async function TargetDashboard({
 
   const banner = (
     <>
-      {failCount > 0 && <PartialDegradeBanner failCount={failCount} total={7} />}
+      {failCount > 0 && (
+        <PartialDegradeBanner failCount={failCount} total={BOARDS.length} />
+      )}
       {/* F5：最近查询停留超 6h（系统停）→ 红色横幅；数据旧（源头没数据）不告警 */}
       <FreshnessStaleBanner
         lastQueryAt={freshness?.last_query_at}
@@ -213,45 +154,74 @@ export default async function TargetDashboard({
     </>
   );
 
-  // F1.3：透传 GetterResult（不再解包 .rows），组件级 status='error' 显示模块失败占位。
-  // itemTop 整对象传（ItemBreakdownResult 含 4 board + status/error）。
-  const dashboard = isMobile ? (
+  // 头部（标题/日期/数据新鲜度）——原 desktop/mobile 组件内头部上移到宿主，isMobile 差异用类切换
+  const header = (
     <>
-      {banner}
-      <MobileDashboard
-        target={t}
-        kpi={kpi}
-        regionBreakdown={regionBreakdown}
-        categorySummary={categorySummary}
-        brandMetric={brandMetric}
-        progress={progress}
-        targetMonth={targetMonth}
-        freshness={freshness}
-        freshnessFailed={freshnessFailed}
-        targetId={targetId}
-        itemTop={itemTop}
-        supplyChain={supplyChain}
-        wholesaleDaily={wholesaleDaily}
-      />
+      <Link
+        href="/"
+        className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600"
+      >
+        <ArrowLeft size={14} strokeWidth={1.5} />
+        报表中心
+      </Link>
+      <div className="mt-1 flex items-center gap-2">
+        <h1 className="text-lg font-semibold text-slate-800 md:text-xl">
+          {t.name}
+        </h1>
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] ${
+            t.status === "active"
+              ? "bg-blue-50 text-blue-700"
+              : "bg-slate-100 text-slate-500"
+          }`}
+        >
+          {t.status === "active" ? "进行中" : "已结束"}
+        </span>
+      </div>
+      <div className="mt-0.5 text-xs tabular-nums text-slate-400">
+        {t.start_date} ~ {t.end_date}
+        {freshnessFailed ? (
+          <> · 更新时间获取失败</>
+        ) : (
+          <>
+            {" · 数据更新 "}
+            {formatFreshnessChina(freshness?.data_updated_at) ?? "—"}
+            {" · 最近查询 "}
+            {formatFreshnessChina(freshness?.last_query_at) ?? "—"}
+          </>
+        )}
+      </div>
     </>
-  ) : (
-    <div className="p-6">
-      {banner}
-      <DesktopDashboard
-        target={t}
-        kpi={kpi}
-        regionBreakdown={regionBreakdown}
-        categorySummary={categorySummary}
-        brandMetric={brandMetric}
-        progress={progress}
-        targetMonth={targetMonth}
-        freshness={freshness}
-        freshnessFailed={freshnessFailed}
-        targetId={targetId}
-        itemTop={itemTop}
-        supplyChain={supplyChain}
-        wholesaleDaily={wholesaleDaily}
-      />
+  );
+
+  // F1.3：透传 GetterResult（不提前解包 .rows），组件级 status='error' 显示模块失败占位。
+  // 注册表驱动渲染：grid 布局保原视觉——全宽板块各自 md:col-span-2（见各板块 adapter），
+  // 供应链+批发各半格并排（adapter 内保留旧 desktop.tsx 的滚动结构）。
+  const boards = (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-5">
+      <div
+        className={`md:col-span-2 ${
+          isMobile
+            ? "sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3"
+            : ""
+        }`}
+      >
+        {header}
+      </div>
+      {BOARDS.map((board, i) => {
+        const Comp = isMobile ? (board.Mobile ?? board.Desktop) : board.Desktop;
+        return (
+          <Comp
+            key={board.id}
+            result={outcome(i)}
+            target={t}
+            targetId={targetId}
+            progress={progress}
+            targetMonth={targetMonth}
+            isMobile={isMobile}
+          />
+        );
+      })}
     </div>
   );
 
@@ -260,7 +230,10 @@ export default async function TargetDashboard({
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
-        <main className="flex-1 px-3">{dashboard}</main>
+        <main className="flex-1 px-3">
+          {banner}
+          {boards}
+        </main>
       </div>
     );
   }
@@ -270,7 +243,12 @@ export default async function TargetDashboard({
       <Header />
       <div className="flex">
         <Sidebar />
-        <main className="flex-1">{dashboard}</main>
+        <main className="flex-1">
+          <div className="p-6">
+            {banner}
+            {boards}
+          </div>
+        </main>
       </div>
     </div>
   );
