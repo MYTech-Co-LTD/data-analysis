@@ -847,6 +847,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | 统一身份 IdP | Casdoor（独立子域名 `sso.shanhaiyiguo.com`，WeCom Internal provider 双模式 Silent+Normal）；App A 登录凭证挪入 Casdoor provider | 2026-08-08 |
 | 身份/权限分层 | Casdoor 管身份（`wecom_id`）+ SSO 会话；data-analysis 拿 `wecom_id` 后自查 `perms` 自签 PostgREST JWT（`JWT_SECRET` / RLS / 权限表不变） | 2026-08-08 |
 | Casdoor 独立化 | Casdoor 从 data-analysis 寄生迁到控制面（113.249.101.33 `/opt/casdoor`，独立 docker compose + **独立 postgres**），成平台级身份基础设施；data-analysis 退化为普通 OIDC client；Caddy 反代 sso 域名（specs/2026-08-09-casdoor-independent-design.md） | 2026-08-09 |
+| 代码组织规范 | A+B-lite：目录即模块（collectors/jobs/report-center-boards）+ 尾部追加式注册表 + 契约单源（web/lib/contracts）；不引入运行时插件框架、不拆服务、不改部署拓扑。P0–P5 分阶段（spec `docs/superpowers/specs/2026-08-11-modular-plugin-design.md`，评审 `docs/design/modular-plugin-architecture-review.md`） | 2026-08-11 |
 
 ---
 
@@ -1162,8 +1163,7 @@ spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.m
 | 美团数据源接入 | ⏳ 待讨论 | 架构待确认 |
 | 饿了么数据源接入 | ⏳ 待讨论 | 架构待确认 |
 | 监控告警体系 v1 | ✅ 已设计（§8.1） | 待实现：详见 `docs/superpowers/specs/2026-07-08-monitoring-system-design.md` |
-
----
+| 模块化+插件化重构 | ✅ 已设计（spec 2026-08-11） | A+B-lite，P0–P5 分阶段；架构评审通过（D1–D6），P0 先行（契约止血+单源+CI） |
 
 ## 十二、架构变更流程
 
