@@ -41,3 +41,7 @@ deploy/nginx/user_conf.d/sso.conf
 openclaw/.env
 .superpowers/
 .gstack/
+
+# esbuild bundle 临时产物（scripts/deploy-functions.sh / check-functions.sh 生成）
+# 服务器回退产物是已提交的 functions/<slug>/index.bundle.js，不在此目录
+.bundle/
