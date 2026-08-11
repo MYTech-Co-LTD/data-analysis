@@ -4,3 +4,4 @@
 //  - qa-* 不放此——留 generator 语义层（services/semantic-generator/src 为单一真相源，
 //    web/lib/qa 保存字节同步副本，由 web/lib/qa/__tests__/config-sync.test.ts 守一致）。
 export * from './job-types';
+export * from './collector-types';
