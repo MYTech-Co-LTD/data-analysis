@@ -71,10 +71,10 @@
 - 根因：InsForge 单文件部署模型禁止运行时共享模块。后果：改 JWT 实现要同步 5 处；新增 function 必须复制粘贴样板。
 
 **P1 —— 契约双份（三处）复制、靠注释约定同步**
-- `detail-sources.json`：`web/lib/qa/config/` 与 `services/semantic-generator/src/` 双份，**字节级相同**。
-- `qa-checks.json`：同样双份，**字节级相同**（初稿漏报，本 spec 补报）。
-- `qa-types.ts`（web 侧文件名为 `web/lib/qa/types.ts`）：双份，**已实质漂移**（见 §1.6）。
-- 后果：改一处忘另一处即静默漂移；CI 无漂移检查。
+- `detail-sources.json`：`web/lib/qa/config/` 与 `services/semantic-generator/src/` 双份，**字节级相同**——已有 `web/lib/qa/__tests__/config-sync.test.ts` 守字节一致（P0 前已守）。
+- `qa-checks.json`：同样双份，**字节级相同**（初稿漏报，本 spec 补报），同受 config-sync 守卫。
+- `qa-types.ts`（web 侧 `web/lib/qa/types.ts` ↔ generator 侧 `qa-types.ts`）：双份，**未纳入 config-sync 检查范围 → 已实质漂移 29 行**（见 §1.6；P0 方案 X 已止血：web 拆 `types-shared.ts` 与 generator 字节同步，并把 `qa-types.ts` 纳入 config-sync 断言）。
+- 后果：改一处忘另一处即静默漂移；CI 无漂移检查（P0 已为 qa-types 补上 config-sync 断言）。
 
 **P1 —— report-center 板块靠「页面手动编排」，新增板块 = 改多处**
 - `web/app/reports/targets/[id]/page.tsx` 手动 `Promise.allSettled` 7 个 getter，再把每个 `GetterResult` 逐个 props 传进 `DesktopDashboard`/`MobileDashboard`（两套组件签名同步维护）。
@@ -118,6 +118,8 @@
 | `CheckResult` interface | 有（运行时结果） | 无 | 归入运行时类型，generator 不引用 |
 
 即契约漂移**已经发生**。这把 P0「立即单源 + CI 漂移检查」从「防患于未然」升级为「止血」——单源前必须先按上表对齐，否则「单源」会顺手合并掉某侧已用字段（C6 或 sum_col），制造新 bug。
+
+> **根因**：`detail-sources.json` / `qa-checks.json` 已纳入 `web/lib/qa/__tests__/config-sync.test.ts` 字节一致守卫，而 **`qa-types.ts` 未纳入 config-sync 检查范围**，漂移无 CI 拦截。P0（方案 X）已止血：generator 补 C6、web 拆 `web/lib/qa/types-shared.ts` 与 generator `qa-types.ts` 字节同步（`types.ts` re-export + 本地 `CheckResult`），并把 `qa-types.ts` 加入 config-sync 断言。
 
 ---
 
@@ -181,14 +183,13 @@
 
 ```
 web/lib/
-├── contracts/                    # ★ 单源契约包（新增，Phase 0）
-│   ├── qa-types.ts               #   ← 从 web/lib/qa/types.ts 迁入（含 C6 + sum_col 合并；CheckResult 归运行时类型）
-│   ├── qa/                       #   ← detail-sources.json / qa-checks.json 单源（两份皆迁入）
-│   ├── monitor-types.ts
-│   ├── collector-types.ts        #   ← 新：统一 Collector 接口
-│   ├── job-types.ts              #   ← 新：JobManifest 接口
-│   ├── board-types.ts            #   ← 新：BoardManifest 接口
-│   └── report-view-contract.ts   #   ← 生成器 view-configs 的产出契约（视图名/列/level）
+├── contracts/                    # ★ 单源契约包（新增；**P0 不建全、P1 建**；qa-* 留 generator 语义层，不迁入）
+│   ├── index.ts                  #   ← barrel：P1-P4 web 运行时类型（job/collector/board）的家（P0 已建骨架）
+│   ├── job-types.ts              #   ← 新：JobManifest/JobContext/JobResult 接口（P0 占位草案，P1 冻结）
+│   ├── monitor-types.ts          #   ← P1
+│   ├── collector-types.ts        #   ← 新：统一 Collector 接口（P2）
+│   ├── board-types.ts            #   ← 新：BoardManifest 接口（P4）
+│   └── report-view-contract.ts   #   ← 生成器 view-configs 的产出契约（视图名/列/level，P4 引用）
 ├── collectors/                   # 每个数据源一个目录（Phase 2）
 │   ├── registry.ts               #   ← 注册表：kind → collector
 │   ├── lemeng/                   #   ← 现有 collect*.ts 迁入
@@ -215,7 +216,7 @@ functions/
 └── scripts/deploy-functions.sh   # 改造：esbuild bundle _shared → 各 function；按 manifest 校验/部署
 
 services/semantic-generator/src/
-├── qa-types.ts / detail-sources.json / qa-checks.json   # 改为从 web/lib/contracts 单源（复制+CI 校验过渡，见 §4.5）
+├── qa-types.ts / detail-sources.json / qa-checks.json   # qa-* 留 generator 语义层（单一真相源）；web 保存字节同步副本，config-sync.test.ts 守一致（不迁 contracts）
 └── view-configs.ts               # 保持；产出契约进 contracts（Phase 4 引用）
 ```
 
@@ -312,7 +313,7 @@ export interface BoardManifest<TRow> {
 
 | Phase | 内容 | 交付物 | 验证 | 预计 |
 |---|---|---|---|---|
-| **P0 契约基线 + 止血** | ① 建 `web/lib/contracts/`；② **先按 §1.6 表对齐 qa-types**（C6 保留、sum_col 保留、CheckResult 归运行时）；③ 迁入 qa-types/detail-sources/**qa-checks**（三处全单源）；④ `web/lib/qa` 与 `services/semantic-generator` 改引用单源；⑤ 加 CI 契约漂移检查（三文件 diff 非空即失败）；⑥ pnpm workspace §4.5 评估定案 | contracts 包 + CI 检查 | `npm run test` + 三文件 diff 检查 + QA C0~C6 回归 | 1~2d |
+| **P0 契约止血（方案 X：单源=generator 为源，不建 contracts 包）** | ① 按 §1.6 表对齐 qa-types：generator 补 C6、sum_col 保留、CheckResult 归 web 本地运行时类型；② web 拆 `types-shared.ts` 与 generator `qa-types.ts` 字节同步（`types.ts` re-export + 本地 CheckResult）；③ `config-sync.test.ts` 纳入 `qa-types.ts` 键（detail-sources/qa-checks 原守卫不动）；④ **不建 contracts 包**——仅 P1 铺路骨架（`contracts/index.ts` barrel + `job-types.ts` 占位）；⑤ 依赖方向 lint 骨架（`guard-contract-drift.sh` + `import/no-restricted-paths`，P1 起严执）；⑥ pnpm workspace §4.5 评估**推迟** | types-shared 字节同步 + config-sync 扩展 + contracts 骨架 | `npm run test`（config-sync + C0~C6）+ 双侧 `tsc` + guard 脚本可跑 | 已交付 |
 | **P1 调度拆分** | `scheduler.ts` 1:1 提取为 `jobs/*`（**纯搬移，不改任何逻辑**）；`jobs/registry.ts` 按原注册顺序加载；scheduler.ts 只留加载+锁 | jobs/ + 薄 scheduler | 现有 collect/qa/monitor 测试 + 部署后采集日志对比 | 3~5d |
 | **P2 采集器插件化** | 定义 `Collector` 接口；collect*.ts 归入 `collectors/lemeng/`（接口适配层，逻辑不动）；scheduler/collect job 改走 registry 分发 | collectors/ + registry | 三源采集 + C0 对账回归 | 3~5d |
 | **P3 functions 打包 + manifest** | 提取 `functions/_shared/`（jwt/cors/wecom-client/postgrest-client）；`deploy-functions.sh` 加 esbuild bundle（**先试点 1 个 function，全绿再铺开**）；每个 function 补 `function.json`；去重 wecom-oauth/oidc-callback；废弃/重写 `functions/mcp` 占位（与 agent-query 对齐） | _shared/ + bundle 脚本 + manifests | `check-functions.sh` 扩展 + 线上 function 冒烟 | 5~7d |

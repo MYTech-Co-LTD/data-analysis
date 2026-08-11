@@ -1,0 +1,4 @@
+# scripts/guard-contract-drift.allowlist
+# 依赖方向铁律白名单（spec 2026-08-11-modular-plugin-design §4.4；P1 起严执）。
+# 语义：命中的 file:line 整行豁免；只填 path 则该文件所有命中豁免（少用）。
+# 默认拒绝——除非架构 owner 明确 approve 的合理例外，不要添加。
