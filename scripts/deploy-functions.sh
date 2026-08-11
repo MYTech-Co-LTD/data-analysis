@@ -4,10 +4,22 @@
 # （OSS 的 `functions deploy` CLI 走 cloud OAuth、headless 不可用，故直调 API）。
 # 随后把 WECOM_* 注入为 function secret（function 用 Deno.env.get 读取）。
 # 依赖：jq、curl；InsForge 后端已运行且 7130 端口对本机可达（dev 映射 / prod 的 127.0.0.1 绑定）。
+#
+# 共享打包试点（P3，仅 cleanup-blacklist）：
+#   引用 ../_shared 的 function 先经 esbuild --bundle --format=cjs 打成单文件（_shared 内联），
+#   部署产物即 bundle 单文件（InsForge 单文件运行时模型不变）。产物选择顺序：
+#     1) 本机 npx esbuild 现场 bundle → .bundle/<slug>.js（临时下载 esbuild）
+#     2) 已提交的 functions/<slug>/index.bundle.js（生产服务器无 node/npx 时回退）
+#     3) 引用 _shared 但两者都不可用 → 跳过该 function 并报错（绝不部署含 require('../_shared/..') 的裸源码，
+#        单文件运行时会因找不到共享模块而崩溃）。
+#   未引用 _shared 的 function 走旧逻辑：直接部署 functions/<slug>/index.js。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FUNCS_DIR="$ROOT/functions"
+# esbuild bundle 临时产物目录（gitignored；已提交的 index.bundle.js 才是服务器回退产物）
+BUNDLE_DIR="$ROOT/.bundle"
+mkdir -p "$BUNDLE_DIR"
 
 cd "$ROOT/deploy"
 if [ -f .env ]; then
@@ -32,13 +44,29 @@ deploy_one() {
     return
   fi
 
+  # 部署产物选择：引用 _shared 的 function 必须用 esbuild bundle 单文件（见文件头说明）。
+  local deploy_code="$code_file"
+  if grep -qE "require\(['\"]\.\./_shared/" "$code_file"; then
+    local bundle_out="$BUNDLE_DIR/$slug.js"
+    if command -v npx >/dev/null 2>&1 && npx --yes esbuild "$code_file" --bundle --format=cjs --log-level=warning --outfile="$bundle_out" >/dev/null 2>&1; then
+      deploy_code="$bundle_out"
+      echo "  · ${slug}: 已 esbuild bundle（_shared 内联 → .bundle/${slug}.js）"
+    elif [ -f "$dir/index.bundle.js" ]; then
+      deploy_code="$dir/index.bundle.js"
+      echo "  · ${slug}: 用已提交 bundle index.bundle.js（无 npx，回退）"
+    else
+      echo "  ⚠ ${slug}: 引用 _shared 但既无 npx 也无已提交 index.bundle.js，跳过部署（避免部署缺依赖裸源码）" >&2
+      return 1
+    fi
+  fi
+
   echo "▶ function: $slug"
   local body
   body=$(jq -n \
     --arg slug "$slug" \
     --arg name "$slug" \
     --arg desc "$slug edge function" \
-    --rawfile code "$code_file" \
+    --rawfile code "$deploy_code" \
     '{slug:$slug, name:$name, description:$desc, code:$code, status:"active"}')
 
   if curl -sf -H "$AUTH" "$API_URL/api/functions/$slug" >/dev/null 2>&1; then

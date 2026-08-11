@@ -23,7 +23,12 @@ echo ""
 for dir in "$FUNCTIONS_DIR"/*/; do
   [ -d "$dir" ] || continue
   name=$(basename "$dir")
-  
+
+  # _shared 是共享模块目录（非 function），由下方 bundle 校验环节间接校验，跳过入口检查
+  if [ "$name" = "_shared" ]; then
+    continue
+  fi
+
   # 支持 .js 和 .ts
   js_file="$dir/index.js"
   ts_file="$dir/index.ts"
@@ -66,6 +71,66 @@ for dir in "$FUNCTIONS_DIR"/*/; do
   fi
 
   echo "✅ $name"
+done
+
+# ---- 共享打包试点（P3，仅 cleanup-blacklist）：_shared bundle 产物校验 ----
+# 引用 ../_shared 的 function 必须能经 esbuild 打出合法单文件 CJS（部署产物），
+# 并对已提交的 index.bundle.js（服务器无 node/npx 时的回退产物）做 node --check。
+BUNDLE_DIR="$ROOT/.bundle"
+mkdir -p "$BUNDLE_DIR"
+for dir in "$FUNCTIONS_DIR"/*/; do
+  [ -d "$dir" ] || continue
+  name=$(basename "$dir")
+  [ "$name" = "_shared" ] && continue
+  js_file="$dir/index.js"
+  [ -f "$js_file" ] || continue
+  grep -qE "require\(['\"]\.\./_shared/" "$js_file" || continue
+
+  echo "🔎 $name: 共享打包 bundle 校验..."
+  committed="$dir/index.bundle.js"
+  if command -v npx >/dev/null 2>&1; then
+    fresh="$BUNDLE_DIR/$name.js"
+    if ! npx --yes esbuild "$js_file" --bundle --format=cjs --log-level=warning --outfile="$fresh" >/dev/null 2>&1; then
+      echo "❌ $name: esbuild bundle 失败（_shared 无法内联）"
+      errors=$((errors + 1))
+    else
+      if ! node --check "$fresh" 2>/dev/null; then
+        echo "❌ $name: 现场 bundle 产物语法错误（.bundle/$name.js）"
+        node --check "$fresh" 2>&1 | head -3
+        errors=$((errors + 1))
+      else
+        echo "  ✅ $name: 现场 bundle 合法单文件 CJS（_shared 已内联）"
+      fi
+      # 已提交回退产物同样校验（服务器无 node/npx 时用它部署）
+      if [ -f "$committed" ]; then
+        if node --check "$committed" 2>/dev/null; then
+          echo "  ✅ $name: index.bundle.js 语法合法"
+        else
+          echo "❌ $name: index.bundle.js 语法错误"
+          node --check "$committed" 2>&1 | head -3
+          errors=$((errors + 1))
+        fi
+        # 漂移门禁：服务器无 node/npx，只能部署已提交的 index.bundle.js。
+        # 源码改动后若未重新生成并提交 bundle，部署的会是旧代码 → 直接判失败，强制重新生成。
+        if ! cmp -s "$fresh" "$committed"; then
+          echo "❌ $name: index.bundle.js 与源码最新 bundle 不一致（需重新生成并提交）"
+          echo "   请运行: npx esbuild $js_file --bundle --format=cjs --outfile=$committed"
+          errors=$((errors + 1))
+        fi
+      fi
+    fi
+  elif [ -f "$committed" ]; then
+    if node --check "$committed" 2>/dev/null; then
+      echo "  ✅ $name: index.bundle.js 语法合法（无 npx，用已提交产物）"
+    else
+      echo "❌ $name: index.bundle.js 语法错误"
+      node --check "$committed" 2>&1 | head -3
+      errors=$((errors + 1))
+    fi
+  else
+    echo "❌ $name: 引用 _shared 但无 npx 且无 index.bundle.js，无法校验/部署"
+    errors=$((errors + 1))
+  fi
 done
 
 echo ""
