@@ -4,15 +4,23 @@
 #   1) GHA 境外 runner push 天翼云(国内) ~30KB/s —— build/push 移到服务器（国内→国内）
 #   2) 服务器(国内) git pull GitHub 偶发 TLS 中断 —— 改用 GHA rsync 推代码（同 tuangou 项目）
 #
-# 链路：push main / workflow_dispatch
-#   → quality job: lint(警告模式) + type-check(必须通过) + function-check(必须通过)
-#   → checkout → rsync 代码到服务器（排除 .git/node_modules/.next/.env）
-#   → SSH 执行 deploy.sh：起后端 → migrate → function
-#     → docker login 天翼云 → docker build 前端（服务器）→ docker push 天翼云 → compose up
+# 链路（P5 CI 演进：deploy 单 job 拆步，function 部署失败不再阻断 web 构建，CLAUDE.md 改进#5）：
+# push main / workflow_dispatch
+#   → quality job: lint(警告模式) + type-check(必须) + vitest(必须) + function-check(必须) + guards
+#   → migrate job（needs quality，无 continue-on-error）: rsync(database/scripts/deploy)
+#     → SSH 起后端栈 + 数据库迁移 + 刷 postgrest 缓存；失败阻断全部（数据库必须）
+#   → functions job（needs migrate，continue-on-error: true）: rsync(functions/scripts/deploy)
+#     → SSH 部署 edge functions + secrets；失败不阻断 build-web（function 可用 MCP 单独更新）
+#   → build-web job（needs [migrate, functions]）: rsync(web/services/scripts/deploy)
+#     → SSH 构建前端镜像 + 推天翼云 + compose up（web/nginx/duckdb）
+#
+# 三个部署 job 共用同一份 scripts/deploy.sh，用 DEPLOY_PHASE=migrate|functions|web 跑对应阶段；
+# 手动完整部署仍 `bash scripts/deploy.sh`（DEPLOY_PHASE 缺省 all，行为不变）。
+# 旧「单 job 串联」版逻辑见本文件末尾注释块（回退备选，勿删）。
 #
 # Secrets：
 #   SSH_HOST / SSH_USER / SSH_KEY / DEPLOY_PATH   服务器 SSH 访问
-#   CTYUN_USERNAME / CTYUN_PASSWORD               服务器 docker login 天翼云（push 前端镜像用）
+#   CTYUN_USERNAME / CTYUN_PASSWORD               服务器 docker login 天翼云（push 前端镜像用，仅 build-web 需要）
 #   （NEXT_PUBLIC_INSFORGE_URL / ANON_KEY 由服务器 deploy/.env 提供，build 时注入）
 name: deploy
 
@@ -26,7 +34,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 质量门禁：lint(警告) + type-check + function 校验
+  # 质量门禁：lint(警告) + type-check(必须) + vitest(必须) + function 校验 + guards
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -49,6 +57,9 @@ jobs:
       - name: Type check
         run: cd web && npx tsc --noEmit
 
+      - name: Test (vitest, 模块化后全量单测必须通过)
+        run: cd web && npm test
+
       - name: Check edge functions
         run: bash scripts/check-functions.sh
 
@@ -58,7 +69,9 @@ jobs:
       - name: Guard compute glob (no **/*.parquet)
         run: bash scripts/guard-compute-glob.sh
 
-  deploy:
+  # ═══════════════ 部署拆步（P5）：migrate → functions → build-web ═══════════════
+  # 数据库迁移：失败必须阻断全部（数据库先行，前端/function 依赖其 schema）。
+  migrate:
     needs: quality
     runs-on: ubuntu-latest
     steps:
@@ -71,7 +84,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: rsync 代码到服务器
+      - name: rsync 代码到服务器（migrate 所需：database/scripts/deploy）
         run: |
           rsync -avz --delete \
             --exclude '.git' \
@@ -79,10 +92,87 @@ jobs:
             --exclude '.next' \
             --exclude '.env' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            ./web ./scripts ./database ./deploy ./functions ./services \
+            ./database ./scripts ./deploy \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
 
-      - name: SSH 执行部署
+      - name: SSH 执行数据库迁移（起后端栈 + migrate + 刷 postgrest 缓存）
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            DEPLOY_PHASE=migrate bash scripts/deploy.sh
+
+  # edge functions 部署：失败不阻断 build-web（CLAUDE.md 改进#5；function 可用 MCP 单独更新）。
+  # continue-on-error: true → 即使失败，build-web 的 needs 仍视为满足而继续执行。
+  functions:
+    needs: migrate
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置 SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: rsync 代码到服务器（functions 所需：functions/scripts/deploy）
+        run: |
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.next' \
+            --exclude '.env' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./functions ./scripts ./deploy \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
+
+      - name: SSH 部署 edge functions + secrets
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            DEPLOY_PHASE=functions bash scripts/deploy.sh
+
+  # web 构建：前端镜像 build → 推天翼云 → 起 web/nginx/duckdb。
+  # needs [migrate, functions]：migrate 失败则跳过（数据库必须）；functions 有 continue-on-error 故不阻断。
+  build-web:
+    needs: [migrate, functions]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 配置 SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: rsync 代码到服务器（web 所需：web/services/scripts/deploy）
+        run: |
+          rsync -avz --delete \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.next' \
+            --exclude '.env' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./web ./services ./scripts ./deploy \
+            ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
+
+      - name: SSH 构建前端镜像 → 推天翼云 → 起网关
         uses: appleboy/ssh-action@v1.2.0
         env:
           CTYUN_USERNAME: ${{ secrets.CTYUN_USERNAME }}
@@ -97,4 +187,46 @@ jobs:
           script: |
             export CTYUN_USERNAME CTYUN_PASSWORD
             cd ${{ secrets.DEPLOY_PATH }}
-            bash scripts/deploy.sh
+            DEPLOY_PHASE=web bash scripts/deploy.sh
+
+  # ═══════════════ 旧 deploy 单 job（P5 拆步前的完整串联版；回退备选，勿删） ═══════════════
+  # deploy:
+  #   needs: quality
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: 配置 SSH key
+  #       run: |
+  #         mkdir -p ~/.ssh
+  #         echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+  #         chmod 600 ~/.ssh/deploy_key
+  #         ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+  #
+  #     - name: rsync 代码到服务器
+  #       run: |
+  #         rsync -avz --delete \
+  #           --exclude '.git' \
+  #           --exclude 'node_modules' \
+  #           --exclude '.next' \
+  #           --exclude '.env' \
+  #           -e "ssh -i ~/.ssh/deploy_key" \
+  #           ./web ./scripts ./database ./deploy ./functions ./services \
+  #           ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
+  #
+  #     - name: SSH 执行部署
+  #       uses: appleboy/ssh-action@v1.2.0
+  #       env:
+  #         CTYUN_USERNAME: ${{ secrets.CTYUN_USERNAME }}
+  #         CTYUN_PASSWORD: ${{ secrets.CTYUN_PASSWORD }}
+  #       with:
+  #         host: ${{ secrets.SSH_HOST }}
+  #         username: ${{ secrets.SSH_USER }}
+  #         key: ${{ secrets.SSH_KEY }}
+  #         envs: CTYUN_USERNAME,CTYUN_PASSWORD
+  #         script_stop: true
+  #         command_timeout: 30m
+  #         script: |
+  #           export CTYUN_USERNAME CTYUN_PASSWORD
+  #           cd ${{ secrets.DEPLOY_PATH }}
+  #           bash scripts/deploy.sh
