@@ -1,0 +1,23 @@
+{
+  "slug": "agent-query",
+  "runtime": "commonjs",
+  "secrets": ["AGENT_API_KEY", "JWT_SIGNING_KEY"],
+  "schedule": null,
+  "contract": {
+    "auth": "agent_api_key",
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "description": "智能问数网关：body { sql, userId?, mode?, cronSessionKey?, agent_api_key? }；认证用 body.agent_api_key 或 x-agent-key 头",
+      "properties": {
+        "sql": { "type": "string" },
+        "userId": { "type": "string" },
+        "mode": { "type": "string", "enum": ["dictionary", "upsert_scheduled", "lookup_delivery", "delete_scheduled"] },
+        "agent_api_key": { "type": "string" }
+      }
+    },
+    "response": {
+      "200": { "type": "object", "properties": { "success": true, "engine": "pg|duckdb", "data": "array" } }
+    }
+  }
+}

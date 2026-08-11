@@ -1,5 +1,5 @@
 // functions/_shared/jwt.ts
-// 共享 HS256 JWT 签名模块（试点：共享打包，见 DESIGN 的 P3 functions 试点）。
+// 共享 HS256 JWT 签名模块（共享打包，P3 铺开：全 5 个引用 function 共用，见 DESIGN 的 P3 functions）。
 // - CommonJS module.exports，与现有 function（module.exports = async function）一致。
 // - 由 esbuild --bundle --format=cjs 打进各 function 的部署单文件（见 scripts/deploy-functions.sh），
 //   InsForge 运行时模型不变：部署产物仍是单文件 CJS。

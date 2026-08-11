@@ -73,7 +73,7 @@ for dir in "$FUNCTIONS_DIR"/*/; do
   echo "✅ $name"
 done
 
-# ---- 共享打包试点（P3，仅 cleanup-blacklist）：_shared bundle 产物校验 ----
+# ---- 共享打包（P3 铺开，全 5 个引用 function）：_shared bundle 产物校验 ----
 # 引用 ../_shared 的 function 必须能经 esbuild 打出合法单文件 CJS（部署产物），
 # 并对已提交的 index.bundle.js（服务器无 node/npx 时的回退产物）做 node --check。
 BUNDLE_DIR="$ROOT/.bundle"

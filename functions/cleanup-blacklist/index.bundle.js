@@ -42,10 +42,10 @@ var require_cors = __commonJS({
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization"
     };
-    function json2(data, status) {
+    function json2(data, status, extraHeaders) {
       return new Response(JSON.stringify(data), {
         status,
-        headers: { ...corsHeaders2, "Content-Type": "application/json" }
+        headers: { ...corsHeaders2, "Content-Type": "application/json", ...extraHeaders || {} }
       });
     }
     module2.exports = { corsHeaders: corsHeaders2, json: json2 };

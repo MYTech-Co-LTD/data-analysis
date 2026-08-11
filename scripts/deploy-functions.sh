@@ -5,7 +5,7 @@
 # 随后把 WECOM_* 注入为 function secret（function 用 Deno.env.get 读取）。
 # 依赖：jq、curl；InsForge 后端已运行且 7130 端口对本机可达（dev 映射 / prod 的 127.0.0.1 绑定）。
 #
-# 共享打包试点（P3，仅 cleanup-blacklist）：
+# 共享打包（P3 铺开：cleanup-blacklist 试点 + wecom-oauth/wecom-oidc-callback/wecom-push/agent-query，全 5 个）：
 #   引用 ../_shared 的 function 先经 esbuild --bundle --format=cjs 打成单文件（_shared 内联），
 #   部署产物即 bundle 单文件（InsForge 单文件运行时模型不变）。产物选择顺序：
 #     1) 本机 npx esbuild 现场 bundle → .bundle/<slug>.js（临时下载 esbuild）

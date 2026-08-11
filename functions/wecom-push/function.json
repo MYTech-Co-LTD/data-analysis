@@ -1,0 +1,18 @@
+{
+  "slug": "wecom-push",
+  "runtime": "commonjs",
+  "secrets": ["WECOM_CORP_ID", "WECOM_OPS_SECRET", "WECOM_OPS_AGENT_ID", "JWT_SECRET", "REPORT_URL"],
+  "schedule": null,
+  "contract": {
+    "auth": "none",
+    "input": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "type": "object",
+      "description": "定时/手动触发：读报表摘要 → 企微应用消息 textcard 推送（body.to_user 可选，默认 @all）",
+      "properties": { "to_user": { "type": "string" } }
+    },
+    "response": {
+      "200": { "type": "object", "properties": { "ok": true, "to_user": "string", "detail": "object" } }
+    }
+  }
+}
