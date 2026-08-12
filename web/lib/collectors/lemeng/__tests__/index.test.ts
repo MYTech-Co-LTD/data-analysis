@@ -72,6 +72,20 @@ describe('lemeng Collector 插件适配层', () => {
     expect(detail.apiTotal).toBe(600);
   });
 
+  it('retail collectOnce：空 branchNums=品牌全量（lemeng 语义，不得误报缺失）', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    vi.stubGlobal('fetch', mockApi());
+
+    const ctx: CollectCtx = { authToken: 'Bearer x', task: 'retail', branchNums: [], branchNumsStr: '' };
+    const opts: CollectOptions = { dates: ['2026-08-04'], mode: 'full', pageSize: 200 };
+
+    const r = await COLLECTORS['lemeng'].collectOnce(ctx, opts);
+
+    // 空 branchNums = 品牌全量（lemeng API 语义，3120/64188 销售任务均空=全量）
+    expect(r.error).toBeUndefined();
+    expect(r.fetchComplete).toBe(true);
+  });
+
   it('incremental 水位线跳过（skipped）：视为完整成功，不误报 alert', async () => {
     vi.spyOn(Math, 'random').mockReturnValue(0);
     vi.stubGlobal('fetch', mockApi());
