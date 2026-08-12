@@ -6,7 +6,7 @@
 #
 # 链路（P5 CI 演进：deploy 单 job 拆步，function 部署失败不再阻断 web 构建，CLAUDE.md 改进#5）：
 # push main / workflow_dispatch
-#   → quality job: lint(警告模式) + type-check(必须) + vitest(必须) + function-check(必须) + guards
+#   → quality job: lint(警告,依赖方向/guards 必须) + type-check(必须) + vitest(必须) + function-check(必须) + guards
 #   → migrate job（needs quality，无 continue-on-error）: rsync(database/scripts/deploy)
 #     → SSH 起后端栈 + 数据库迁移 + 刷 postgrest 缓存；失败阻断全部（数据库必须）
 #   → functions job（needs migrate，continue-on-error: true）: rsync(functions/scripts/deploy)
@@ -34,7 +34,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 质量门禁：lint(警告) + type-check(必须) + vitest(必须) + function 校验 + guards
+  # 质量门禁：lint(警告模式) + 依赖方向硬约束(eslint modular + guard-contract-drift,必须) + type-check/vitest/function 校验 + guards(必须)
   quality:
     runs-on: ubuntu-latest
     steps:
@@ -68,6 +68,18 @@ jobs:
 
       - name: Guard compute glob (no **/*.parquet)
         run: bash scripts/guard-compute-glob.sh
+
+      # 依赖方向硬约束（spec 2026-08-11-modular-plugin-design §4.4）：jobs ⇄ boards 禁止互 import。
+      # eslint 针对性规则（只启 import/no-restricted-paths，避开存量 lint error（多为 no-explicit-any））必须通过；
+      # guard-contract-drift.sh 兜底 alias 形态互 import。两者任一命中即阻断。
+      - name: Guard module boundaries (eslint import/no-restricted-paths, must pass)
+        run: cd web && npx eslint --config eslint.modular.config.mjs lib/jobs lib/report-center/boards
+
+      - name: Guard contract drift (jobs ⇄ boards 禁止互 import)
+        run: bash scripts/guard-contract-drift.sh
+
+      - name: Guard plugin registry (新插件必须注册)
+        run: bash scripts/guard-plugin-registry.sh
 
   # ═══════════════ 部署拆步（P5）：migrate → functions → build-web ═══════════════
   # 数据库迁移：失败必须阻断全部（数据库先行，前端/function 依赖其 schema）。

@@ -1,0 +1,7 @@
+# scripts/guard-plugin-registry.allowlist
+# 插件注册铁律白名单（spec 2026-08-11-modular-plugin-design §4.2/§5；建目录必须同步注册）。
+# 格式：每行一个插件目录路径（相对仓库根，如 web/lib/jobs/legacy-x），# 开头为注释。
+# 语义：命中的目录整目录豁免（允许暂不注册）。
+# 默认拒绝——仅豁免架构 owner 明确 approve 的合理例外（如迁移中的遗留目录）。
+# 新插件不得依赖白名单：正常路径是「建目录 + registry 追加 1 行」。
+
