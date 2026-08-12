@@ -45,7 +45,8 @@ function reqNumber(ctx: CollectCtx, key: string): number {
 
 function reqNumberArray(ctx: CollectCtx, key: string): number[] {
   const v = ctx[key];
-  if (!Array.isArray(v) || v.length === 0) throw new Error(`lemeng: ctx.${key} 缺失（需 number[]）`);
+  // 空数组合法：lemeng API 语义 branch_nums=[] = 品牌全量（销售订单明细采集任务均用空=全量）
+  if (!Array.isArray(v)) throw new Error(`lemeng: ctx.${key} 缺失（需 number[]；空数组=全量合法）`);
   return v.map(Number);
 }
 
