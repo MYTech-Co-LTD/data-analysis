@@ -376,6 +376,12 @@ function StorePicker({ value, onChange }: { value: string[] | null; onChange: (v
     if (s.has(num)) s.delete(num); else s.add(num);
     onChange(s.size ? [...s] : null); // 全去勾 → 恢复继承（避免空数组覆盖=放行）
   }
+  function setMode(m: 'inherit' | 'all' | 'specific') {
+    if (m === 'inherit') onChange(null);
+    else if (m === 'all') onChange(['*']);
+    // 全部门(*) → 指定门店：先置空再进入 specific（避免 ['*'] 残留导致 no-op）
+    else onChange(value && value[0] === '*' ? [] : selected.size ? [...selected] : []);
+  }
   function selectAllBrand() {
     const base = value && value[0] !== '*' ? new Set(value) : new Set<string>();
     for (const n of filtered) base.add(n.branch_num);
@@ -385,7 +391,7 @@ function StorePicker({ value, onChange }: { value: string[] | null; onChange: (v
 
   const countLabel = mode === 'inherit' ? '未配置（继承）'
     : mode === 'all' ? '全部门(*)'
-    : `${selected.size} 家`;
+    : `已选 ${selected.size} 家（按门店号去重）`;
 
   return (
     <div className="rounded-md border border-slate-200 p-3 bg-slate-50/50">
@@ -396,11 +402,7 @@ function StorePicker({ value, onChange }: { value: string[] | null; onChange: (v
             <button
               key={m}
               type="button"
-              onClick={() => {
-                if (m === 'inherit') onChange(null);
-                else if (m === 'all') onChange(['*']);
-                else onChange(selected.size ? [...selected] : []);
-              }}
+              onClick={() => setMode(m)}
               className={`px-2.5 py-1 ${i > 0 ? 'border-l border-slate-200' : ''} ${mode === m ? 'bg-primary text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
             >
               {label}
@@ -409,7 +411,7 @@ function StorePicker({ value, onChange }: { value: string[] | null; onChange: (v
         </div>
         <span className="text-xs text-slate-500 tabular-nums">{countLabel}</span>
         <div className="ml-auto flex gap-3">
-          <button type="button" onClick={selectAllBrand} className="text-xs text-primary hover:underline">全选（该品牌）</button>
+          <button type="button" onClick={selectAllBrand} className="text-xs text-primary hover:underline">全选（当前结果）</button>
           <button type="button" onClick={clear} className="text-xs text-slate-500 hover:underline">清空</button>
         </div>
       </div>
@@ -465,6 +467,7 @@ function StorePicker({ value, onChange }: { value: string[] | null; onChange: (v
                         disabled={mode !== 'specific'}
                         onChange={() => toggle(b.branch_num)}
                       />
+                      <span className="text-[10px] text-slate-400 font-medium tabular-nums">{b.system_book_code}·</span>
                       <span className="tabular-nums font-medium">{b.branch_num}</span>
                       <span className="truncate">{b.branch_name}</span>
                     </label>
@@ -520,9 +523,11 @@ function UsersTab({ users, roles, departments, onChanged }: {
 
   async function showPreview(wecomId: string) {
     setErr('');
-    const r = await fetch(`/api/admin/permissions/preview?wecom_id=${encodeURIComponent(wecomId)}`, { cache: 'no-store' });
-    if (!r.ok) { setErr(`预览失败 ${r.status}`); return; }
-    setPreview({ id: wecomId, data: await r.json() });
+    try {
+      const r = await fetch(`/api/admin/permissions/preview?wecom_id=${encodeURIComponent(wecomId)}`, { cache: 'no-store' });
+      if (!r.ok) { setErr(`预览失败 ${r.status}`); return; }
+      setPreview({ id: wecomId, data: await r.json() });
+    } catch { setErr('预览加载失败'); }
   }
 
   const filtered = users.filter(u =>
@@ -658,13 +663,15 @@ function OverrideEditor({ user, onClose, onChanged }: {
       expires_at: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
       note: form.note.trim() || null,
     };
+    const allNull = (body.branch_nums ?? null) === null && (body.brands ?? null) === null
+      && (body.categories ?? null) === null && (body.can_see_cost ?? null) === null;
     try {
       const r = await fetch(`/api/admin/permissions/users/${encodeURIComponent(user.wecom_id)}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
-      toast.success('已保存单独授权，用户重新登录后生效');
+      toast.success(allNull ? '已恢复继承，用户重新登录后生效' : '已保存单独授权，用户重新登录后生效');
       onChanged();
     } catch { setErr('保存失败，请重试'); }
     finally { setSaving(false); }
@@ -1121,24 +1128,31 @@ export default function PermissionsPage() {
   const [audit, setAudit] = useState<AuditItem[]>([]);
   const [error, setError] = useState('');
   const [auditLoading, setAuditLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   async function loadUsers() {
-    const r = await fetch('/api/admin/permissions/users', { cache: 'no-store' });
-    if (!r.ok) { setError(`用户列表加载失败 ${r.status}`); return; }
-    const d = await r.json();
-    setUsers(d.users ?? []); setRoleBriefs(d.roles ?? []); setUserDepts(d.departments ?? []);
+    try {
+      const r = await fetch('/api/admin/permissions/users', { cache: 'no-store' });
+      if (!r.ok) { setError(`用户列表加载失败 ${r.status}`); return; }
+      const d = await r.json();
+      setUsers(d.users ?? []); setRoleBriefs(d.roles ?? []); setUserDepts(d.departments ?? []);
+    } catch { setError('用户列表加载失败'); }
   }
   async function loadDepts() {
-    const r = await fetch('/api/admin/permissions/depts', { cache: 'no-store' });
-    if (!r.ok) { setError(`部门列表加载失败 ${r.status}`); return; }
-    const d = await r.json();
-    setDepartments(d.departments ?? []);
+    try {
+      const r = await fetch('/api/admin/permissions/depts', { cache: 'no-store' });
+      if (!r.ok) { setError(`部门列表加载失败 ${r.status}`); return; }
+      const d = await r.json();
+      setDepartments(d.departments ?? []);
+    } catch { setError('部门列表加载失败'); }
   }
   async function loadRoles() {
-    const r = await fetch('/api/admin/permissions/roles', { cache: 'no-store' });
-    if (!r.ok) { setError(`角色列表加载失败 ${r.status}`); return; }
-    const d = await r.json();
-    setRoles(d.roles ?? []);
+    try {
+      const r = await fetch('/api/admin/permissions/roles', { cache: 'no-store' });
+      if (!r.ok) { setError(`角色列表加载失败 ${r.status}`); return; }
+      const d = await r.json();
+      setRoles(d.roles ?? []);
+    } catch { setError('角色列表加载失败'); }
   }
   async function loadAudit() {
     setAuditLoading(true);
@@ -1147,12 +1161,15 @@ export default function PermissionsPage() {
       if (!r.ok) { setError(`审计加载失败 ${r.status}`); return; }
       const d = await r.json();
       setAudit(d.items ?? []);
-    } finally { setAuditLoading(false); }
+    } catch { setError('审计加载失败'); }
+    finally { setAuditLoading(false); }
   }
 
   useEffect(() => {
     void (async () => {
-      await Promise.all([loadUsers(), loadDepts(), loadRoles(), loadAudit()]);
+      try {
+        await Promise.all([loadUsers(), loadDepts(), loadRoles(), loadAudit()]);
+      } finally { setInitialLoading(false); }
     })();
   }, []);
 
@@ -1180,6 +1197,9 @@ export default function PermissionsPage() {
       </div>
       {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
 
+      {initialLoading ? (
+        <div className="py-16 text-sm text-slate-400 text-center">加载中…</div>
+      ) : (
       <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_400px] xl:gap-6">
         <div>
           <div className="flex gap-1 border-b border-slate-200 mb-4">
@@ -1201,6 +1221,7 @@ export default function PermissionsPage() {
           <AuditPanel items={audit} loading={auditLoading} onRefresh={loadAudit} />
         </div>
       </div>
+      )}
     </div>
   );
 }
