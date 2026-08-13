@@ -9,7 +9,7 @@ const KEY = process.env.INSFORGE_API_KEY!;
 const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'application/json' };
 
 export async function GET(req: NextRequest) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const wecomId = req.nextUrl.searchParams.get('wecom_id');
   if (!wecomId) return NextResponse.json({ ok: false, error: '缺 wecom_id' }, { status: 400 });
 

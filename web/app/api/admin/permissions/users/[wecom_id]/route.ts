@@ -15,7 +15,7 @@ type RouteCtx = { params: Promise<{ wecom_id: string }> };
 
 // GET /users/:wecom_id → { user, override|null }
 export async function GET(req: NextRequest, { params }: RouteCtx) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const w = (await params).wecom_id; // Next 已解码，勿二次 decodeURIComponent（F6）
   const [userArr, over] = await Promise.all([
     fetch(`${POSTGREST_URL}/org_users?select=wecom_id,name&wecom_id=eq.${encodeURIComponent(w)}`, { headers: H, cache: 'no-store' }).then(r => r.json()).catch(() => []),
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest, { params }: RouteCtx) {
 // 注意：has 只算四维（branch_nums/brands/categories/can_see_cost）；仅传 note/expires_at 且四维全 null
 // 视同「未配置」→ 删行（前端需全量提交 override）。
 export async function PUT(req: NextRequest, { params }: RouteCtx) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const w = (await params).wecom_id;
   const b = await req.json().catch(() => null);
   if (!b) return NextResponse.json({ ok: false, error: '缺 body' }, { status: 400 });
@@ -75,7 +75,7 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
 
 // DELETE /users/:wecom_id：删全部该 user 的 override 行（恢复角色∪部门继承）；删失败 502 且不写审计（F1）
 export async function DELETE(req: NextRequest, { params }: RouteCtx) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const w = (await params).wecom_id;
   const old = await fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost,expires_at,note&subject_type=eq.user&subject_id=eq.${encodeURIComponent(w)}&order=id,asc`, { headers: H }).then(r => r.json()).catch(() => []);
   const oldArr = Array.isArray(old) ? old : [];

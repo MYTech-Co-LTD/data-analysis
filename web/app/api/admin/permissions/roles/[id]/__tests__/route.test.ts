@@ -2,12 +2,16 @@
 // 角色 PUT：参数写 roles、默认范围写 data_permissions(role 行)，均落 update_role 审计；
 // 范围维语义（NIT-1）：body 显式出现的字段直写（null=清空该维），未出现的字段保留旧值；四维全 null → 删行。
 // 范围写失败 → 502 且不写审计（F2 回归）；id 非整数 → 400（F7）。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { PUT } from '../route';
 import { writeAudit } from '@/lib/permission-audit';
 
 vi.mock('@/lib/permission-audit', () => ({ writeAudit: vi.fn() }));
+
+vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
+
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);

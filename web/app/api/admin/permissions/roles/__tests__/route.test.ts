@@ -1,6 +1,6 @@
 // web/app/api/admin/permissions/roles/__tests__/route.test.ts
 // 角色列表 GET：roles 参数 + data_permissions(subject_type='role') 默认范围行聚合。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET } from '../route';
 
@@ -8,6 +8,10 @@ const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);
 
 const ADMIN_COOKIE = 'insforge_access_token=x; wecom_userid=ZhangDuo';
+
+vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
+
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
 
 function mkReq(method: 'GET', cookie?: string) {
   return new NextRequest('http://localhost/api/admin/permissions/roles', {

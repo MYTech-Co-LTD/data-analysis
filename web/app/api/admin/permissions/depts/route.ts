@@ -12,7 +12,7 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'applic
 
 // GET：部门 + dept 权限行 + 自动角色（dept_role_mapping）
 export async function GET(req: NextRequest) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const [d, p, m, r] = await Promise.all([
     fetch(`${POSTGREST_URL}/org_departments?select=id,name,parent_id,is_active&is_active=eq.true&order=id`, { headers: H, cache: 'no-store' }),
     fetch(`${POSTGREST_URL}/data_permissions?select=subject_id,branch_nums,can_see_cost&subject_type=eq.dept`, { headers: H, cache: 'no-store' }),
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
 // F10：合并语义——只写显式出现的字段，未出现的保留旧值（与 roles 路由一致，避免 ?? null 全量覆盖清空）。
 // F4/F6：数组维校验，空数组 == 未配；全 null（含空数组规范化）且旧行存在 → 删行恢复继承。
 export async function PUT(req: NextRequest) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const b = await req.json().catch(() => null);
   if (!b?.id) return NextResponse.json({ ok: false, error: '缺 id' }, { status: 400 });
 

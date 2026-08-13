@@ -23,6 +23,7 @@
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "html2canvas": "^1.4.1",
+    "jose": "^6.2.8",
     "lucide-react": "^1.22.0",
     "next": "16.2.9",
     "node-cron": "^4.5.0",

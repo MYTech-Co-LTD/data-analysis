@@ -1,9 +1,13 @@
 // web/app/api/admin/permissions/depts/__tests__/audit-degrade.test.ts
 // F9：审计写失败降级——用【真实 writeAudit】（本文件不 mock permission-audit），
 // 让 permission_audit POST fetch reject，主操作仍应返回 {ok:true} 200 且仅记日志不 500。
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { PUT } from '../route';
+
+vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
+
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);

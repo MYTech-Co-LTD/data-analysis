@@ -1,12 +1,16 @@
 // web/app/api/admin/permissions/depts/__tests__/route.test.ts
 // 部门权限路由：GET 合并 dept 权限行 + 自动角色；PUT upsert dept 行并写审计；requireAdmin 拒绝。
 // mock 全局 fetch + 带 cookie 的 NextRequest。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET, PUT } from '../route';
 import { writeAudit } from '@/lib/permission-audit';
 
 vi.mock('@/lib/permission-audit', () => ({ writeAudit: vi.fn() }));
+
+vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
+
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);

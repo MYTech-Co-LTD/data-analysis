@@ -13,7 +13,7 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'applic
 
 // GET: 用户 + 角色 + 部门（页面一次性取齐；部门权限从 data_permissions 聚合）
 export async function GET(req: NextRequest) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const [u, r, d, p] = await Promise.all([
     fetch(`${POSTGREST_URL}/org_users?select=wecom_id,name,department_ids,role_id,role_source&is_active=eq.true&order=name`, { headers: H, cache: 'no-store' }),
     fetch(`${POSTGREST_URL}/roles?select=id,code,name&is_active=eq.true&order=sort_order`, { headers: H, cache: 'no-store' }),
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 // PUT: 指派角色 { wecom_id, role_id }；role_id=null -> 恢复自动（role_source='auto'，下次同步重算）
 // F4：org_users PATCH 成功后才落 assign_role 审计（actor 由 writeAudit 从 cookie 取）。
 export async function PUT(req: NextRequest) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const b = await req.json().catch(() => null);
   if (!b?.wecom_id) return NextResponse.json({ ok: false, error: '缺 wecom_id' }, { status: 400 });
   const roleId = b.role_id ?? null;

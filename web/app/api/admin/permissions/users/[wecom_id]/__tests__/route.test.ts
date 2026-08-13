@@ -2,12 +2,16 @@
 // 个人 override 路由：GET 详情 / PUT upsert（全 null → 删行恢复继承）/ DELETE 删行，均落审计；
 // 权限表写失败 → 502 且不写审计（F1 回归）；requireAdmin 403。
 // mock 全局 fetch + 带 cookie 的 NextRequest；params 为 Promise（Next 16 async params）。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET, PUT, DELETE } from '../route';
 import { writeAudit } from '@/lib/permission-audit';
 
 vi.mock('@/lib/permission-audit', () => ({ writeAudit: vi.fn() }));
+
+vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
+
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);

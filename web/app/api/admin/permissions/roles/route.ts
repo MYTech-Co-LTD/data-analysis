@@ -9,7 +9,7 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'applic
 
 // GET /roles：角色参数 + 角色默认范围（data_permissions subject_type='role'）
 export async function GET(req: NextRequest) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const [r, p] = await Promise.all([
     fetch(`${POSTGREST_URL}/roles?select=id,code,name,default_landing,default_metric,visible_panels,is_active&order=sort_order`, { headers: H, cache: 'no-store' }),
     fetch(`${POSTGREST_URL}/data_permissions?select=subject_id,branch_nums,brands,categories,can_see_cost&subject_type=eq.role`, { headers: H, cache: 'no-store' }),

@@ -1,8 +1,12 @@
 // web/app/api/admin/permissions/audit/__tests__/route.test.ts
 // 审计列表 GET：分页倒序（默认 50、上限 200）；requireAdmin 拒绝。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET } from '../route';
+
+vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
+
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);

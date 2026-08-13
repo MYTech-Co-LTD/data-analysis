@@ -1,12 +1,16 @@
 // web/app/api/admin/permissions/users/__tests__/route.test.ts
 // 权限管理 users 路由：GET 部门列表从 data_permissions(dept 行) 聚合 + PUT 角色指派（assign_role 审计）+ requireAdmin 拒绝。
 // mock 全局 fetch（直连 PostgREST）+ 带 cookie 的 NextRequest。
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { GET, PUT } from '../route';
 import { writeAudit } from '@/lib/permission-audit';
 
 vi.mock('@/lib/permission-audit', () => ({ writeAudit: vi.fn() }));
+
+vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
+
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);

@@ -19,7 +19,7 @@ const SCOPE_KEYS = ['branch_nums', 'brands', 'categories', 'can_see_cost'] as co
 
 // PUT /roles/:id
 export async function PUT(req: NextRequest, { params }: RouteCtx) {
-  const deny = requireAdmin(req); if (deny) return deny;
+  const deny = await requireAdmin(req); if (deny) return deny;
   const id = Number((await params).id);
   if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ ok: false, error: 'bad id' }, { status: 400 }); // F7：非整数/非正 id 拒绝
   const b = await req.json().catch(() => null);

@@ -18,7 +18,7 @@ const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 
 export async function POST(req: NextRequest) {
-  const denied = requireAdmin(req);
+  const denied = await requireAdmin(req);
   if (denied) return denied;
 
   const url = new URL(req.url);
