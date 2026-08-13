@@ -12,7 +12,7 @@ const H = { apikey: KEY, Authorization: `Bearer ${KEY}`, 'Content-Type': 'applic
 //  status=fail → 只显示 fail/error；默认最近 20 条全状态
 //  limit 覆盖条数（默认 20，上限 100，防一次拉全表）
 export async function GET(req: NextRequest) {
-  const deny = requireAdmin(req);
+  const deny = await requireAdmin(req);
   if (deny) return deny;
 
   const url = new URL(req.url);
