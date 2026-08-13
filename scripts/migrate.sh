@@ -41,8 +41,8 @@ GENERATED_DIR="$ROOT/database/generated"
 if [ -d "$GENERATED_DIR" ]; then
   echo "▶ 执行生成器产物（${GENERATED_DIR}，字节序 base<qa）..."
   shopt -s nullglob
-  mapfile -t generated_files < <(printf '%s\n' "$GENERATED_DIR"/*.sql | LC_ALL=C sort)
-  for sql in "${generated_files[@]}"; do
+  # macOS 默认 bash 3.2 无 mapfile：用 $(...) + 字节序排序的可移植写法（行为与 mapfile 版一致）
+  for sql in $(printf '%s\n' "$GENERATED_DIR"/*.sql | LC_ALL=C sort); do
     name="$(basename "$sql")"
     echo "  · $name"
     docker compose exec -T postgres psql -v ON_ERROR_STOP=1 \
