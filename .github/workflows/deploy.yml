@@ -5,8 +5,9 @@
 #   2) 服务器(国内) git pull GitHub 偶发 TLS 中断 —— 改用 GHA rsync 推代码（同 tuangou 项目）
 #
 # 链路（P5 CI 演进：deploy 单 job 拆步，function 部署失败不再阻断 web 构建，CLAUDE.md 改进#5）：
-# push main / workflow_dispatch
+# push main / PR(main) / workflow_dispatch
 #   → quality job: lint(警告,依赖方向/guards 必须) + type-check(必须) + vitest(必须) + function-check(必须) + guards
+#     · PR 事件只跑 quality（同时是分支保护 required check）；部署三 job 有 if 守卫，仅 push/手动跑，PR 不部署
 #   → migrate job（needs quality，无 continue-on-error）: rsync(database/scripts/deploy)
 #     → SSH 起后端栈 + 数据库迁移 + 刷 postgrest 缓存；失败阻断全部（数据库必须）
 #   → functions job（needs migrate，continue-on-error: true）: rsync(functions/scripts/deploy)
@@ -27,10 +28,14 @@ name: deploy
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
+# 分支保护 required check「quality」依赖 pull_request 事件跑出同名 check；
+# concurrency group 用 PR number 隔离 PR 的 quality run，避免与生产部署(同 group)互相排队/取消。
 concurrency:
-  group: deploy-prod
+  group: ${{ github.event_name == 'pull_request' && format('pr-quality-{0}', github.event.pull_request.number) || 'deploy-prod' }}
   cancel-in-progress: false
 
 jobs:
@@ -83,7 +88,9 @@ jobs:
 
   # ═══════════════ 部署拆步（P5）：migrate → functions → build-web ═══════════════
   # 数据库迁移：失败必须阻断全部（数据库先行，前端/function 依赖其 schema）。
+  # if 守卫：PR 事件不部署（PR 只跑 quality 门禁），部署仅 push main / 手动触发。
   migrate:
+    if: github.event_name != 'pull_request'
     needs: quality
     runs-on: ubuntu-latest
     steps:
@@ -122,6 +129,7 @@ jobs:
   # edge functions 部署：失败不阻断 build-web（CLAUDE.md 改进#5；function 可用 MCP 单独更新）。
   # continue-on-error: true → 即使失败，build-web 的 needs 仍视为满足而继续执行。
   functions:
+    if: github.event_name != 'pull_request'
     needs: migrate
     continue-on-error: true
     runs-on: ubuntu-latest
@@ -161,6 +169,7 @@ jobs:
   # web 构建：前端镜像 build → 推天翼云 → 起 web/nginx/duckdb。
   # needs [migrate, functions]：migrate 失败则跳过（数据库必须）；functions 有 continue-on-error 故不阻断。
   build-web:
+    if: github.event_name != 'pull_request'
     needs: [migrate, functions]
     runs-on: ubuntu-latest
     steps:
