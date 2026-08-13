@@ -1,5 +1,7 @@
 // web/app/api/admin/permissions/roles/[id]/__tests__/route.test.ts
-// 角色 PUT：参数写 roles、默认范围写 data_permissions(role 行)，均落 update_role 审计。
+// 角色 PUT：参数写 roles、默认范围写 data_permissions(role 行)，均落 update_role 审计；
+// 范围维语义（NIT-1）：body 显式出现的字段直写（null=清空该维），未出现的字段保留旧值；四维全 null → 删行。
+// 范围写失败 → 502 且不写审计（F2 回归）；id 非整数 → 400（F7）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { PUT } from '../route';
@@ -22,17 +24,20 @@ function mkReq(method: 'PUT', cookie?: string, body?: unknown) {
   });
 }
 
+const OLD_ROLE = [{ code: 'boss', name: '老板/运营总', default_landing: '/', default_metric: null, visible_panels: [], is_active: true }];
+const OLD_PERM_WITH_VALUES = [{ id: 9, branch_nums: ['1'], brands: ['3120'], categories: null, can_see_cost: false }];
+
 beforeEach(() => {
   fetchMock.mockReset();
   writeAuditMock.mockReset();
 });
 
 describe('PUT /roles/:id', () => {
-  it('只传参数 → PATCH roles + 审计', async () => {
+  it('只传参数 → PATCH roles + 审计（after=rolePatch）', async () => {
     fetchMock
-      .mockResolvedValueOnce({ json: async () => [{ code: 'boss', name: '老板/运营总', default_landing: '/', default_metric: null, visible_panels: [], is_active: true }] })  // 旧 roles
-      .mockResolvedValueOnce({ json: async () => [] })                                                                                                                 // 旧 perm（无行）
-      .mockResolvedValueOnce({ ok: true });                                                                                                                            // PATCH roles
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })     // 旧 roles
+      .mockResolvedValueOnce({ json: async () => [] })            // 旧 perm（无行）
+      .mockResolvedValueOnce({ ok: true });                       // PATCH roles
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_landing: '/my-store' }), CTX);
     expect((await res.json()).ok).toBe(true);
     const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
@@ -45,25 +50,76 @@ describe('PUT /roles/:id', () => {
     }));
   });
 
-  it('传范围字段 → upsert role 行（未提供维 = 旧值合并）', async () => {
+  it('未出现的范围维保留旧值合并写入；审计 after 仅含出现字段（F3）', async () => {
     fetchMock
-      .mockResolvedValueOnce({ json: async () => [{ code: 'boss', name: '老板/运营总', default_landing: '/', default_metric: null, visible_panels: [], is_active: true }] })  // 旧 roles
-      .mockResolvedValueOnce({ json: async () => [{ id: 9, branch_nums: ['1'], brands: ['3120'], categories: null, can_see_cost: false }] })                              // 旧 perm
-      .mockResolvedValueOnce({ ok: true });                                                                                                                            // PATCH data_permissions
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                       // PATCH data_permissions
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['2', '3'] }), CTX);
     expect((await res.json()).ok).toBe(true);
     const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(url).toContain('data_permissions?id=eq.9');
     expect(init.method).toBe('PATCH');
     const sent = JSON.parse(init.body as string);
-    // 未提供的 brands 保留旧值 ['3120']；categories 旧值 null 仍 null；can_see_cost 旧值 false
+    // DB 写整行：出现字段直写；未出现的 brands/categories/can_see_cost 保留旧值
     expect(sent).toMatchObject({ branch_nums: ['2', '3'], brands: ['3120'], categories: null, can_see_cost: false, note: '角色tab修改' });
-    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'update_role' }));
+    // 审计 after 排除未出现字段
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'update_role',
+      after: { branch_nums: ['2', '3'] },
+    }));
   });
 
-  it('bad id → 400', async () => {
+  it('显式 null 单维 → 清空该维（写入 NULL 不落旧值）（NIT-1 回归）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                       // PATCH data_permissions
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: null }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toContain('data_permissions?id=eq.9');
+    expect(init.method).toBe('PATCH');
+    const sent = JSON.parse(init.body as string);
+    expect(sent.branch_nums).toBeNull(); // 显式 null 直写，而不是回退旧值 ['1']
+    expect(sent.brands).toEqual(['3120']); // 未出现的维保留旧值
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'update_role', after: { branch_nums: null },
+    }));
+  });
+
+  it('四维全 null（显式）→ 整行删，审计 after=全 null（F9/NIT-1）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                       // DELETE data_permissions
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: null, brands: null, categories: null, can_see_cost: null }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toContain('data_permissions?id=eq.9');
+    expect(init.method).toBe('DELETE');
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'update_role', subjectId: '1',
+      after: { branch_nums: null, brands: null, categories: null, can_see_cost: null },
+    }));
+  });
+
+  it('范围写失败 → 502 且不写审计（F2 回归）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: false, text: async () => 'scope boom' });   // PATCH 失败
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['9'] }), CTX);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe('scope boom');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('bad id / 非整数 id → 400（F7）', async () => {
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_landing: '/' }), { params: Promise.resolve({ id: 'abc' }) });
     expect(res.status).toBe(400);
+    const res2 = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_landing: '/' }), { params: Promise.resolve({ id: '1.5' }) });
+    expect(res2.status).toBe(400);
   });
 
   it('403 for illegal actor', async () => {

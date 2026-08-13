@@ -5,6 +5,7 @@
 // ⚠️ gateway(7130) 不代理 /rpc 与表接口按既有 admin 路由模式直连 PostgREST
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
+import { writeAudit } from '@/lib/permission-audit';
 
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 const KEY = process.env.INSFORGE_API_KEY!;
@@ -36,16 +37,25 @@ export async function GET(req: NextRequest) {
 }
 
 // PUT: 指派角色 { wecom_id, role_id }；role_id=null -> 恢复自动（role_source='auto'，下次同步重算）
+// F4：org_users PATCH 成功后才落 assign_role 审计（actor 由 writeAudit 从 cookie 取）。
 export async function PUT(req: NextRequest) {
   const deny = requireAdmin(req); if (deny) return deny;
   const b = await req.json().catch(() => null);
   if (!b?.wecom_id) return NextResponse.json({ ok: false, error: '缺 wecom_id' }, { status: 400 });
   const roleId = b.role_id ?? null;
+  // 读旧值（审计用）
+  const old = await fetch(`${POSTGREST_URL}/org_users?select=role_id,role_source&wecom_id=eq.${encodeURIComponent(b.wecom_id)}`, { headers: H }).then(r => r.json()).catch(() => []);
+  const oldArr = Array.isArray(old) ? old : [];
+  const before = oldArr[0] ?? null;
   const r = await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(b.wecom_id)}`, {
     method: 'PATCH',
     headers: { ...H, Prefer: 'return=minimal' },
     body: JSON.stringify({ role_id: roleId, role_source: roleId ? 'manual' : 'auto' }),
   });
   if (!r.ok) return NextResponse.json({ ok: false, error: await r.text() }, { status: 502 });
+  await writeAudit(req, {
+    action: 'assign_role', subjectType: 'user', subjectId: b.wecom_id,
+    before, after: { wecom_id: b.wecom_id, role_id: roleId, role_source: roleId ? 'manual' : 'auto' },
+  });
   return NextResponse.json({ ok: true });
 }

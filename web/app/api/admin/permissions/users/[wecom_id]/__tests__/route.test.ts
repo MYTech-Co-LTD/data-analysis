@@ -1,5 +1,6 @@
 // web/app/api/admin/permissions/users/[wecom_id]/__tests__/route.test.ts
-// 个人 override 路由：GET 详情 / PUT upsert（全 null → 删行恢复继承）/ DELETE 删行，均落审计。
+// 个人 override 路由：GET 详情 / PUT upsert（全 null → 删行恢复继承）/ DELETE 删行，均落审计；
+// 权限表写失败 → 502 且不写审计（F1 回归）；requireAdmin 403。
 // mock 全局 fetch + 带 cookie 的 NextRequest；params 为 Promise（Next 16 async params）。
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -81,6 +82,18 @@ describe('PUT /users/:wecom_id', () => {
     }));
   });
 
+  it('全 null 删行失败 → 502 且不写审计（F1 回归）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
+      .mockResolvedValueOnce({ ok: false, text: async () => 'delete boom' });                                                                                 // DELETE 失败
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: null, brands: null, categories: null, can_see_cost: null }), CTX);
+    expect(res.status).toBe(502);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('delete boom');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
   it('无旧行 → POST 新建', async () => {
     fetchMock
       .mockResolvedValueOnce({ json: async () => [] })   // 读旧（无行）
@@ -90,6 +103,11 @@ describe('PUT /users/:wecom_id', () => {
     const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toMatchObject({ subject_type: 'user', subject_id: 'ZhangDuo', branch_nums: ['9'], brands: null, categories: null, can_see_cost: null });
+  });
+
+  it('403 for illegal actor（F9）', async () => {
+    const res = await PUT(mkReq('PUT', 'insforge_access_token=x; wecom_userid=NotAdmin', { branch_nums: ['9'] }), CTX);
+    expect(res.status).toBe(403);
   });
 });
 
@@ -107,5 +125,20 @@ describe('DELETE /users/:wecom_id', () => {
       action: 'delete_data_permission', subjectType: 'user', subjectId: 'ZhangDuo',
       before: expect.objectContaining({ id: 8 }),
     }));
+  });
+
+  it('删行失败 → 502 且不写审计（F1 回归）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [{ id: 7 }] })            // 读旧
+      .mockResolvedValueOnce({ ok: false, text: async () => 'del boom' });  // DELETE 失败
+    const res = await DELETE(mkReq('DELETE', ADMIN_COOKIE), CTX);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe('del boom');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('403 for illegal actor（F9）', async () => {
+    const res = await DELETE(mkReq('DELETE', 'insforge_access_token=x; wecom_userid=NotAdmin'), CTX);
+    expect(res.status).toBe(403);
   });
 });

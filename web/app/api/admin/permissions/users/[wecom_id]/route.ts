@@ -1,7 +1,7 @@
 // web/app/api/admin/permissions/users/[wecom_id]/route.ts
 // 个人 override 行：GET 详情 / PUT upsert（null=未配；全 null → 删行恢复继承）/ DELETE 删行。
 // 167 迁移后个人授权在 data_permissions(subject_type='user')，get_user_perms 按「该维配了才覆盖」合成。
-// 写路径：先写权限表，成功后再落审计；审计失败仅记日志不阻断。
+// 写路径铁律：先写权限表，写成功后才落审计；权限表写失败 → 502 透传且不写审计；审计失败仅记日志不阻断。
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
 import { writeAudit } from '@/lib/permission-audit';
@@ -15,7 +15,7 @@ type RouteCtx = { params: Promise<{ wecom_id: string }> };
 // GET /users/:wecom_id → { user, override|null }
 export async function GET(req: NextRequest, { params }: RouteCtx) {
   const deny = requireAdmin(req); if (deny) return deny;
-  const w = decodeURIComponent((await params).wecom_id);
+  const w = (await params).wecom_id; // Next 已解码，勿二次 decodeURIComponent（F6）
   const [userArr, over] = await Promise.all([
     fetch(`${POSTGREST_URL}/org_users?select=wecom_id,name&wecom_id=eq.${encodeURIComponent(w)}`, { headers: H, cache: 'no-store' }).then(r => r.json()).catch(() => []),
     fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost,expires_at,note&subject_type=eq.user&subject_id=eq.${encodeURIComponent(w)}&order=id,asc`, { headers: H, cache: 'no-store' }).then(r => r.json()).catch(() => []),
@@ -26,9 +26,11 @@ export async function GET(req: NextRequest, { params }: RouteCtx) {
 }
 
 // PUT /users/:wecom_id：权威替换该 user 的 override（null=未配；全 null → 删行恢复继承）
+// 注意：has 只算四维（branch_nums/brands/categories/can_see_cost）；仅传 note/expires_at 且四维全 null
+// 视同「未配置」→ 删行（前端需全量提交 override）。
 export async function PUT(req: NextRequest, { params }: RouteCtx) {
   const deny = requireAdmin(req); if (deny) return deny;
-  const w = decodeURIComponent((await params).wecom_id);
+  const w = (await params).wecom_id;
   const b = await req.json().catch(() => null);
   if (!b) return NextResponse.json({ ok: false, error: '缺 body' }, { status: 400 });
   const has = (b.branch_nums ?? null) !== null || (b.brands ?? null) !== null
@@ -40,9 +42,10 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   const last = oldArr[oldArr.length - 1] ?? null;
 
   if (!has) {
-    // 全 null → 删除（恢复继承）
+    // 全 null → 删除（恢复继承）；删失败 502 且不写审计（F1）
     if (oldArr.length) {
-      await fetch(`${POSTGREST_URL}/data_permissions?id=in.(${oldArr.map((x: { id: number }) => x.id).join(',')})`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
+      const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=in.(${oldArr.map((x: { id: number }) => x.id).join(',')})`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
+      if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
       await writeAudit(req, { action: 'delete_data_permission', subjectType: 'user', subjectId: w, before: last, after: null });
     }
     return NextResponse.json({ ok: true });
@@ -61,14 +64,15 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   return NextResponse.json({ ok: true });
 }
 
-// DELETE /users/:wecom_id：删全部该 user 的 override 行（恢复角色∪部门继承）
+// DELETE /users/:wecom_id：删全部该 user 的 override 行（恢复角色∪部门继承）；删失败 502 且不写审计（F1）
 export async function DELETE(req: NextRequest, { params }: RouteCtx) {
   const deny = requireAdmin(req); if (deny) return deny;
-  const w = decodeURIComponent((await params).wecom_id);
+  const w = (await params).wecom_id;
   const old = await fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost,expires_at,note&subject_type=eq.user&subject_id=eq.${encodeURIComponent(w)}&order=id,asc`, { headers: H }).then(r => r.json()).catch(() => []);
   const oldArr = Array.isArray(old) ? old : [];
   if (oldArr.length) {
-    await fetch(`${POSTGREST_URL}/data_permissions?id=in.(${oldArr.map((x: { id: number }) => x.id).join(',')})`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
+    const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=in.(${oldArr.map((x: { id: number }) => x.id).join(',')})`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
+    if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
   }
   await writeAudit(req, { action: 'delete_data_permission', subjectType: 'user', subjectId: w, before: oldArr[oldArr.length - 1] ?? null, after: null });
   return NextResponse.json({ ok: true });

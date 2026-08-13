@@ -42,6 +42,13 @@ describe('GET /audit', () => {
     expect(url2).toContain('limit=200');
   });
 
+
+  it('负 limit 下限 clamp 到 1（F8）', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => [] });
+    await GET(mkReq('GET', 'http://localhost/api/admin/permissions/audit?limit=-5', ADMIN_COOKIE));
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toContain('limit=1');
+  });
   it('403 for illegal actor', async () => {
     const res = await GET(mkReq('GET', 'http://localhost/api/admin/permissions/audit', 'insforge_access_token=x; wecom_userid=NotAdmin'));
     expect(res.status).toBe(403);

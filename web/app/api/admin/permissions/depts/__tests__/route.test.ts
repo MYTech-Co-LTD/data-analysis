@@ -85,4 +85,9 @@ describe('PUT /depts', () => {
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['1'] }));
     expect(res.status).toBe(400);
   });
+
+  it('403 for illegal actor（F9）', async () => {
+    const res = await PUT(mkReq('PUT', 'insforge_access_token=x; wecom_userid=NotAdmin', { id: 'd1', branch_nums: ['1'] }));
+    expect(res.status).toBe(403);
+  });
 });
