@@ -437,9 +437,7 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
   → 网关 get_user_perms(userId) → 行/列过滤 → 返回
 ```
 - **全局**：插件 `activation.onStartup` + 装入即进 `plugins.allow` → 所有企微用户开箱可用，无需逐人配。
-- **按人鉴权**：userId 由 OpenClaw 从企微可信注入，用户端零配置；改权限=改 DB，不动 OpenClaw。**两层权限（迁移 015 部门制 + 迁移 016 按人 override）**：
-  - ① **部门制（默认）**：`org_departments.branch_nums/can_see_cost`，`get_user_perms` 按用户部门聚合（并集 / 任一 true）。
-  - ② **按人 override（优先）**：`retail_query_user_perms(wecom_id, branch_nums, can_see_cost)`，`get_user_perms` **先查它、命中即用**（优先于部门聚合），用于不在任何已同步部门里的个人授权（如 YangWei——bot 企微应用通讯录可见范围只到总经办，同步拉不到他；且给他部门设权限会波及同事，不是"单独开"）。表无 RLS/GRANT，仅经 SECURITY DEFINER 的 `get_user_perms` RPC 可读，不对 PostgREST 直接暴露。
+- **按人鉴权**：userId 由 OpenClaw 从企微可信注入，用户端零配置；改权限=走 `/admin/permissions` 页面（写库 + 落 `permission_audit`），不动 OpenClaw。**授权数据源 = `data_permissions` 单表（role/dept/user 三 subject）**：167 已把部门权限列 + 老按人表收编进本表（`org_departments` 权限列、`retail_query_user_perms` 已退役），`get_user_perms` 逐维合成（基底 = 角色∪部门并集 → 个人 user 行按字段覆盖，详见 §6.2）。个人授权用于不在任何已同步部门里的用户（如 YangWei——bot 企微应用通讯录可见范围只到总经办，同步拉不到他；且给他部门设权限会波及同事，不是"单独开"）。表无 RLS/GRANT，仅经 SECURITY DEFINER 的 `get_user_perms` RPC 可读，不对 PostgREST 直接暴露。
 - **不千人千面**：权限数据在 DB，OpenClaw 侧零用户态；`AGENT_API_KEY` 留 openclaw 容器 env（`openclaw/.env`，compose `env_file` 注入），用户/LLM 均不可见。
 
 **网络**：openclaw 容器在 `deploy_insforge-network`，直连 `insforge:7130`（内网，已实测 http=302），网关 URL 用 `http://insforge:7130/functions/agent-query`（不走公网/nginx）。
@@ -559,7 +557,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 > **核心原则——身份层与数据权限层分离**：
 > - **身份层（Casdoor 统一）**：Casdoor（`sso.shanhaiyiguo.com`，独立子域名，复用现有 postgres）作为统一身份 IdP，持有企微 WeCom provider，负责"这人是谁（`wecom_id`）+ SSO 会话"。后续每接一个系统只需在 Casdoor 注册一个 OIDC client，不重复对接企微 API。
 > - **数据权限层（data-analysis 自签）**：data-analysis 拿到 `wecom_id` 后，自查本地 `org_users` / `get_user_perms`（`departments`、`branch_nums`、`can_see_cost`），**自签 PostgREST JWT**（复用现有 `signJwt` + `JWT_SECRET`）。
-> - **零改动**：`JWT_SECRET`、PostgREST 验签、PostgreSQL RLS 策略、权限表全部不变。这些是 data-analysis 特有的细粒度数据权限（非标准身份字段，塞不进任何标准 IdP 的 token），故必须保留在自签 JWT 里。
+> - **零改动（结构层面）**：`JWT_SECRET`、PostgREST 验签、PostgreSQL RLS 策略、JWT claims 结构不变；授权数据源本轮已收编为 `data_permissions` 单表（role/dept/user 三 subject，逐维合成见 §6.2）——`org_departments` 权限列与 `retail_query_user_perms` 已随 167 退役。这些是 data-analysis 特有的细粒度数据权限（非标准身份字段，塞不进任何标准 IdP 的 token），故必须保留在自签 JWT 里。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -616,11 +614,14 @@ WHERE departments ?| current_setting('request.jwt.claims.departments')
 数据库层强制隔离
 ```
 
-**权限表**：
-- `org_users`：用户信息 + department_ids（+ wecom_id 企微映射）
-- `org_departments`：部门信息 + branch_nums（可访问门店，**智能问数权限底座**）+ allowed_regions/data_scope（006 预留）
-- `data_permissions`：部门权限配置（通用 ABAC，待启用）
-- 智能问数 perms = `{ branch_nums, can_see_cost }`：详见 §4.2
+**权限表**（2026-08-13 权限体系重构后：`data_permissions` 单表授权）：
+- `data_permissions`：**唯一授权表**。`subject_type` ∈ `role`/`dept`/`user`（`subject_id` = role_id::text / dept_id / wecom_id）；四维 `branch_nums`/`brands`/`categories`/`can_see_cost`，**NULL = 该维未配置**（不参与合成）、`["*"]` = 全放行；`expires_at` 临时授权（NULL=永久）。行贡献：role 行四维全可配；dept 行只配 `branch_nums`+`can_see_cost` 两维（brands/categories 恒 NULL）；user 行按需只配要覆盖的维。167 迁移已将 `org_departments` 权限列 + 遗留 `retail_query_user_perms` 收编进本表并 DROP 老载体。
+- `permission_audit`：权限变更审计（操作者/动作/主体 + payload_before/after）；仅经管理 API 写（页面操作自动落审计），SQL 直改绕不过审计。
+- `roles`：角色 UI 档案（`default_landing`/`default_metric`/`visible_panels`/`is_active`）+ 具名授权包（`data_permissions` role 行）。
+- `org_users`：用户信息 + department_ids + role_id（+ wecom_id 企微映射）。
+- `org_departments`：部门基础信息（企微同步）；权限列已随 167 收编进 `data_permissions`（dept 行）。
+- **合成规则**（`get_user_perms`，登录时写入 JWT）：基底 = 角色 ∪ 部门各维叠加（并集，忽略 NULL，过滤过期条目）→ 个人 override 某维非 NULL 则**按字段覆盖**、未配置则继承基底；`can_see_cost` = 个人 user 行配了该维即**整体替换基底**（配 `false` 可显式收回成本可见）；未配则继承基底 OR（角色 OR 部门任一 true）；兜底不变（claim 缺失 / 含 `"*"` → 放行，空数组兜底 `["*"]`）。
+- 智能问数 perms（`get_user_perms` 返回）= `{ branch_nums, brands, categories, can_see_cost }` + 角色 UI 字段：详见 §4.2
 
 ### 6.3 DuckDB /query 鉴权
 
@@ -705,7 +706,7 @@ functions/wecom-sync-contacts（兜底全量；JSON 调用，不受 body 限制�
 - **加解密**（企微 WXBizMsgCrypt 协议，Node `crypto.subtle`）：AES key = `base64decode(EncodingAESKey+"=")`（32B），IV = key 前 16B，AES-256-CBC（`subtle.decrypt` **已自动去 PKCS7 padding，勿再手动 unpad**——2026-07-08 踩坑）；解密结构 `16B随机 + 4B长度 + msg + receiveid`，校验 receiveid == `WECOM_CORP_ID` 防伪造；签名 `sha1(sort([token,timestamp,nonce,encrypt]))` == msg_signature。POST body 是 `text/xml`，`request.text()` 读 raw + 手解析。
 - **回调只当通知，字段以 `user/get` 快照为准**：`update_user` 回调只带变化字段且不保证触发（典型如"微信昵称→实名"），故 create/update_user 一律补 `user/get(userid)` 拉全量再 upsert。`delete_user` 例外（直接软删）。
 - **name 一致性**：name 永远以最新同步值 upsert 覆盖，不区分昵称/实名（判断不可靠）；全量快照是最终一致性来源，纠正回调漏的一切字段漂移。
-- **软删除**：`org_users` / `org_departments` 加 `is_active BOOLEAN DEFAULT TRUE`，离职 / 删部门标 false 保留行（保历史 + 不破坏 `retail_query_user_perms` 关联，登录拦已离职）。
+- **软删除**：`org_users` / `org_departments` 加 `is_active BOOLEAN DEFAULT TRUE`，离职 / 删部门标 false 保留行（保历史 + 不破坏 `data_permissions` 的 user/dept subject 关联，登录拦已离职）。
 - **secrets（注入 web 容器 compose env）**：`WECOM_TOKEN` / `WECOM_ENCODING_AES_KEY`（回调验证解密，企微后台「通讯录同步→API接口同步」生成）/ `WECOM_CORP_ID`（已有）/ `WECOM_OPS_SECRET`（user/get，App B）。route 经 `process.env` 读。
 - **nginx 路由**：加 `location /api/wecom-contacts-webhook → web:3000`（前缀长于 `/api` 兜底，nginx 最长前缀匹配优先），否则 `/api` 兜底送到 insforge:7130 又踩 body 限制。
 - **幂等 + 5s 超时**：upsert 与 `SET is_active` 天然幂等，企微重试安全；处理 < 600ms，5s 内必返。
