@@ -131,6 +131,9 @@ BEGIN
     WHERE (dp.expires_at IS NULL OR dp.expires_at > NOW())
       AND ( (dp.subject_type='role' AND dp.subject_id = v_role_id::text)
          OR (dp.subject_type='dept' AND v_dept_ids IS NOT NULL
+             -- jsonb_typeof 防御（072 旧函数体恢复）：department_ids 非数组时跳过部门层，
+             -- 避免 jsonb_array_elements_text 报错 → 调用方兜底全放行（静默放大权限）
+             AND jsonb_typeof(v_dept_ids) = 'array'
              AND (dp.subject_id::text IN (SELECT jsonb_array_elements_text(v_dept_ids))))
        )
   ), b AS (

@@ -9,7 +9,7 @@
 BEGIN;
 -- 清场（幂等）：删除验证期间创建但未回滚的残留
 DELETE FROM data_permissions WHERE note LIKE '[verify]%';
-DELETE FROM org_users WHERE wecom_id IN ('vp_zhang','vp_wang','vp_li','vp_zhao');
+DELETE FROM org_users WHERE wecom_id IN ('vp_zhang','vp_wang','vp_li','vp_zhao','vp_yu');
 DELETE FROM org_departments WHERE id IN ('vp_d1','vp_d2');
 DELETE FROM roles WHERE code IN ('vp_role_a','vp_role_b');
 
@@ -26,7 +26,9 @@ INSERT INTO org_users (wecom_id,name,department_ids,is_active,role_id)
 VALUES ('vp_zhang','张三','["vp_d1","vp_d2"]'::jsonb,true,(SELECT id FROM roles WHERE code='vp_role_a')),
        ('vp_wang','王五','["vp_d1"]'::jsonb,true,(SELECT id FROM roles WHERE code='vp_role_a')),
        ('vp_li','李四','["vp_d2"]'::jsonb,true,NULL),
-       ('vp_zhao','赵六','["vp_d1"]'::jsonb,true,(SELECT id FROM roles WHERE code='vp_role_a'));
+       ('vp_zhao','赵六','["vp_d1"]'::jsonb,true,(SELECT id FROM roles WHERE code='vp_role_a')),
+       -- 非数组 department_ids（review NIT）：应跳过部门层不报错，仍走角色基底
+       ('vp_yu','孙七','"not-an-array"'::jsonb,true,(SELECT id FROM roles WHERE code='vp_role_a'));
 -- 个人 override：王五「只填门店 ['9'] + 成本 true」→ 应覆盖门店/成本，品牌/品类继承
 INSERT INTO data_permissions (subject_type,subject_id,branch_nums,can_see_cost,note)
 VALUES ('user','vp_wang','["9"]',true,'[verify]个人覆盖门店+成本');
@@ -56,6 +58,12 @@ BEGIN
   p := get_user_perms('vp_li');
   ASSERT p->'branch_nums' = '["2","3"]'::jsonb, '李四门店应[2,3](d2): '||(p->>'branch_nums');
   ASSERT (p->>'can_see_cost')::boolean = true, '李四成本应 true(d2): '||(p->>'can_see_cost');
+
+  -- 孙七：department_ids 非数组 → jsonb_typeof 防御生效：不报错、跳过部门层、走角色基底（门店[*]/成本 false/品类[水果]）
+  p := get_user_perms('vp_yu');
+  ASSERT p->'branch_nums' = '["*"]'::jsonb, '孙七门店应[*](角色基底,非数组dept被跳过): '||(p->>'branch_nums');
+  ASSERT (p->>'can_see_cost')::boolean = false, '孙七成本应 false(角色false,无部门): '||(p->>'can_see_cost');
+  ASSERT p->'categories' = '["水果"]'::jsonb, '孙七品类应[水果](角色): '||(p->>'categories');
 
   RAISE NOTICE '✔ verify_permission_consolidation: 全部断言通过';
 END $$;
