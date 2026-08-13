@@ -61,11 +61,14 @@ export async function PUT(req: NextRequest) {
     can_see_cost: 'can_see_cost' in b ? b.can_see_cost : last?.can_see_cost ?? null,
   };
   const body = { subject_type: 'dept', subject_id: String(b.id), brands: null, categories: null, note: '部门tab修改', ...merged };
-  if (merged.branch_nums === null && merged.can_see_cost === null && oldArr.length) {
-    // 全 null → 删行（恢复继承）；删失败 502 且不写审计（F1）
-    const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=eq.${(last as { id: number }).id}`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
-    if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
-    await writeAudit(req, { action: 'delete_data_permission', subjectType: 'dept', subjectId: String(b.id), before: last, after: null });
+  if (merged.branch_nums === null && merged.can_see_cost === null) {
+    // 全 null：有旧行 → 删行（恢复继承）；无旧行 → 本即「未配置」，no-op 不建全 NULL 垃圾行（review NIT #2）
+    if (oldArr.length) {
+      // 删失败 502 且不写审计（F1）
+      const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=eq.${(last as { id: number }).id}`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
+      if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
+      await writeAudit(req, { action: 'delete_data_permission', subjectType: 'dept', subjectId: String(b.id), before: last, after: null });
+    }
     return NextResponse.json({ ok: true });
   }
   const r = await (oldArr.length

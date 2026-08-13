@@ -110,6 +110,17 @@ describe('PUT /depts', () => {
     }));
   });
 
+  it('全 null + 无旧行 → no-op，不建全 NULL 垃圾行（review #2）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [] });   // 读旧（无行）——无任何写应发生
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { id: 'd1', branch_nums: [], can_see_cost: null }));
+    expect((await res.json()).ok).toBe(true);
+    // 只做了一次读查询：全 null + 无旧行 = 本即「未配置」，不得 POST 全 NULL 行 + 无意义审计
+    expect(fetchMock.mock.calls.length).toBe(1);
+    expect((fetchMock.mock.calls[0][0] as string)).toContain('data_permissions?select');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
   it('branch_nums 非字符串数组 → 400（F6）', async () => {
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { id: 'd1', branch_nums: [1, 2] }));
     expect(res.status).toBe(400);

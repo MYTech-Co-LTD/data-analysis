@@ -42,10 +42,20 @@ export async function PUT(req: NextRequest) {
   const deny = await requireAdmin(req); if (deny) return deny;
   const b = await req.json().catch(() => null);
   if (!b?.wecom_id) return NextResponse.json({ ok: false, error: '缺 wecom_id' }, { status: 400 });
+  if (b.role_id !== null && typeof b.role_id !== 'number')
+    return NextResponse.json({ ok: false, error: 'role_id 须为数字或 null' }, { status: 400 });
   const roleId = b.role_id ?? null;
-  // 读旧值（审计用）
-  const old = await fetch(`${POSTGREST_URL}/org_users?select=role_id,role_source&wecom_id=eq.${encodeURIComponent(b.wecom_id)}`, { headers: H }).then(r => r.json()).catch(() => []);
+  // 存在性校验（review NIT #3）：用户须存在（404 防静默 PATCH 0 行）；role_id 须为真实角色（400）
+  const [old, roleRows] = await Promise.all([
+    fetch(`${POSTGREST_URL}/org_users?select=role_id,role_source&wecom_id=eq.${encodeURIComponent(b.wecom_id)}`, { headers: H }).then(r => r.json()).catch(() => []),
+    roleId === null
+      ? Promise.resolve([])
+      : fetch(`${POSTGREST_URL}/roles?select=id&id=eq.${roleId}&is_active=eq.true`, { headers: H }).then(r => r.json()).catch(() => []),
+  ]);
   const oldArr = Array.isArray(old) ? old : [];
+  if (!oldArr.length) return NextResponse.json({ ok: false, error: '用户不存在，请先同步通讯录' }, { status: 404 });
+  if (roleId !== null && !((Array.isArray(roleRows) ? roleRows : []).length))
+    return NextResponse.json({ ok: false, error: '角色不存在或已停用' }, { status: 400 });
   const before = oldArr[0] ?? null;
   const r = await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(b.wecom_id)}`, {
     method: 'PATCH',

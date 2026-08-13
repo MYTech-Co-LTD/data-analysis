@@ -86,10 +86,47 @@ describe('PUT /users — 角色指派', () => {
     }));
   });
 
+  it('角色指派 role_id 非 null → 校验角色存在后 PATCH（review #3）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [{ role_id: 5, role_source: 'manual' }] })  // 读旧 org_users
+      .mockResolvedValueOnce({ json: async () => [{ id: 2 }] })                               // 校验 roles 存在
+      .mockResolvedValueOnce({ ok: true });                                                   // PATCH org_users
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 2 }));
+    expect((await res.json()).ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toMatchObject({ role_id: 2, role_source: 'manual' });
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'assign_role' }));
+  });
+
+  it('用户不存在 → 404（防 0 行 PATCH 静默 ok）（review #3）', async () => {
+    fetchMock.mockResolvedValueOnce({ json: async () => [] });   // org_users 无此人
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'Ghost', role_id: null }));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe('用户不存在，请先同步通讯录');
+    expect(fetchMock.mock.calls.every(([, init]) => !init || init.method === undefined)).toBe(true); // 无任何写
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('role_id 非真实角色 → 400（review #3）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [{ role_id: 5, role_source: 'manual' }] })  // 用户存在
+      .mockResolvedValueOnce({ json: async () => [] });                                       // roles 无此行
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 999 }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('角色不存在或已停用');
+  });
+
+  it('role_id 类型混淆 → 400（review #3）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 'boss' }));
+    expect(res.status).toBe(400);
+  });
+
   it('PATCH 失败 → 502 且不落审计', async () => {
     fetchMock
-      .mockResolvedValueOnce({ json: async () => [] })
-      .mockResolvedValueOnce({ ok: false, text: async () => 'boom' });
+      .mockResolvedValueOnce({ json: async () => [{ role_id: 5, role_source: 'manual' }] })  // 读旧 org_users
+      .mockResolvedValueOnce({ json: async () => [{ id: 2 }] })                               // 校验 roles 存在
+      .mockResolvedValueOnce({ ok: false, text: async () => 'boom' });                        // PATCH 失败
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 2 }));
     expect(res.status).toBe(502);
     expect(writeAuditMock).not.toHaveBeenCalled();

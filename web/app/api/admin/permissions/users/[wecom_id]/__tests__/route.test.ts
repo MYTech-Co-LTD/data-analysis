@@ -1,6 +1,6 @@
 // web/app/api/admin/permissions/users/[wecom_id]/__tests__/route.test.ts
 // 个人 override 路由：GET 详情 / PUT upsert（全 null → 删行恢复继承）/ DELETE 删行，均落审计；
-// 权限表写失败 → 502 且不写审计（F1 回归）；requireAdmin 403。
+// 权限表写失败 → 502 且不写审计（F1 回归）；用户不存在 → 404（review #4，防孤儿 override 行）；requireAdmin 403。
 // mock 全局 fetch + 带 cookie 的 NextRequest；params 为 Promise（Next 16 async params）。
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -19,6 +19,7 @@ const writeAuditMock = vi.mocked(writeAudit);
 
 const ADMIN_COOKIE = 'insforge_access_token=x; wecom_userid=ZhangDuo';
 const CTX = { params: Promise.resolve({ wecom_id: 'ZhangDuo' }) };
+const USER_EXISTS = { json: async () => [{ wecom_id: 'ZhangDuo' }] };
 
 function mkReq(method: 'GET' | 'PUT' | 'DELETE', cookie?: string, body?: unknown) {
   return new NextRequest('http://localhost/api/admin/permissions/users/ZhangDuo', {
@@ -56,11 +57,12 @@ describe('GET /users/:wecom_id', () => {
 describe('PUT /users/:wecom_id', () => {
   it('有旧行 → PATCH 更新并写 upsert 审计', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)                                                                                                   // user 存在性（review #4）
       .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
-      .mockResolvedValueOnce({ ok: true });                                                                                                                 // PATCH
+      .mockResolvedValueOnce({ ok: true });                                                                                                 // PATCH
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['5', '7'], can_see_cost: true, note: '加店' }), CTX);
     expect((await res.json()).ok).toBe(true);
-    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(url).toContain('data_permissions?id=eq.7');
     expect(init.method).toBe('PATCH');
     const sent = JSON.parse(init.body as string);
@@ -74,11 +76,12 @@ describe('PUT /users/:wecom_id', () => {
 
   it('全 null → 删行恢复继承并写 delete 审计', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)                                                                                                   // user 存在性
       .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
-      .mockResolvedValueOnce({ ok: true });                                                                                                                 // DELETE
+      .mockResolvedValueOnce({ ok: true });                                                                                                 // DELETE
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: null, brands: null, categories: null, can_see_cost: null }), CTX);
     expect((await res.json()).ok).toBe(true);
-    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(url).toContain('data_permissions?id=in.(7)');
     expect(init.method).toBe('DELETE');
     expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
@@ -88,6 +91,7 @@ describe('PUT /users/:wecom_id', () => {
 
   it('全 null 删行失败 → 502 且不写审计（F1 回归）', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)
       .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
       .mockResolvedValueOnce({ ok: false, text: async () => 'delete boom' });                                                                                 // DELETE 失败
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: null, brands: null, categories: null, can_see_cost: null }), CTX);
@@ -100,13 +104,23 @@ describe('PUT /users/:wecom_id', () => {
 
   it('无旧行 → POST 新建', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)
       .mockResolvedValueOnce({ json: async () => [] })   // 读旧（无行）
       .mockResolvedValueOnce({ ok: true });               // POST
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['9'] }), CTX);
     expect((await res.json()).ok).toBe(true);
-    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(init.method).toBe('POST');
     expect(JSON.parse(init.body as string)).toMatchObject({ subject_type: 'user', subject_id: 'ZhangDuo', branch_nums: ['9'], brands: null, categories: null, can_see_cost: null });
+  });
+
+  it('用户不存在 → 404，不写任何 override 行（review #4）', async () => {
+    fetchMock.mockResolvedValueOnce({ json: async () => [] });  // org_users 无此人
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['9'] }), CTX);
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe('用户不存在，请先同步通讯录');
+    expect(fetchMock.mock.calls.length).toBe(1); // 只做了一个存在性查询
+    expect(writeAuditMock).not.toHaveBeenCalled();
   });
 
   it('403 for illegal actor（F9）', async () => {
@@ -128,21 +142,23 @@ describe('PUT /users/:wecom_id', () => {
 
   it('空数组维 == 未配：全空 → 删行恢复继承（F4）', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)
       .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
-      .mockResolvedValueOnce({ ok: true });                                                                                                                 // DELETE
+      .mockResolvedValueOnce({ ok: true });                                                                                                 // DELETE
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: [], brands: [], categories: [], can_see_cost: null }), CTX);
     expect((await res.json()).ok).toBe(true);
-    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(init.method).toBe('DELETE');
   });
 
   it('空数组单维 → 视同未配，其余维照写（F4）', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)
       .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
-      .mockResolvedValueOnce({ ok: true });                                                                                                                 // PATCH
+      .mockResolvedValueOnce({ ok: true });                                                                                                 // PATCH
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: [], can_see_cost: true }), CTX);
     expect((await res.json()).ok).toBe(true);
-    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(init.method).toBe('PATCH');
     const sent = JSON.parse(init.body as string);
     expect(sent).toMatchObject({ branch_nums: null, brands: null, categories: null, can_see_cost: true });
@@ -152,11 +168,12 @@ describe('PUT /users/:wecom_id', () => {
 describe('DELETE /users/:wecom_id', () => {
   it('删全部 override 行并写 delete 审计', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)                                                                                                   // user 存在性
       .mockResolvedValueOnce({ json: async () => [{ id: 7 }, { id: 8 }] })  // 读旧（2 行）
       .mockResolvedValueOnce({ ok: true });                                   // DELETE id=in.(7,8)
     const res = await DELETE(mkReq('DELETE', ADMIN_COOKIE), CTX);
     expect((await res.json()).ok).toBe(true);
-    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
     expect(url).toContain('data_permissions?id=in.(7,8)');
     expect(init.method).toBe('DELETE');
     expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
@@ -167,11 +184,20 @@ describe('DELETE /users/:wecom_id', () => {
 
   it('删行失败 → 502 且不写审计（F1 回归）', async () => {
     fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)
       .mockResolvedValueOnce({ json: async () => [{ id: 7 }] })            // 读旧
       .mockResolvedValueOnce({ ok: false, text: async () => 'del boom' });  // DELETE 失败
     const res = await DELETE(mkReq('DELETE', ADMIN_COOKIE), CTX);
     expect(res.status).toBe(502);
     expect((await res.json()).error).toBe('del boom');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('用户不存在 → 404（review #4）', async () => {
+    fetchMock.mockResolvedValueOnce({ json: async () => [] });
+    const res = await DELETE(mkReq('DELETE', ADMIN_COOKIE), CTX);
+    expect(res.status).toBe(404);
+    expect(fetchMock.mock.calls.length).toBe(1);
     expect(writeAuditMock).not.toHaveBeenCalled();
   });
 

@@ -35,6 +35,18 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
     return NextResponse.json({ ok: false, error: 'branch_nums/brands/categories 须为字符串数组' }, { status: 400 });
   if ('can_see_cost' in b && !canSeeCostOk(b.can_see_cost))
     return NextResponse.json({ ok: false, error: 'can_see_cost 须为布尔或 null' }, { status: 400 });
+  // F6/review #5：参数字段类型校验（visible_panels 复用 normArr——非纯字符串数组会让前端 .includes() 直接抛错）
+  if ('visible_panels' in b) {
+    const vp = b.visible_panels === null ? { status: 'null' as const } : normArr(b.visible_panels);
+    if (vp.status === 'bad')
+      return NextResponse.json({ ok: false, error: 'visible_panels 须为字符串数组或 null' }, { status: 400 });
+  }
+  for (const k of ['default_landing', 'default_metric'] as const) {
+    if (k in b && !(typeof b[k] === 'string' || b[k] === null))
+      return NextResponse.json({ ok: false, error: `${k} 须为字符串或 null` }, { status: 400 });
+  }
+  if ('is_active' in b && typeof b.is_active !== 'boolean')
+    return NextResponse.json({ ok: false, error: 'is_active 须为布尔' }, { status: 400 });
 
   // 先读旧值（审计）
   const [oldRole, oldPerm] = await Promise.all([
@@ -53,7 +65,7 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   const rolePatch: Record<string, unknown> = {};
   if ('default_landing' in b) rolePatch.default_landing = b.default_landing;
   if ('default_metric' in b) rolePatch.default_metric = b.default_metric;
-  if ('visible_panels' in b) rolePatch.visible_panels = b.visible_panels;
+  if ('visible_panels' in b) rolePatch.visible_panels = b.visible_panels === null ? null : arrOrNull(normArr(b.visible_panels)); // 空数组 → null 规范化
   if ('is_active' in b) rolePatch.is_active = b.is_active;
   if (Object.keys(rolePatch).length) {
     const rr = await fetch(`${POSTGREST_URL}/roles?id=eq.${id}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(rolePatch) });

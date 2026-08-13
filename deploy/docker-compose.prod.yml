@@ -21,7 +21,8 @@ services:
       - INSFORGE_API_KEY=${ANON_KEY}
       # 管理 API 鉴权（lib/admin-api-auth requireAdmin）：access_token 验签需与签发方同秘密
       # （签发端 = deno 容器 JWT_SECRET / PostgREST PGRST_JWT_SECRET 同源，见 docker-compose.yml）
-      - JWT_SECRET=${JWT_SECRET}
+      # :? fail-fast：未配置则 web 容器启动即失败，避免运行时注入空串致全部管理 API 500（排查困难）
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未配置——与 deno/PostgREST 签发端同源}
       # 乐檬签名密钥（collect-lemeng function 需要）
       - LEMENG_SECRET_KEY=${LEMENG_SECRET_KEY}
       # DuckDB 服务（Parquet 转换）

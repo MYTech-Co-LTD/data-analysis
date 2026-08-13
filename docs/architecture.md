@@ -437,7 +437,7 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
   → 网关 get_user_perms(userId) → 行/列过滤 → 返回
 ```
 - **全局**：插件 `activation.onStartup` + 装入即进 `plugins.allow` → 所有企微用户开箱可用，无需逐人配。
-- **按人鉴权**：userId 由 OpenClaw 从企微可信注入，用户端零配置；改权限=走 `/admin/permissions` 页面（写库 + 落 `permission_audit`），不动 OpenClaw。**授权数据源 = `data_permissions` 单表（role/dept/user 三 subject）**：167 已把部门权限列 + 老按人表收编进本表（`org_departments` 权限列、`retail_query_user_perms` 已退役），`get_user_perms` 逐维合成（基底 = 角色∪部门并集 → 个人 user 行按字段覆盖，详见 §6.2）。个人授权用于不在任何已同步部门里的用户（如 YangWei——bot 企微应用通讯录可见范围只到总经办，同步拉不到他；且给他部门设权限会波及同事，不是"单独开"）。表无 RLS/GRANT，仅经 SECURITY DEFINER 的 `get_user_perms` RPC 可读，不对 PostgREST 直接暴露。
+- **按人鉴权**：userId 由 OpenClaw 从企微可信注入，用户端零配置；改权限=走 `/admin/permissions` 页面（写库 + 落 `permission_audit`），不动 OpenClaw。**授权数据源 = `data_permissions` 单表（role/dept/user 三 subject）**：167 已把部门权限列 + 老按人表收编进本表（`org_departments` 权限列、`retail_query_user_perms` 已退役），`get_user_perms` 逐维合成（基底 = 角色∪部门并集 → 个人 user 行按字段覆盖，详见 §6.2）。个人授权用于不在任何已同步部门里的用户（如 YangWei——bot 企微应用通讯录可见范围只到总经办，同步拉不到他；且给他部门设权限会波及同事，不是"单独开"）。安全模型（2026-08-13 修订，对齐迁移 167 F1）：`data_permissions`/`permission_audit` 已 GRANT anon/authenticated 全 CRUD，管理 API 经 PostgREST 直写。**信任边界 = PostgREST 仅内网可达（无宿主机端口映射）+ 管理 API 层 `requireAdmin` 验签强鉴权（access_token HS256 验签 + sub==wecom_userid）+ 读路径 `get_user_perms` RPC 透视**。 **运维约束：SQL 直改不落 `permission_audit` 审计，权限变更一律走管理页面 `/admin/permissions`。**
 - **不千人千面**：权限数据在 DB，OpenClaw 侧零用户态；`AGENT_API_KEY` 留 openclaw 容器 env（`openclaw/.env`，compose `env_file` 注入），用户/LLM 均不可见。
 
 **网络**：openclaw 容器在 `deploy_insforge-network`，直连 `insforge:7130`（内网，已实测 http=302），网关 URL 用 `http://insforge:7130/functions/agent-query`（不走公网/nginx）。

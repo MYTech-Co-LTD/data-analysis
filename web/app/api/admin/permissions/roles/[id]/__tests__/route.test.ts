@@ -119,6 +119,36 @@ describe('PUT /roles/:id', () => {
     expect(writeAuditMock).not.toHaveBeenCalled();
   });
 
+  it('visible_panels 非字符串数组 → 400（review #5）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { visible_panels: 'targets' }), CTX);
+    expect(res.status).toBe(400);
+    const res2 = await PUT(mkReq('PUT', ADMIN_COOKIE, { visible_panels: [1, 2] }), CTX);
+    expect(res2.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled(); // 校验提前，不读库
+  });
+
+  it('visible_panels 空数组 → null 规范化写入（review #5）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                 // PATCH roles
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { visible_panels: [] }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toContain('roles?id=eq.1');
+    expect(JSON.parse(init.body as string)).toEqual({ visible_panels: null });
+  });
+
+  it('default_metric 非字符串 → 400（review #5）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_metric: 42 }), CTX);
+    expect(res.status).toBe(400);
+  });
+
+  it('is_active 类型混淆 → 400（review #5）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { is_active: 1 }), CTX);
+    expect(res.status).toBe(400);
+  });
+
   it('bad id / 非整数 id → 400（F7）', async () => {
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_landing: '/' }), { params: Promise.resolve({ id: 'abc' }) });
     expect(res.status).toBe(400);

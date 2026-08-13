@@ -51,6 +51,11 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   const has = body.branch_nums !== null || body.brands !== null || body.categories !== null
     || body.can_see_cost !== null;
 
+  // 存在性校验（review NIT #4）：用户须存在，否则 404（防为任意字符串建孤儿 override 行）
+  const userRows = await fetch(`${POSTGREST_URL}/org_users?select=wecom_id&wecom_id=eq.${encodeURIComponent(w)}`, { headers: H }).then(r => r.json()).catch(() => []);
+  if (!(Array.isArray(userRows) ? userRows : []).length)
+    return NextResponse.json({ ok: false, error: '用户不存在，请先同步通讯录' }, { status: 404 });
+
   // 读旧值（审计用）
   const old = await fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost,expires_at,note&subject_type=eq.user&subject_id=eq.${encodeURIComponent(w)}&order=id,asc`, { headers: H }).then(r => r.json()).catch(() => []);
   const oldArr = Array.isArray(old) ? old : [];
@@ -77,6 +82,10 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
 export async function DELETE(req: NextRequest, { params }: RouteCtx) {
   const deny = await requireAdmin(req); if (deny) return deny;
   const w = (await params).wecom_id;
+  // 存在性校验（review NIT #4）：用户须存在，否则 404
+  const userRows = await fetch(`${POSTGREST_URL}/org_users?select=wecom_id&wecom_id=eq.${encodeURIComponent(w)}`, { headers: H }).then(r => r.json()).catch(() => []);
+  if (!(Array.isArray(userRows) ? userRows : []).length)
+    return NextResponse.json({ ok: false, error: '用户不存在，请先同步通讯录' }, { status: 404 });
   const old = await fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost,expires_at,note&subject_type=eq.user&subject_id=eq.${encodeURIComponent(w)}&order=id,asc`, { headers: H }).then(r => r.json()).catch(() => []);
   const oldArr = Array.isArray(old) ? old : [];
   if (oldArr.length) {
