@@ -1,0 +1,129 @@
+// web/app/api/admin/permissions/roles/[id]/__tests__/route.test.ts
+// 角色 PUT：参数写 roles、默认范围写 data_permissions(role 行)，均落 update_role 审计；
+// 范围维语义（NIT-1）：body 显式出现的字段直写（null=清空该维），未出现的字段保留旧值；四维全 null → 删行。
+// 范围写失败 → 502 且不写审计（F2 回归）；id 非整数 → 400（F7）。
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { NextRequest } from 'next/server';
+import { PUT } from '../route';
+import { writeAudit } from '@/lib/permission-audit';
+
+vi.mock('@/lib/permission-audit', () => ({ writeAudit: vi.fn() }));
+
+const fetchMock = vi.fn();
+vi.stubGlobal('fetch', fetchMock);
+const writeAuditMock = vi.mocked(writeAudit);
+
+const ADMIN_COOKIE = 'insforge_access_token=x; wecom_userid=ZhangDuo';
+const CTX = { params: Promise.resolve({ id: '1' }) };
+
+function mkReq(method: 'PUT', cookie?: string, body?: unknown) {
+  return new NextRequest('http://localhost/api/admin/permissions/roles/1', {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(cookie ? { cookie } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
+const OLD_ROLE = [{ code: 'boss', name: '老板/运营总', default_landing: '/', default_metric: null, visible_panels: [], is_active: true }];
+const OLD_PERM_WITH_VALUES = [{ id: 9, branch_nums: ['1'], brands: ['3120'], categories: null, can_see_cost: false }];
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  writeAuditMock.mockReset();
+});
+
+describe('PUT /roles/:id', () => {
+  it('只传参数 → PATCH roles + 审计（after=rolePatch）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })     // 旧 roles
+      .mockResolvedValueOnce({ json: async () => [] })            // 旧 perm（无行）
+      .mockResolvedValueOnce({ ok: true });                       // PATCH roles
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_landing: '/my-store' }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toContain('roles?id=eq.1');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ default_landing: '/my-store' });
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'update_role', subjectType: 'role', subjectId: '1',
+      after: { default_landing: '/my-store' },
+    }));
+  });
+
+  it('未出现的范围维保留旧值合并写入；审计 after 仅含出现字段（F3）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                       // PATCH data_permissions
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['2', '3'] }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toContain('data_permissions?id=eq.9');
+    expect(init.method).toBe('PATCH');
+    const sent = JSON.parse(init.body as string);
+    // DB 写整行：出现字段直写；未出现的 brands/categories/can_see_cost 保留旧值
+    expect(sent).toMatchObject({ branch_nums: ['2', '3'], brands: ['3120'], categories: null, can_see_cost: false, note: '角色tab修改' });
+    // 审计 after 排除未出现字段
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'update_role',
+      after: { branch_nums: ['2', '3'] },
+    }));
+  });
+
+  it('显式 null 单维 → 清空该维（写入 NULL 不落旧值）（NIT-1 回归）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                       // PATCH data_permissions
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: null }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toContain('data_permissions?id=eq.9');
+    expect(init.method).toBe('PATCH');
+    const sent = JSON.parse(init.body as string);
+    expect(sent.branch_nums).toBeNull(); // 显式 null 直写，而不是回退旧值 ['1']
+    expect(sent.brands).toEqual(['3120']); // 未出现的维保留旧值
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'update_role', after: { branch_nums: null },
+    }));
+  });
+
+  it('四维全 null（显式）→ 整行删，审计 after=全 null（F9/NIT-1）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                       // DELETE data_permissions
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: null, brands: null, categories: null, can_see_cost: null }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toContain('data_permissions?id=eq.9');
+    expect(init.method).toBe('DELETE');
+    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'update_role', subjectId: '1',
+      after: { branch_nums: null, brands: null, categories: null, can_see_cost: null },
+    }));
+  });
+
+  it('范围写失败 → 502 且不写审计（F2 回归）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: false, text: async () => 'scope boom' });   // PATCH 失败
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['9'] }), CTX);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe('scope boom');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('bad id / 非整数 id → 400（F7）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_landing: '/' }), { params: Promise.resolve({ id: 'abc' }) });
+    expect(res.status).toBe(400);
+    const res2 = await PUT(mkReq('PUT', ADMIN_COOKIE, { default_landing: '/' }), { params: Promise.resolve({ id: '1.5' }) });
+    expect(res2.status).toBe(400);
+  });
+
+  it('403 for illegal actor', async () => {
+    const res = await PUT(mkReq('PUT', 'insforge_access_token=x; wecom_userid=NotAdmin', { default_landing: '/' }), CTX);
+    expect(res.status).toBe(403);
+  });
+});
