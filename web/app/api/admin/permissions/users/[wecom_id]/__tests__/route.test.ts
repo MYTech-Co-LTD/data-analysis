@@ -109,6 +109,40 @@ describe('PUT /users/:wecom_id', () => {
     const res = await PUT(mkReq('PUT', 'insforge_access_token=x; wecom_userid=NotAdmin', { branch_nums: ['9'] }), CTX);
     expect(res.status).toBe(403);
   });
+
+  it('非字符串数组 → 400（F6）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: [1, 2] }), CTX);
+    expect(res.status).toBe(400);
+    const res2 = await PUT(mkReq('PUT', ADMIN_COOKIE, { brands: { '3120': true } }), CTX);
+    expect(res2.status).toBe(400);
+  });
+
+  it('can_see_cost 类型混淆 → 400（F6）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['9'], can_see_cost: 'yes' }), CTX);
+    expect(res.status).toBe(400);
+  });
+
+  it('空数组维 == 未配：全空 → 删行恢复继承（F4）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
+      .mockResolvedValueOnce({ ok: true });                                                                                                                 // DELETE
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: [], brands: [], categories: [], can_see_cost: null }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('空数组单维 → 视同未配，其余维照写（F4）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] })  // 读旧
+      .mockResolvedValueOnce({ ok: true });                                                                                                                 // PATCH
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: [], can_see_cost: true }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(init.method).toBe('PATCH');
+    const sent = JSON.parse(init.body as string);
+    expect(sent).toMatchObject({ branch_nums: null, brands: null, categories: null, can_see_cost: true });
+  });
 });
 
 describe('DELETE /users/:wecom_id', () => {

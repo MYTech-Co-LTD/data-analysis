@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS permission_audit (
 );
 COMMENT ON TABLE permission_audit IS '权限变更审计（仅经管理 API 写；SQL 直改绕不过，运维文档注明一律走页面）';
 
+-- ⑤b 管理路由（web 容器经 PostgREST 以 anon 角色执行，INSFORGE_API_KEY=ANON_KEY JWT role=anon）所需表授权。
+--    F1 修复（安全终检 review）：002 GRANT 被 003 REVOKE、072 DROP+重建 data_permissions 带回授权丢失，
+--    167 此前仅 GRANT get_user_perms EXECUTE——读路径 403 静默空、permission_audit 全套零权限（审计死）。
+--    幂等：GRANT 语句天然幂等，重跑无副作用。
+GRANT SELECT, INSERT, UPDATE, DELETE ON data_permissions TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON permission_audit TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE permission_audit_id_seq TO anon, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE data_permissions_id_seq TO anon, authenticated;
+
 -- ⑥ get_user_perms 逐维合成重写（签名/返回结构/兜底语义均不变）
 DROP FUNCTION IF EXISTS get_user_perms(TEXT);
 CREATE OR REPLACE FUNCTION get_user_perms(p_wecom_id VARCHAR) RETURNS JSONB
@@ -106,18 +115,21 @@ BEGIN
     FROM data_permissions dp
     CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(dp.branch_nums, '[]'::jsonb)) AS n(e)
     WHERE dp.subject_type='user' AND dp.subject_id=p_wecom_id AND dp.branch_nums IS NOT NULL
+      AND jsonb_typeof(dp.branch_nums)='array'   -- F5：非数组 JSON → 跳过该维（防 lateral 报错 → 登录兜底全放行）
       AND (dp.expires_at IS NULL OR dp.expires_at > NOW());
     SELECT coalesce(jsonb_agg(DISTINCT n.e) FILTER (WHERE n.e IS NOT NULL), NULL)
       INTO v_ubr
     FROM data_permissions dp
     CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(dp.brands, '[]'::jsonb)) AS n(e)
     WHERE dp.subject_type='user' AND dp.subject_id=p_wecom_id AND dp.brands IS NOT NULL
+      AND jsonb_typeof(dp.brands)='array'
       AND (dp.expires_at IS NULL OR dp.expires_at > NOW());
     SELECT coalesce(jsonb_agg(DISTINCT n.e) FILTER (WHERE n.e IS NOT NULL), NULL)
       INTO v_uc
     FROM data_permissions dp
     CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(dp.categories, '[]'::jsonb)) AS n(e)
     WHERE dp.subject_type='user' AND dp.subject_id=p_wecom_id AND dp.categories IS NOT NULL
+      AND jsonb_typeof(dp.categories)='array'
       AND (dp.expires_at IS NULL OR dp.expires_at > NOW());
     SELECT bool_or(dp.can_see_cost) INTO v_ucost
     FROM data_permissions dp
@@ -129,7 +141,10 @@ BEGIN
   WITH rows AS (
     SELECT branch_nums, brands, categories, can_see_cost FROM data_permissions dp
     WHERE (dp.expires_at IS NULL OR dp.expires_at > NOW())
-      AND ( (dp.subject_type='role' AND dp.subject_id = v_role_id::text)
+      AND ( (dp.subject_type='role' AND dp.subject_id = v_role_id::text
+             -- F3（安全终检 review）：停用角色（is_active=false）仅 UI 档案停用、数据范围仍在基底 → 语义不符。
+             --     role 行贡献须叠加 roles.is_active，停用即从基底剥离。
+             AND EXISTS (SELECT 1 FROM roles r WHERE r.id::text = dp.subject_id AND r.is_active))
          OR (dp.subject_type='dept' AND v_dept_ids IS NOT NULL
              -- jsonb_typeof 防御（072 旧函数体恢复）：department_ids 非数组时跳过部门层，
              -- 避免 jsonb_array_elements_text 报错 → 调用方兜底全放行（静默放大权限）
@@ -139,15 +154,15 @@ BEGIN
   ), b AS (
     SELECT coalesce(jsonb_agg(DISTINCT n.e), '[]'::jsonb) v FROM rows r
     CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(r.branch_nums,'[]'::jsonb)) AS n(e)
-    WHERE r.branch_nums IS NOT NULL
+    WHERE r.branch_nums IS NOT NULL AND jsonb_typeof(r.branch_nums)='array'
   ), br AS (
     SELECT coalesce(jsonb_agg(DISTINCT n.e), '[]'::jsonb) v FROM rows r
     CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(r.brands,'[]'::jsonb)) AS n(e)
-    WHERE r.brands IS NOT NULL
+    WHERE r.brands IS NOT NULL AND jsonb_typeof(r.brands)='array'
   ), c AS (
     SELECT coalesce(jsonb_agg(DISTINCT n.e), '[]'::jsonb) v FROM rows r
     CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(r.categories,'[]'::jsonb)) AS n(e)
-    WHERE r.categories IS NOT NULL
+    WHERE r.categories IS NOT NULL AND jsonb_typeof(r.categories)='array'
   ), cost AS (
     SELECT coalesce(bool_or(r.can_see_cost), false) v FROM rows r WHERE r.can_see_cost IS NOT NULL
   )

@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
 import { writeAudit } from '@/lib/permission-audit';
+import { normArr, arrOrNull, canSeeCostOk, expiresAtOk } from '@/lib/permission-guards';
 
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 const KEY = process.env.INSFORGE_API_KEY!;
@@ -33,8 +34,22 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   const w = (await params).wecom_id;
   const b = await req.json().catch(() => null);
   if (!b) return NextResponse.json({ ok: false, error: '缺 body' }, { status: 400 });
-  const has = (b.branch_nums ?? null) !== null || (b.brands ?? null) !== null
-    || (b.categories ?? null) !== null || (b.can_see_cost ?? null) !== null;
+
+  // F6：数组维只收纯字符串数组，否则 400；F4：空数组 == 未配 → null
+  const bn = normArr(b.branch_nums), br = normArr(b.brands), ct = normArr(b.categories);
+  if (bn.status === 'bad' || br.status === 'bad' || ct.status === 'bad')
+    return NextResponse.json({ ok: false, error: 'branch_nums/brands/categories 须为字符串数组' }, { status: 400 });
+  if (!canSeeCostOk(b.can_see_cost) || !expiresAtOk(b.expires_at))
+    return NextResponse.json({ ok: false, error: 'can_see_cost 须为布尔，expires_at 须为 ISO 字符串或 null' }, { status: 400 });
+
+  const body = {
+    subject_type: 'user', subject_id: w, note: b.note ?? null,
+    branch_nums: arrOrNull(bn), brands: arrOrNull(br), categories: arrOrNull(ct),
+    can_see_cost: b.can_see_cost === undefined || b.can_see_cost === null ? null : b.can_see_cost,
+    expires_at: b.expires_at === undefined || b.expires_at === null ? null : b.expires_at,
+  };
+  const has = body.branch_nums !== null || body.brands !== null || body.categories !== null
+    || body.can_see_cost !== null;
 
   // 读旧值（审计用）
   const old = await fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost,expires_at,note&subject_type=eq.user&subject_id=eq.${encodeURIComponent(w)}&order=id,asc`, { headers: H }).then(r => r.json()).catch(() => []);
@@ -42,7 +57,7 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   const last = oldArr[oldArr.length - 1] ?? null;
 
   if (!has) {
-    // 全 null → 删除（恢复继承）；删失败 502 且不写审计（F1）
+    // 全 null（含空数组规范化）→ 删除（恢复继承）；删失败 502 且不写审计（F1）
     if (oldArr.length) {
       const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=in.(${oldArr.map((x: { id: number }) => x.id).join(',')})`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
       if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
@@ -50,12 +65,6 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
     }
     return NextResponse.json({ ok: true });
   }
-  const body = {
-    subject_type: 'user', subject_id: w, note: b.note ?? null,
-    branch_nums: b.branch_nums ?? null, brands: b.brands ?? null,
-    categories: b.categories ?? null, can_see_cost: b.can_see_cost ?? null,
-    expires_at: b.expires_at ?? null,
-  };
   const r = await (oldArr.length
     ? fetch(`${POSTGREST_URL}/data_permissions?id=eq.${(last as { id: number }).id}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify({ ...body, subject_type: undefined, subject_id: undefined }) })
     : fetch(`${POSTGREST_URL}/data_permissions`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(body) }));

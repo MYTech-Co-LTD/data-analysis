@@ -126,4 +126,48 @@ describe('PUT /roles/:id', () => {
     const res = await PUT(mkReq('PUT', 'insforge_access_token=x; wecom_userid=NotAdmin', { default_landing: '/' }), CTX);
     expect(res.status).toBe(403);
   });
+
+  it('角色不存在 → 404，不写任何范围行（F7 防幽灵行）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => [] })   // 旧 roles：无此行
+      .mockResolvedValueOnce({ json: async () => [] });  // 旧 perm（不应被读到）
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['1'] }), CTX);
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe('角色不存在');
+    // 只读了两处，无任何写调用
+    expect(fetchMock.mock.calls.length).toBe(2);
+    expect(fetchMock.mock.calls.every(([, init]) => !init || init.method === undefined || init.method === 'GET')).toBe(true);
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('非字符串数组 → 400（F6）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES });
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: [1, 2] }), CTX);
+    expect(res.status).toBe(400);
+    const res2 = await PUT(mkReq('PUT', ADMIN_COOKIE, { categories: 'all' }), CTX);
+    expect(res2.status).toBe(400);
+  });
+
+  it('can_see_cost 类型混淆 → 400（F6）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES });
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { can_see_cost: 1 }), CTX);
+    expect(res.status).toBe(400);
+  });
+
+  it('显式空数组维 == 清空该维（F4 规范化）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES })
+      .mockResolvedValueOnce({ ok: true });                       // PATCH data_permissions
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: [], brands: ['3120'] }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(init.method).toBe('PATCH');
+    const sent = JSON.parse(init.body as string);
+    expect(sent).toMatchObject({ branch_nums: null, brands: ['3120'], categories: null, can_see_cost: false }); // 空数组 → null；未出现维保留旧值
+  });
 });
