@@ -616,11 +616,14 @@ WHERE departments ?| current_setting('request.jwt.claims.departments')
 数据库层强制隔离
 ```
 
-**权限表**：
-- `org_users`：用户信息 + department_ids（+ wecom_id 企微映射）
-- `org_departments`：部门信息 + branch_nums（可访问门店，**智能问数权限底座**）+ allowed_regions/data_scope（006 预留）
-- `data_permissions`：部门权限配置（通用 ABAC，待启用）
-- 智能问数 perms = `{ branch_nums, can_see_cost }`：详见 §4.2
+**权限表**（2026-08-13 权限体系重构后：`data_permissions` 单表授权）：
+- `data_permissions`：**唯一授权表**。`subject_type` ∈ `role`/`dept`/`user`（`subject_id` = role_id::text / dept_id / wecom_id）；四维 `branch_nums`/`brands`/`categories`/`can_see_cost`，**NULL = 该维未配置**（不参与合成）、`["*"]` = 全放行；`expires_at` 临时授权（NULL=永久）。行贡献：role 行四维全可配；dept 行只配 `branch_nums`+`can_see_cost` 两维（brands/categories 恒 NULL）；user 行按需只配要覆盖的维。167 迁移已将 `org_departments` 权限列 + 遗留 `retail_query_user_perms` 收编进本表并 DROP 老载体。
+- `permission_audit`：权限变更审计（操作者/动作/主体 + payload_before/after）；仅经管理 API 写（页面操作自动落审计），SQL 直改绕不过审计。
+- `roles`：角色 UI 档案（`default_landing`/`default_metric`/`visible_panels`/`is_active`）+ 具名授权包（`data_permissions` role 行）。
+- `org_users`：用户信息 + department_ids + role_id（+ wecom_id 企微映射）。
+- `org_departments`：部门基础信息（企微同步）；权限列已随 167 收编进 `data_permissions`（dept 行）。
+- **合成规则**（`get_user_perms`，登录时写入 JWT）：基底 = 角色 ∪ 部门各维叠加（并集，忽略 NULL，过滤过期条目）→ 个人 override 某维非 NULL 则**按字段覆盖**、未配置则继承基底；`can_see_cost` = 个人覆盖 或（角色 OR 部门任一 true）；兜底不变（claim 缺失 / 含 `"*"` → 放行，空数组兜底 `["*"]`）。
+- 智能问数 perms（`get_user_perms` 返回）= `{ branch_nums, brands, categories, can_see_cost }` + 角色 UI 字段：详见 §4.2
 
 ### 6.3 DuckDB /query 鉴权
 
