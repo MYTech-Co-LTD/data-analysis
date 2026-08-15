@@ -11,7 +11,7 @@ const ADMIN_COOKIE = 'insforge_access_token=x; wecom_userid=ZhangDuo';
 
 vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
 
-beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
+beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; process.env.BREAKGLASS_ADMINS = 'ZhangDuo'; vi.spyOn(console, 'warn').mockImplementation(() => {}); }); // P0a：admin 门禁切 checkFeaturePerm，测试 token 无 permissions claim → 走 BREAKGLASS 兜底
 
 function mkReq(method: 'GET', cookie?: string) {
   return new NextRequest('http://localhost/api/admin/permissions/roles', {

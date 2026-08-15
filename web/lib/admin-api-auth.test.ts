@@ -18,14 +18,24 @@ function mkReq(cookie?: string) {
 }
 
 beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
-beforeEach(() => jwtVerifyMock.mockReset());
-afterEach(() => { process.env.JWT_SECRET = 'test-secret'; });
+beforeEach(() => { jwtVerifyMock.mockReset(); delete process.env.BREAKGLASS_ADMINS; });
+afterEach(() => { process.env.JWT_SECRET = 'test-secret'; delete process.env.BREAKGLASS_ADMINS; });
 
 describe('requireAdmin', () => {
-  it('合法 token + sub==cookie → 放行（返回 null）', async () => {
+  it('合法 token + sub==cookie + claims 含 admin 权限 → 放行（返回 null）', async () => {
+    // P0a：admin 判定走 checkFeaturePerm，token claims 优先（permissions 数组透传）
+    jwtVerifyMock.mockResolvedValueOnce({ payload: { sub: 'ZhangDuo', permissions: ['data-analysis:admin'] }, protectedHeader: { alg: 'HS256' } });
+    const res = await requireAdmin(mkReq('insforge_access_token=valid; wecom_userid=ZhangDuo'));
+    expect(res).toBeNull();
+  });
+
+  it('token 无 permissions claim 但 uid ∈ BREAKGLASS_ADMINS → 放行（兜底+审计）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.BREAKGLASS_ADMINS = 'ZhangDuo';
     jwtVerifyMock.mockResolvedValueOnce({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } });
     const res = await requireAdmin(mkReq('insforge_access_token=valid; wecom_userid=ZhangDuo'));
     expect(res).toBeNull();
+    expect(warn).toHaveBeenCalledWith('[breakglass]', 'ZhangDuo', 'data-analysis:admin');
   });
 
   it('签名错 / 已过期 / 畸形 JWT → 401 unauthorized（fetch 不产生副作用）', async () => {
