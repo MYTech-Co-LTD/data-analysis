@@ -1,6 +1,7 @@
 # Novu 控制面部署 runbook（U3 / plan Task 5 / spec §5.5）
 
-> 状态：**部署准备完成，控制面执行留人**。本文档包含全部离线产出：完整 compose、镜像搬运步骤、容量实测、上线步骤清单。
+> 状态：**部署完成（待 DNS + Caddy 白名单生效）**。本文档包含全部离线产出：完整 compose、镜像搬运步骤、容量实测、上线步骤清单。
+> 执行记录（2026-08-15）：6 容器 healthy；管理员 admin@shanhaiyiguo.com 已建；org=shanhai 已建；注册闸已关；ApiKey 已注入 data 侧；MongoDB TTL 90d 已设；workflow export cron 已加。待办：DNS `novu-api.shanhaiyiguo.com → 113.249.101.33` + Caddy reload + rclone 配置。
 > 目标机：控制面 `113.249.101.33`（SSH 别名 `opsh`，密钥 `~/.ssh/openship-ops`）。本机参考栈：Mac 上在跑的 Novu 3.19.0（docker ps：api/worker/ws/dashboard/redis/mongodb）。
 > 上游参考：`源码分析/novu/docker/community/docker-compose.yml`（commit fc9a0fd2）+ 本机在跑栈 `docker inspect` 实测（2026-08-15）。
 > 同步注记：compose 与本文 README 由**编排者事后同步入 casdoor-infra 仓 `deploy/novu/`**（本 task 未动该仓）。
