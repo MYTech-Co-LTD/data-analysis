@@ -45,6 +45,8 @@ services:
       - AGENT_API_KEY=${AGENT_API_KEY:-}
       # 监控兜底通道默认收件人（InsForge-down 时 web 直连企微 message/send，架构 §8.1）
       - NOTIFY_DEFAULT_TUSERS=${NOTIFY_DEFAULT_TUSERS}
+      # Task3 功能门禁兜底：BREAKGLASS_ADMINS 传递（checkFeaturePerm 读，缺此行 env 进不了容器）
+      - BREAKGLASS_ADMINS=${BREAKGLASS_ADMINS:-}
     depends_on:
       - insforge
     networks:

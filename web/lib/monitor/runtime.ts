@@ -66,9 +66,12 @@ function buildDeps(): EvalDeps {
 }
 
 // 各扫描桶（Phase A：service_down/token_expire 生效；后两桶 Phase B 填）
+// 服务探活桶的 check_type 清单（导出供回归测试断言接线完整）：novu_health 随本桶每分钟节奏。
+export const SERVICE_DOWN_BUCKET_TYPES: CheckType[] = ['service_down', 'novu_health'];
+
 export async function runServiceDownBucket() {
   try {
-    await runScan(new SdkStore(newClient()), ['service_down'] as CheckType[], buildDeps(), EVALUATORS);
+    await runScan(new SdkStore(newClient()), SERVICE_DOWN_BUCKET_TYPES, buildDeps(), EVALUATORS);
   } catch (e: any) {
     console.error('[monitor] service_down bucket 异常:', e?.message ?? e);
   }

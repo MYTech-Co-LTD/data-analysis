@@ -8,6 +8,7 @@ vi.mock('../notify-direct', () => ({ notifyWecomDirect: vi.fn().mockResolvedValu
 import { runScan } from '../engine';
 import { MemoryStore } from '../store';
 import { EVALUATORS } from '../evaluators';
+import { SERVICE_DOWN_BUCKET_TYPES } from '../runtime';
 import type { MonitorRule, EvalDeps, Evaluator } from '../types';
 
 const baseRule = (over: Partial<MonitorRule> = {}): MonitorRule => ({
@@ -79,5 +80,27 @@ describe('runScan', () => {
 
     await expect(runScan(store, ['service_down'], fakeDeps(), throwingRegistry)).resolves.not.toThrow();
     // console.error 记录即可；不写表（避免 evaluator 错误污染告警流）
+  });
+
+  // fix R1 回归：novu_health 规则必须随 service_down 桶被加载执行（runtime 桶清单接线）。
+  // 此前 bug：runServiceDownBucket 只传 ['service_down']，store.loadRules .in() 硬过滤 →
+  // novu_health 规则永不加载、runbook 的种子行静默失效。
+  it('novu_health 规则随服务探活桶走通 runScan（探活失败 → active 告警）', async () => {
+    process.env.NOVU_API_URL = 'http://novu-test';
+    try {
+      const store = new MemoryStore();
+      store._seedRules([baseRule({ id: 3, name: 'svc-novu', check_type: 'novu_health', target: 'novu' })]);
+      const notify = (await import('../../notify')).notifyWecom as any;
+      notify.mockClear();
+      const deps = { ...fakeDeps(), probe: async () => ({ ok: false, latencyMs: 3, error: 'connect refused' }) };
+
+      await runScan(store, SERVICE_DOWN_BUCKET_TYPES, deps, EVALUATORS);
+
+      const a = await store.getActiveAlert('svc:novu');
+      expect(a?.status).toBe('active');
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      delete process.env.NOVU_API_URL;
+    }
   });
 });
