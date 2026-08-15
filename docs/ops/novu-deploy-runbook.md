@@ -369,17 +369,9 @@ db.runCommand({collMod: \"executiondetails\", index: {keyPattern: {createdAt: 1}
 
 - evaluator：`web/lib/monitor/evaluators/novu-probe.ts`（`check_type='novu_health'`）；`NOVU_API_URL` 空 = 探活禁用不告警；探 `GET ${NOVU_API_URL}/v1/health-check`，失败 → firing → 现有 service_down 告警链路（企微）。
 - 单测：`web/lib/monitor/__tests__/novu-probe.test.ts`（disabled/healthy/不可达/非2xx/URL拼接 五态）。
-- **人执行（上线后）**：data 侧 `deploy/.env` 填 `NOVU_API_URL`（§4 步骤 7）后，插 monitor_rules 行启用探活（data 侧生产库）：
-
-```sql
-INSERT INTO monitor_rules (name, check_type, target, threshold, severity, template, suppress_window_seconds, enabled)
-VALUES ('服务探活·novu', 'novu_health', 'novu', '{}', 'critical',
-        '{svc} 不可达({detail})，统一推送降级 wecom-notify', 1800, true)
-ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET enabled = true;
-```
-
-> 注：该 INSERT 未固化为 data-analysis 迁移（本 task 触碰面不含 database/）；编排者可后续补迁移或随部署手工执行。
-- 红绿实测（人执行）：`UPDATE monitor_rules SET enabled=false WHERE check_type='novu_health'` 前先用错误 NOVU_API_URL 验证红、正确值验证绿。
+- **规则种子已迁移化**：`database/migrations/174_monitor_seed_novu.sql`（幂等 INSERT ... ON CONFLICT DO NOTHING，本地 dev 库实测跑两遍=1 行）；随 GHA 部署自动落库。接线：`web/lib/monitor/runtime.ts` 的 `SERVICE_DOWN_BUCKET_TYPES` 含 `novu_health`（随 service_down 桶每分钟节奏）。
+- **人执行（上线后）**：data 侧 `deploy/.env` 填 `NOVU_API_URL`（§4 步骤 7）即启用探活（env 空 = evaluator disabled，规则行在库也无害）。
+- 红绿实测（人执行）：先用错误 NOVU_API_URL 验证红（企微收 `{svc} 不可达` 告警）、改正确值验证绿（告警 resolve ✅）。
 
 ## 8. workflow export cron（每日，落 data 侧对象存储）
 
@@ -413,5 +405,4 @@ crontab -e：`30 2 * * * /opt/novu/export-workflows.sh >> /var/log/novu-export.l
 - redis requirepass 硬化（当前仅 compose 内网）。
 - 磁盘水位 80% 告警接入 uptime-kuma。
 - V1b（CE 原生 IP allowlist）验证。
-- monitor_rules 种子迁移化。
 - casdoor-infra `deploy/novu/` 同步（编排者事后）。
