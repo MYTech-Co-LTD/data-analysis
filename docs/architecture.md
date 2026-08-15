@@ -848,6 +848,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | 身份/权限分层 | Casdoor 管身份（`wecom_id`）+ SSO 会话；data-analysis 拿 `wecom_id` 后自查 `perms` 自签 PostgREST JWT（`JWT_SECRET` / RLS / 权限表不变） | 2026-08-08 |
 | Casdoor 独立化 | Casdoor 从 data-analysis 寄生迁到控制面（113.249.101.33 `/opt/casdoor`，独立 docker compose + **独立 postgres**），成平台级身份基础设施；data-analysis 退化为普通 OIDC client；Caddy 反代 sso 域名（specs/2026-08-09-casdoor-independent-design.md） | 2026-08-09 |
 | 代码组织规范 | A+B-lite：目录即模块（collectors/jobs/report-center-boards）+ 尾部追加式注册表 + 契约单源（web/lib/contracts）；不引入运行时插件框架、不拆服务、不改部署拓扑。P0–P5 分阶段（spec `docs/superpowers/specs/2026-08-11-modular-plugin-design.md`，评审 `docs/design/modular-plugin-architecture-review.md`） | 2026-08-11 |
+| 语义层 Cube 全替代 | Cube headless 成为查询引擎与语义定义唯一手写层（schema YAML，git）；metric_registry 冻结新增、生成器按"物化上移 + 退役清单"退出（四硬口径移 /compute 跑批）。**已确认的三条让步**：报表可用性绑 Cube 常驻（迁移期保留视图逃生通道）；报表路径行级权限由 RLS 上移至 securityContext（data_scopes 同源，RLS 退守 PostgREST 管理路径）；QA 围绕 /v1/sql + 对账 diff 重建。spec `docs/superpowers/specs/2026-08-15-semantic-query-middleware-design.md`（v2）。关联同日权限三层、Novu 推送平台两 spec | 2026-08-15 |
 
 ---
 
@@ -1044,6 +1045,8 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 - 配销比 = 配送/销售
 
 ### 10.10 视图生成器（构建期，2026-07-31）
+
+> **⚠️ 退役计划（2026-08-15，spec 待合并）**：本节所述生成器进入退役流程——metric_registry 冻结新增，新指标一律直写 Cube schema（`docs/superpowers/specs/2026-08-15-semantic-query-middleware-design.md` §6 退役清单）。四个硬口径（目标范围 join / lateral_pick / FULL JOIN 合并 / closed 快照）逐步物化上移到 /compute 后，对应生成视图删除；清单清空即下线生成器与 database/generated。退役完成前本节铁律继续有效。
 
 spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design.md`。回归 07-22 初衷补建构建期生成器（**取代 07-29 的「文档型真相源」措辞**——metric_registry 从"文档型"升级为"构建期生成器输入"）。
 
