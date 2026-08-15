@@ -351,9 +351,10 @@ OpenClaw（企微 channel 已接通 + DeepSeek-V4-Flash）
    └─ tool query_retail_data（详见 §4.3）：POST 网关 {sql, userId=toolContext.requesterSenderId, agent_api_key}
    ↓
 agent-query 网关 function（functions/agent-query，新建）
-   ├─ ① 认证：AGENT_API_KEY（插件↔网关共享密钥）；userId 用于 ② 授权解析 perms（非认证）
-   ├─ ② 授权：查 perms = { branch_nums, can_see_cost, hidden_columns }
-   │         （底座=branch_nums；区域/人员映射后填；MVP 全量占位 ["*"]）
+   ├─ ① 认证：AGENT_API_KEY（插件↔网关共享密钥；agent-query token 化已裁推迟独立排期——
+   │         client_credentials + JWKS 服务身份模式由 push-admin 先验证，AGENT_API_KEY 降级开关保留，§4.3）
+   ├─ ② 授权：get_user_perms（PERMS_INPUT 感知，§6.2）查 data_permissions 逐维合成
+   │         perms = { branch_nums, brands, categories, can_see_cost }（角色∪部门 UNION → 个人 override）
    ├─ ③ SQL 白名单：只 SELECT / 禁 read_parquet 与写操作 / 强制 LIMIT
    ├─ ④ 拼权限视图：行 WHERE branch_num IN (...) + 列 CASE 脱敏成本组
    ├─ ⑤ 跨引擎编排（若 JOIN 涉及 PG 维表）：用用户 JWT 查 PostgREST（走 RLS）→ 注入 DuckDB 临时表
@@ -365,10 +366,10 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
    └─ 执行 → 返回（权限硬编码进视图，绕不过）
 ```
 
-**行级权限（底座 = branch_nums 门店）：**
+**行级权限（底座 = branch_nums 门店，四维之一，§6.2）：**
 - DuckDB：权限视图 `WHERE branch_num IN ('54','127',...)`（branch_num 是 VARCHAR，已实测）
 - PostgreSQL：汇总表 RLS 用 `request.jwt.claims.branch_nums`（claim 由网关代签短时 JWT 注入，复用 wecom-oauth 的 signJwt + JWT_SECRET）
-- 区域/人员维度：后填。映射到 branch_nums 集合后自动生效，**不改架构**
+- brands/categories 维在语义层/视图侧过滤；数据源已收编 `data_permissions` 单表（167），网关只消费 `get_user_perms` 结果
 
 **列级脱敏（成本/毛利成组，防反算）：**
 - 敏感组：`item_cost_price` / `order_detail_cost` / `cost` / `profit` / `sale_profit_rate`；汇总侧 `total_profit`
@@ -440,6 +441,12 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
 - **按人鉴权**：userId 由 OpenClaw 从企微可信注入，用户端零配置；改权限=走 `/admin/permissions` 页面（写库 + 落 `permission_audit`），不动 OpenClaw。**授权数据源 = `data_permissions` 单表（role/dept/user 三 subject）**：167 已把部门权限列 + 老按人表收编进本表（`org_departments` 权限列、`retail_query_user_perms` 已退役），`get_user_perms` 逐维合成（基底 = 角色∪部门并集 → 个人 user 行按字段覆盖，详见 §6.2）。个人授权用于不在任何已同步部门里的用户（如 YangWei——bot 企微应用通讯录可见范围只到总经办，同步拉不到他；且给他部门设权限会波及同事，不是"单独开"）。安全模型（2026-08-13 修订，对齐迁移 167 F1）：`data_permissions`/`permission_audit` 已 GRANT anon/authenticated 全 CRUD，管理 API 经 PostgREST 直写。**信任边界 = PostgREST 仅内网可达（无宿主机端口映射）+ 管理 API 层 `requireAdmin` 验签强鉴权（access_token HS256 验签 + sub==wecom_userid）+ 读路径 `get_user_perms` RPC 透视**。 **运维约束：SQL 直改不落 `permission_audit` 审计，权限变更一律走管理页面 `/admin/permissions`。**
 - **不千人千面**：权限数据在 DB，OpenClaw 侧零用户态；`AGENT_API_KEY` 留 openclaw 容器 env（`openclaw/.env`，compose `env_file` 注入），用户/LLM 均不可见。
 
+**🆕 OpenClaw 统一身份链路（2026-08-15 spec；push-admin 插件先行，agent-query 随 U8 切换）：**
+- **双身份**：服务身份 = Casdoor `client_credentials` 短时 JWT（60s 前置刷新），**scope 仅 `openclaw:query` / `openclaw:push`（永不含 admin）**——query 侧数据仍走请求者 scope，服务身份冒充不能提权；人员身份 = body.userId（wecom_id，来自可信 requesterSenderId 注入）。
+- **web 侧 JWKS 验签单实现**：`web/lib/token-verify.ts`（iss/aud/exp/scope 一处实现，push API 与 agent-query 共用；JWKS 缓存 ≥24h；拉取失败 fail-close + page 告警）。
+- **混淆代理人防护（A6）**：审计双标识（服务身份 + 声称 userId）；10min 跨 ≥3 userId → 告警 + **默认拒绝**；高危操作（broadcast / 含 cost 变量）要求 userId 通讯录 active；secret 不落库不进 git。
+- **降级开关**：`AGENT_API_KEY` 共享密钥路径保留（token 化切换期回退用，U8 裁决推迟）。
+
 **网络**：openclaw 容器在 `deploy_insforge-network`，直连 `insforge:7130`（内网，已实测 http=302），网关 URL 用 `http://insforge:7130/functions/agent-query`（不走公网/nginx）。
 
 **部署注意（探针踩坑）**：`openclaw plugins install -l <path>` link 安装会写 `openclaw.json` 的 `plugins.{entries,allow,load.paths}` + 需重启容器加载；卸载 `uninstall --force` 会残留 `load.paths` 指向已删目录 → 配置无效、gateway 崩溃循环。卸后必须清 `load.paths` 或 `openclaw doctor --fix`。openclaw/ 目录 **GHA 不部署**（rsync 只推 web/scripts/database/deploy/functions/services），插件改动走手动 SSH（scp 到 `openclaw/state/plugins/` + `install -l` + restart）。
@@ -475,8 +482,9 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 **C3 carry 维表（物化 parquet）**：维表 dim_*(+ext) → duckdb-service `/carry-dims`（**pgPool 读 → DuckDB COPY parquet S3，全程不 attach、DuckDB 不连 PG**）→ 查询侧 read_parquet 维表 parquet，明细按需 JOIN 维表。**定时（scheduler cron 兜底）+ 变更回调（采集维表后 / ext 编辑后）双触发**，对齐通讯录同步（§4.3 registerContactSyncJob）模式。维表 `carry_enabled` 翻 true。否决 attach（绕过 report_* 风险）与 pg_duckdb（见下）。
 
-**C4 定时应用（OpenClaw cron + run_as + 模板/SQL 分层）**：OpenClaw cron turn **天生不带身份**（requesterSenderId 只来自 inbound，源码证实；现存「建水3店业绩」cron 已踩坑禁用）。解法在我们可控层：
-- **run_as 反查**：`scheduled_reports(cron_job_id → run_as=创建者)` 绑定，后端可信会话写入。plugin 的 query_retail_data 在 requesterSenderId 空时透传 `cronSessionKey=ctx.sessionKey`（cron turn 的 sessionKey 含 `cron:<jobid>:`），agent-query parse job_id 反查 run_as → get_user_perms → 裁剪+脱敏。run_as **不在 LLM 参数**（query_retail_data.parameters 只有 sql）、钉死=创建者、scheduled_reports RLS + CHECK——三道闸封死提权。
+**C4 定时应用（触发判定本地化 + run_push 引擎闸，2026-08-15 改写）**：OpenClaw cron turn **天生不带身份**（requesterSenderId 只来自 inbound，源码证实；现存「建水3店业绩」cron 已踩坑禁用）。解法在我们可控层：
+- **run_as 反查（问数 cron）**：`scheduled_reports(cron_job_id → run_as=创建者)` 绑定，后端可信会话写入。plugin 的 query_retail_data 在 requesterSenderId 空时透传 `cronSessionKey=ctx.sessionKey`（cron turn 的 sessionKey 含 `cron:<jobid>:`），agent-query parse job_id 反查 run_as → get_user_perms → 裁剪+脱敏。run_as **不在 LLM 参数**（query_retail_data.parameters 只有 sql）、钉死=创建者。
+- **run_push 引擎闸（推送出口，§7.4）**：触发判定永在本地（scheduler jobs 注册表 / OpenClaw push-admin），推送出口统一收口 **run_push 渲染引擎（web/lib/push/，唯一入口）+ 引擎闸兜底**——收件人必须结构化 selector（LLM 手写收件人拒）、全员 selector 需 `push:broadcast`（**绕插件直调引擎同样拒**）、订阅定时触发按 owner 实时再校验 `push:configure`（全员订阅加验 broadcast）且在职，撤权/离职 → 订阅自动暂停（标 paused+告警）。「配置不是会话，撤权必须能收回配置」。
 - **模板优先/SQL 兜底**：mode=template（系统内置模板参数化 SQL 读 report_*_v，按 run_as 自动 RLS+_v 裁剪，LLM 不碰数字）/ mode=sql（LLM 写 SQL 兜底，受"绝不编造"约束）。`push_report` 强制用表里 delivery_to（堵 LLM 篡改推送目标）。
 
 **评估否决 pg_duckdb（PG 连 DuckDB 统一引擎）**：本地容器实测——谓词下推✅（read_parquet 视图 + WHERE，scan 只读匹配行），但 read_parquet 走 DuckDB 引擎**读不到 PG GUC**（视图里 `current_setting('request.jwt.claims.*')` 报 `unrecognized configuration parameter`；纯 current_setting 查询能行只是 pg_duckdb 转发回 PG，一旦和 read_parquet 混合就读不到），列级/行级安全还是要 agent-query 应用层拼 claim（同现状），没简化权限；且生产 PG15 无现成 pg_duckdb 镜像、要动核心库。否决，carry 走物化。
@@ -552,12 +560,24 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 ## 六、鉴权系统
 
-### 6.1 登录流程（身份/权限分层，2026-08-08 架构变更）
+### 6.1 登录流程（帽子×座位×口径分层，2026-08-15 平台级权限改造）
 
-> **核心原则——身份层与数据权限层分离**：
-> - **身份层（Casdoor 统一）**：Casdoor（`sso.shanhaiyiguo.com`，独立子域名，复用现有 postgres）作为统一身份 IdP，持有企微 WeCom provider，负责"这人是谁（`wecom_id`）+ SSO 会话"。后续每接一个系统只需在 Casdoor 注册一个 OIDC client，不重复对接企微 API。
-> - **数据权限层（data-analysis 自签）**：data-analysis 拿到 `wecom_id` 后，自查本地 `org_users` / `get_user_perms`（`departments`、`branch_nums`、`can_see_cost`），**自签 PostgREST JWT**（复用现有 `signJwt` + `JWT_SECRET`）。
-> - **零改动（结构层面）**：`JWT_SECRET`、PostgREST 验签、PostgreSQL RLS 策略、JWT claims 结构不变；授权数据源本轮已收编为 `data_permissions` 单表（role/dept/user 三 subject，逐维合成见 §6.2）——`org_departments` 权限列与 `retail_query_user_perms` 已随 167 退役。这些是 data-analysis 特有的细粒度数据权限（非标准身份字段，塞不进任何标准 IdP 的 token），故必须保留在自签 JWT 里。
+> spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md`（§6.2 数据范围合成 / §6.4 casbin 功能授权层 配套）。
+>
+> **核心原则——四层模型：帽子 × 座位 × 口径**：
+> ```
+> ① 身份层（不动）      Casdoor OIDC（企微 provider）→ wecom_id（JIT 建户）
+> ② 帽子层（改造）      Casdoor：人→角色（UI 人工 + 薄同步 auto，单写者原则）
+>                       角色×功能资源：data-analysis:<模块>:<动作>（casbin Permission，§6.4）
+> ③ 座位层（不动）      企微通讯录 → org_departments → org_users.department_ids
+> ④ 口径层（输入源切换）data_permissions（role/dept/user 三类 subject，四维合成，§6.2）
+>                       → get_user_perms（PERMS_INPUT 感知读 role_codes 镜像或 role_id 折 code）
+>                       → claims → RLS/视图过滤（执行点零改动）
+> ```
+>
+> - **身份+帽子层（Casdoor 统一）**：Casdoor（`sso.shanhaiyiguo.com`，控制面独立部署）持有企微 WeCom provider，负责"这人是谁（`wecom_id`）+ SSO 会话 + 人→角色（帽子）+ 角色×功能授权（casbin Permission）"。后续每接一个系统只需在 Casdoor 注册一个 OIDC client，不重复对接企微 API。
+> - **口径层（data-analysis 本地）**：数据范围四维（门店/品牌/品类/成本）留在 `data_permissions` 单表逐维合成——casbin 是单次判定引擎、无 policy→SQL，行级数据过滤永不进 IdP（源码验证）。`get_user_perms` 按 `PERMS_INPUT=casdoor|legacy` 感知输入源（casdoor 模式读 `org_users.role_codes` 镜像；legacy 模式按 `role_id` 折 code），结果**自签 PostgREST JWT**（`JWT_SECRET` / RLS 策略 / claims 八字段结构 / pgrst_pre_request 执行点全部零改动）。
+> - **Casdoor 单点口径（裁决-2，SLO 化）**：Casdoor 故障时**存量会话零影响**（数据面/引擎不依赖 Casdoor）+ **新登录恢复 <2-4h**（SLO 化而非热备）+ **page 告警**；break-glass 凭证 best-effort 并行验证，通过后升冷备。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -572,12 +592,13 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 │  → 回调 data.shanhaiyiguo.com/auth/callback?code=<Casdoor code>          │
 │       │                                                                 │
 │       ▼                                                                 │
-│  数据权限层（data-analysis 自签 JWT）                                    │
+│  座位+口径层（data-analysis 自签 JWT）                                    │
 │  web callback → functions/wecom-oidc-callback：                         │
 │  ├── Casdoor code → /token → /userinfo（sub=wecom_id）                  │
-│  ├── upsert org_users                                                   │
-│  ├── 查 get_user_perms（branch_nums / can_see_cost 等）                 │
-│  └── 自签 PostgREST JWT（现状 claims 结构 + JWT_SECRET，不变）           │
+│  ├── 拉 roles（roles claim 优先；API 查兜底，>2s 降级本次不带角色+告警）│
+│  ├── upsert org_users + 登录写穿镜像（role_codes + casdoor_synced_at） │
+│  ├── 查 get_user_perms（PERMS_INPUT 感知；四维 + 角色 UI 字段，§6.2）   │
+│  └── 自签 PostgREST JWT（claims 八字段 + roles + permissions，7 天）    │
 │       │                                                                 │
 │       ▼                                                                 │
 │  callback 页面                                                           │
@@ -598,36 +619,75 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 >
 > 端到端企微登录验证待部署后进行（Casdoor WeCom provider 源码已实测 + postgres 部署已验证；公网 `sso` 域名 + 企微可信域名配置属部署后验证）。
 
-### 6.2 PostgreSQL RLS 鉴权
+**薄同步链（2026-08-15 spec，U1 起；单写者原则，挂 §7.1.2 通讯录同步链）：**
 
 ```
-企微通讯录同步 → 用户归属部门
+企微回调（实时增量）+ 每日 03:17 全量（兜底）
+   → 推导（dept_role_mapping → 角色；共享模块单实现，refresh 与薄同步同调，禁双推导引擎）
+   → Casdoor-first 写三动作：provisioning（JIT 建户）/ auto 角色写入 / 离职 disable
+   → 写镜像 org_users.role_codes（casdoor_writer = auto|manual）
+   → 写 Casdoor 失败 → sync_outbox（幂等键 wecom_id+action+day）→ 下次同步先清 outbox
+每日 drift 三向对账：
+   diff1（Casdoor−企微，manual 除外）= Casdoor 手工配置 → 回写镜像标 manual，永不反向覆盖
+   diff2（企微−Casdoor）= 写失败 → outbox 重放，>48h 页级告警
+   diff3（Casdoor−镜像）= 镜像滞后 → 回写，24h 未收敛告警（直接影响 run_push 分组正确性）
+```
+
+- **单写者**：`org_users.casdoor_writer` 标记——auto = dept_role_mapping 推导写 Casdoor；manual = Casdoor UI 人工配置 → 薄同步写豁免（防手工配置橡皮擦）。既有本地角色写者（152 refresh cron / `/api/admin/permissions/users` PUT 的 role 字段）U1 起收编/冻结（同一 PR）。
+- **动作分顺序落地**：① 离职四 sink 最先（安全刚需，§7.1.2）；② auto 角色写入先「对账告警+人工确认」两周再自动写；③ provisioning 先 JIT 建户+人工配角色。
+- **输入源切换（U2，最高风险独占窗口）**：`PERMS_INPUT=casdoor|legacy` 配置开关（秒级回滚不发版）；shadow 对账门禁 = 预期差异白名单（drift manual 集派生，逐条人工确认）+ 非预期差异双清零；切换执行瞬间重跑增量 diff=0；回滚预案含 Casdoor→legacy 角色回放脚本。
+
+### 6.2 数据权限合成与 PostgreSQL RLS 鉴权（2026-08-15 改写：subject_id=code + role_codes 持久投影 + 多角色 UNION）
+
+```
+企微通讯录同步 → 座位（org_users.department_ids）
      ↓
-登录时 JWT 携带 departments 字段
+登录时自签 JWT 携带 departments + 四维 claims + roles/permissions（§6.1）
      ↓
 PostgREST 请求带 Authorization: Bearer <JWT>
      ↓
-PostgreSQL RLS 策略
-     ↓
-WHERE departments ?| current_setting('request.jwt.claims.departments')
+PostgreSQL RLS 策略（执行点零改动）
      ↓
 数据库层强制隔离
 ```
 
-**权限表**（2026-08-13 权限体系重构后：`data_permissions` 单表授权）：
-- `data_permissions`：**唯一授权表**。`subject_type` ∈ `role`/`dept`/`user`（`subject_id` = role_id::text / dept_id / wecom_id）；四维 `branch_nums`/`brands`/`categories`/`can_see_cost`，**NULL = 该维未配置**（不参与合成）、`["*"]` = 全放行；`expires_at` 临时授权（NULL=永久）。行贡献：role 行四维全可配；dept 行只配 `branch_nums`+`can_see_cost` 两维（brands/categories 恒 NULL）；user 行按需只配要覆盖的维。167 迁移已将 `org_departments` 权限列 + 遗留 `retail_query_user_perms` 收编进本表并 DROP 老载体。
-- `permission_audit`：权限变更审计（操作者/动作/主体 + payload_before/after）；仅经管理 API 写（页面操作自动落审计），SQL 直改绕不过审计。
+> RLS 策略族沿用现状零改动：部门成员策略 `WHERE departments ?| current_setting('request.jwt.claims.departments')` 与四维 claims 策略（`branch_nums` / `can_see_cost` 等，§6.3/§4.2）都消费自签 JWT claims，claims 结构不变故策略不动。
+
+**权限表**（`data_permissions` 单表授权 + 角色码契约）：
+- `data_permissions`：**唯一授权表**。`subject_type` ∈ `role`/`dept`/`user`；**role 行 `subject_id` = 角色 `code`**（P0a M-1 迁移统一，改前全员 perms 快照作 diff=0 门禁、显式反向迁移脚本回滚；`roles.code` 加 UNIQUE NOT NULL + 命名空间约束 `CHECK (code !~ '^[0-9]+$')`，防 code 与其它角色 `role_id::text` 错映射）；四维 `branch_nums`/`brands`/`categories`/`can_see_cost`，**NULL = 该维未配置**（不参与合成）、`["*"]` = 全放行；`expires_at` 临时授权（NULL=永久）。行贡献：role 行四维全可配；dept 行只配 `branch_nums`+`can_see_cost` 两维；user 行按需只配要覆盖的维。契约测试：`Casdoor roles ⊆ data_permissions role subject_id ∪ {admin}` 双向 diff 空。
+- **`org_users.role_codes TEXT[]` = 持久投影（非过渡产物）**：Casdoor「人→角色」真相源在本地库的物理载体——无会话路径（agent-query / run_push 推送引擎 / 权限页 preview）与「Casdoor 宕机数据面不受影响」都靠它；只被写穿（登录 / 薄同步 / drift 对账回写），不经业务 API 直写。`role_id` 旧单值列才是过渡列（U2 验收后两版本内删，sunset 发 issue；P0a 后 role 行按 code 匹配、用户角色经 roles join 折 code 一处实现，U2 后才读 role_codes 数组，中间无第三态）。
+- **多角色 cardinality（冻结进契约测试）**：数据范围合成 = **UNION**（167「角色∪部门」的自然推广，内核零改动）；`can_see_cost` 任一 true 则 true、user 行显式 false 整体替换；UI 字段 = priority 最高角色（平级字母序）；**claims 单值 `role_code` = priority 最高角色 code**；selector 命中 = 任一角色命中；`get_user_perms` 签名冻结单入参、roles 解析内移。
+- `permission_audit`：**数据范围面**审计（操作者/动作/主体 + payload_before/after）；仅经管理 API 写（页面操作自动落审计），SQL 直改绕不过审计。**角色面审计缺口（显式声明）**：人→角色（帽子）变更不落本地 `permission_audit`——其审计指向 **Casdoor 操作日志**；权限页用户 tab 角列为只读（role_codes + casdoor_synced_at + Casdoor 编辑深链），不提供本地角色写入。
 - `roles`：角色 UI 档案（`default_landing`/`default_metric`/`visible_panels`/`is_active`）+ 具名授权包（`data_permissions` role 行）。
-- `org_users`：用户信息 + department_ids + role_id（+ wecom_id 企微映射）。
 - `org_departments`：部门基础信息（企微同步）；权限列已随 167 收编进 `data_permissions`（dept 行）。
-- **合成规则**（`get_user_perms`，登录时写入 JWT）：基底 = 角色 ∪ 部门各维叠加（并集，忽略 NULL，过滤过期条目）→ 个人 override 某维非 NULL 则**按字段覆盖**、未配置则继承基底；`can_see_cost` = 个人 user 行配了该维即**整体替换基底**（配 `false` 可显式收回成本可见）；未配则继承基底 OR（角色 OR 部门任一 true）；兜底不变（claim 缺失 / 含 `"*"` → 放行，空数组兜底 `["*"]`）。
+- **合成规则**（`get_user_perms`，登录时写入 claims）：基底 = 角色 ∪ 部门各维 UNION（忽略 NULL，过滤过期条目）→ 个人 override 某维非 NULL 则**按字段覆盖**；`can_see_cost` = 个人 user 行配了该维即**整体替换基底**（配 `false` 可显式收回）；兜底不变（claim 缺失 / 含 `"*"` → 放行，空数组兜底 `["*"]`）。引擎侧 strict wrapper 语义见 §7.4（未知用户 NULL fail-close，空集 ≠ NULL）。
 - 智能问数 perms（`get_user_perms` 返回）= `{ branch_nums, brands, categories, can_see_cost }` + 角色 UI 字段：详见 §4.2
+
+**身份视图一致性总表（哪个消费端读哪份身份快照、多旧、怎么失效）：**
+
+| 消费端 | 数据源 | TTL/时效 | 失效方式 |
+|---|---|---|---|
+| 自签 JWT claims | 登录时 Casdoor roles + get_user_perms | 7 天 | 到期；离职 blacklist by sub（web API 面） |
+| org_users 镜像（role_codes） | Casdoor→写穿（Casdoor-first） | 软实时，允许短暂滞后 | drift job 纠正；diff3 24h 告警 |
+| casbin Permission（agent 路径） | Casdoor API | 5min 缓存 + stale-while-revalidate | 过期且 Casdoor 不可达 → fail-close + 24h stale 宽限+告警 |
+| OpenClaw 服务 JWT | client_credentials | 短时（60s 刷新） | client 撤销后 ≤60s+token 寿命（撤销即时性待 P0-V2b 验证） |
+| Novu subscriber | run_push 引擎 upsert | 持久 | 离职动作 delete |
+| token_blacklist | 本地 | 即时 | 离职按 sub 拉黑 |
 
 ### 6.3 DuckDB /query 鉴权
 
 详见 §4.2「智能问数查询与鉴权架构」。
 
 核心：网关按身份建**临时权限视图**（行 `branch_nums` + 列成本组脱敏），硬编码进视图定义；LLM 生成的 SQL 在视图上执行，引擎层强制、不可绕过。`/query` 改每请求独立连接实现视图隔离；PostgreSQL 侧走真 RLS（`request.jwt.claims.branch_nums`，网关代签短时 JWT 注入）。
+
+### 6.4 casbin 功能授权层（2026-08-15 新增）
+
+**功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1），数据范围留 `data_permissions`（§6.2）——casbin 是单次判定引擎、无 policy→SQL，行级数据过滤永不进 IdP（源码验证）。
+
+- **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual）+ 薄同步 auto（§6.1 单写者）。
+- **checkFeaturePerm 单模块**：`web/lib/feature-perm.ts` 单函数收口所有功能门禁（禁散落 `userid === '...'` 硬编码）——P0a 读 claims + BREAKGLASS；U2 后读 claims + casbin 实查。切 casbin 是 1 处切换，非 N 处 hunt-and-replace。
+- **BREAKGLASS env**：`ADMIN_USERIDS` 常驻白名单 P0a 即收敛为 `BREAKGLASS_ADMINS` env（默认空；启用走兜底并写审计）——常驻白名单 = 永久 Casdoor 旁路，撤权不收口。
+- **高危实查（裁决-1 已裁：启用，随 U2 生效）**：admin / `push:broadcast` / 临时授权类服务端实查（5min 缓存 + fail-close + 24h stale 宽限+告警）——这是 `JWT_SECRET` 自签 admin 的真兜底（RT-7）；低危（菜单/只读）维持 7 天随自签 JWT。
 
 ---
 
@@ -656,6 +716,7 @@ WHERE departments ?| current_setting('request.jwt.claims.departments')
 | 通讯录实时同步 | `change_contact` 回调（create/update/delete_user、create/update/delete_party） | **通讯录同步功能（非应用）** | 🆕 `web/app/api/wecom-contacts-webhook/route.ts`（详见 §7.1.2） |
 | 消息通知（统一） | `/cgi-bin/message/send` | App B（`functions/wecom-notify`） | ✅ |
 | OpenClaw 对话 | 回调收消息 + 主动消息 | App C | ✅ |
+| 业务推送投递（Novu 链路） | chat-webhook 回调 → `/api/wecom-bridge/<bridge_token>`（双层验签）→ `message/send` | App B（wecom-bridge，web api route；详见 §7.4） | 🆕 规划（2026-08-15 spec，未实施） |
 
 > 2026-08-08 起：登录 OAuth + 用户信息两条由 Casdoor 的 WeCom provider 调用（凭证挪入 Casdoor），data-analysis 不再直连企微登录 API；App B / App C 调用方不变。
 
@@ -713,6 +774,10 @@ functions/wecom-sync-contacts（兜底全量；JSON 调用，不受 body 限制�
 - **回调 URL**：`https://data.shanhaiyiguo.com/api/wecom-contacts-webhook`（企微后台「通讯录同步」填，会先 GET 验证才允许保存）。
 - **限**：依赖企微回调可达 + 企微「通讯录同步」功能已开启；回调漏的消息靠每日全量兜底（最长次日纠正）。`functions/wecom-contacts-webhook` 废弃（逻辑移至 web/api）。
 
+**🆕 Casdoor 薄同步三动作 + 离职四 sink（2026-08-15 spec，U1 起，详见 §6.1 薄同步链）：**
+- 同步链扩展为**薄同步**：在 upsert 本地表之外，按 `casdoor_writer`（auto|manual）单写者原则向 Casdoor 写三动作——① **provisioning**（JIT 建户，角色人工配，有需求再自动化）；② **auto 角色写入**（dept_role_mapping 推导；先「对账告警+人工确认」两周再自动写）；③ **离职 disable**（Casdoor 新登录即时拦截）。写 Casdoor 失败入 `sync_outbox`（幂等键 wecom_id+action+day）重放，>48h 页级告警；每日 drift 三向对账。
+- **离职四 sink（收权分层，诚实口径）**：① web API 面——middleware `is_active` 软校验 + `token_blacklist` 按 sub 拉黑（**即时**）；② 推送面——run_push 存在性守卫 + 订阅 owner 再校验（**即时**）+ **Novu subscriber delete**（消除残留投递，§7.4）；③ Casdoor 新登录 disable（**即时**）；④ 数据面（PostgREST/RLS）——旧 7 天 JWT 继续有效，**最长 7 天窗口（裁决-4 已裁：接受，与现状等价非新债）**；即时化真执行点为 pgrst_pre_request 扩展，留作未来选项。
+
 ### 7.2 乐檬数据源
 
 **API 地址**：`https://sharef.lemengcloud.com`
@@ -750,6 +815,35 @@ lemeng-datasource/
 - 按品牌分区：各品牌采集各写各的文件，杜绝跨品牌 /merge 写竞争、order_no 跨品牌歧义
 - 跨品牌查询用 glob：`read_parquet('s3://lemeng-datasource/lemeng/retail_detail/*/{date}/all.parquet')`
 - 历史数据（2026-07-04 的 3120）曾写在无 company_id 的旧路径，已迁移或由下次全量核对重写
+
+### 7.4 Novu 统一推送中心（2026-08-15 设计，未实施）
+
+spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md`。**业务推送**（订阅/定时/agent 推送）统一切换到 Novu；**系统告警留 `wecom-notify` 不动**（§7.1.1）；wecom-push 退役（停 cron 不删码，一键回退）。
+
+**拓扑与链路（控制面 113.249.101.33，与 Casdoor 同机 26G 盘）：**
+
+```
+触发判定（永在本地：web/lib/jobs 注册表 scheduler / OpenClaw push-admin 插件）
+  → run_push 渲染引擎（web/lib/push/，唯一入口）：
+      selector 解析 → 悬空守卫 → 存在性守卫 → 数据就绪守卫
+      → 逐人实时 get_user_perms（PERMS_INPUT 感知，不消费 7 天 JWT claims）
+      → scope 签名分组（四维 canonical JSON，can_see_cost 必入签名）→ 每组短时 JWT（≤10min）代签
+      → 查语义视图算变量（cost_sensitive × 组 can_see_cost=false → 脱敏）
+      → NovuGateway.triggerBulk（≤100/批，txnId 贯穿）
+  → Novu 社区版（org=shanhai 山海租户；dumb pipe，不反查业务库）
+  → chat-webhook（官方扩展点；不 fork 不自研 provider）
+  → wecom-bridge（web api route `/api/wecom-bridge/<bridge_token>`，双层验签）
+  → 企微 App B message/send（共享 wecom 发送库，双运行时副本+契约测试）
+降级：Novu 连续失败 → 自动回退 wecom-notify 直投——走同一引擎渲染的分组产物，只换投递通道
+```
+
+- **变量注册表**：`push_variables`（var_code PK / metric_code REFERENCES metric_registry / scope_dim / extra_filter JSONB）；口径复用 `metric_registry`（AST），**生成器零改动**——新可推指标 = INSERT 一行；extra_filter 写入校验**禁裸 `branch_num`**（门店键铁律）。
+- **双向白名单**：data 机（出口 113.249.120.84）↔ 控制面；Novu API 白名单仅接受 data IP（CE 是否原生支持 IP allowlist 待 V1b 验证，否则前置 nginx 限流）；wireguard 隧道 P0-V4 评估（不可行退双向白名单）。
+- **探活方向从 data 侧发起**（挂 monitor/probe evaluators）——控制面单机不能自证存活。
+- **容量 gate / TTL / 备份 / 水位**：上线前磁盘余量 ≥8G + RAM 实测（栈常驻 2-4G，与 Casdoor 同机）；镜像经天翼云仓搬运（跨境拉取不通）；mongodb TTL 索引 90 天；磁盘水位 80% 告警；workflow 定义每日 export 落对象存储（mongodump 仅磁盘充裕时加做）。
+- **txnId 数据流（可解释性骨干）**：run_push 每次触发生成 txnId → `push_trigger_logs`（元数据：txnId/触发者/selector 定义/分组数/收件人清单/**scope 签名明文**/变量 code 清单/skipped 记录）+ `push_trigger_payloads`（值快照，TTL 7 天；读取需 `push:audit` 且读取者 scope ⊇ 分组 scope，不满足只见哈希）→ Novu payload → bridge 日志 → 降级路径——「触发成功没人收到」三方可拼。幂等与补发：合法补发=新 txnId；防重复靠 bridge nonce（键=(token, body hash)，封跨 token 移植重放，TTL 1h）+ Novu subscriber transactionId。
+- **引擎签名层 engine_sig（伪造链断点，RT-2）**：bridge token 与 Novu SecretKey 同存 Novu 侧 = 攻破 Novu 得完整伪造链（可伪造数值钓鱼）。故引擎每条 trigger payload 内嵌 `engine_sig = HMAC-SHA256(txnId + subscriberId + content_digest, ENGINE_BRIDGE_SECRET)`；`ENGINE_BRIDGE_SECRET` 只存 web/bridge 侧（**Novu 不知**）；bridge 验签顺序：① `X-Novu-Signature`（Novu 身份）→ ② `engine_sig`（**引擎身份**）。攻破 Novu 只能重放历史合法消息（nonce 挡），不能伪造新消息。
+- **推送面鉴权（push-admin 三层）**：企微 requesterSenderId → OpenClaw push-admin 插件（服务身份 client_credentials JWT + 人员身份 body.userId）→ web 内部 push API（JWKS 验签 → Casdoor Permission 闸 `push:configure`/`push:broadcast`）→ run_push 引擎闸兜底（§4.4 C4）；收件人必须结构化 selector（首期 dept/person 子集）。
 
 ---
 
@@ -846,9 +940,17 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | 统一通知服务 | edge function `wecom-notify`（App B，凭据单点） | 2026-07-07 |
 | 监控告警体系 | 复用 web node-cron + 结构化规则表(monitor_rules) + 状态表(monitor_alerts)；7 个 check_type；wecom-notify 主通道 + web 直连企微兜底(InsForge-down) | 2026-07-08 |
 | 统一身份 IdP | Casdoor（独立子域名 `sso.shanhaiyiguo.com`，WeCom Internal provider 双模式 Silent+Normal）；App A 登录凭证挪入 Casdoor provider | 2026-08-08 |
-| 身份/权限分层 | Casdoor 管身份（`wecom_id`）+ SSO 会话；data-analysis 拿 `wecom_id` 后自查 `perms` 自签 PostgREST JWT（`JWT_SECRET` / RLS / 权限表不变） | 2026-08-08 |
+| 身份/权限分层 | Casdoor 管身份（`wecom_id`）+ SSO 会话；data-analysis 拿 `wecom_id` 后本地合成 `perms` 自签 PostgREST JWT（`JWT_SECRET` / RLS / 权限表不变）——2026-08-15 起细化为帽子×座位×口径四层（§6.1） | 2026-08-08 |
 | Casdoor 独立化 | Casdoor 从 data-analysis 寄生迁到控制面（113.249.101.33 `/opt/casdoor`，独立 docker compose + **独立 postgres**），成平台级身份基础设施；data-analysis 退化为普通 OIDC client；Caddy 反代 sso 域名（specs/2026-08-09-casdoor-independent-design.md） | 2026-08-09 |
 | 代码组织规范 | A+B-lite：目录即模块（collectors/jobs/report-center-boards）+ 尾部追加式注册表 + 契约单源（web/lib/contracts）；不引入运行时插件框架、不拆服务、不改部署拓扑。P0–P5 分阶段（spec `docs/superpowers/specs/2026-08-11-modular-plugin-design.md`，评审 `docs/design/modular-plugin-architecture-review.md`） | 2026-08-11 |
+| 功能授权进 Casdoor casbin（D1/D2） | casbin 只管功能授权（资源三段式 `data-analysis:<模块>:<动作>`，§6.4）；人→角色在 Casdoor 配（UI 人工+薄同步 auto 单写者）；角色码两侧契约锁定（role 行 subject_id=code）；数据范围留 `data_permissions`，RLS/视图/claims/pgrst_pre_request 执行点零改动。spec `docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md` | 2026-08-15 |
+| 通讯录薄同步（D3） | Casdoor 三动作（provisioning JIT 建户 / auto 角色写入 / 离职 disable）挂 wecom-sync-contacts 链；`casdoor_writer` 单写者 + `sync_outbox` 幂等重放 + 每日 drift 三向对账（§6.1/§7.1.2）；本地角色写者 U1 起收编/冻结 | 2026-08-15 |
+| Novu 自部署统一推送中心（D4/D5/D7） | 社区版、控制面 113.249.101.33、org=shanhai；企微投递 = chat-webhook 官方扩展点 + 自建 wecom-bridge（web api route，双层验签）；只切业务推送（系统告警留 wecom-notify），wecom-push 退役（停 cron 不删码）；不 fork 不自研 provider（§7.4） | 2026-08-15 |
+| 推送配置入口（D6） | push-admin = OpenClaw 中文对话自助配置（插件模式，照 data-query-plugin），不自建中文模板 UI；工具面 4 个（list/create_workflow/create_schedule/push_now） | 2026-08-15 |
+| 服务身份链路（D8，裁决-3 调整） | push-admin 走 Casdoor client_credentials 短时 JWT（scope 仅 openclaw:*，永不含 admin）+ web 侧 JWKS 验签；agent-query token 化（U8）**推迟独立排期**——模式由 U6 验证、切换延后；过渡防护（A6 审计异常检测+AGENT_API_KEY 轮换 runbook）随引擎首发，AGENT_API_KEY 降级开关保留 | 2026-08-15 |
+| permissions 生效时效（D9，裁决-1 细化） | 低危（菜单/只读）随自签 JWT 7 天；**高危实查已裁启用**——admin/push:broadcast/临时授权类服务端实查（5min 缓存 + fail-close + 24h stale 宽限），随 U2 生效（§6.4）；BREAKGLASS_ADMINS env 替代常驻白名单（默认空） | 2026-08-15 |
+| Casdoor 单点口径（裁决-2） | SLO 化：存量会话零影响 + 新登录恢复 <2-4h + page 告警；break-glass 凭证 best-effort 并行验证，通过后升冷备（§6.1） | 2026-08-15 |
+| 数据面离职窗口（裁决-4） | 接受 7 天 JWT 窗口（与现状等价非新债）；web API/推送/Casdoor 三面即时收权（离职四 sink，§7.1.2）；即时化执行点（pgrst_pre_request 扩展）留作未来选项 | 2026-08-15 |
 
 ---
 
