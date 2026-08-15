@@ -3,6 +3,7 @@
 // v1 支持的检查类型；Phase B 会扩展后三类
 export type CheckType =
   | 'service_down'
+  | 'novu_health'
   | 'token_expire'
   | 'collect_fail'
   | 'collect_stall'
