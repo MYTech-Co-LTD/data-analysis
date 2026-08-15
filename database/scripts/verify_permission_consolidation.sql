@@ -17,7 +17,7 @@ DELETE FROM roles WHERE code IN ('vp_role_a','vp_role_b');
 INSERT INTO roles (code,name,default_landing,visible_panels) VALUES ('vp_role_a','verifyA','/','[]');
 INSERT INTO org_departments (id,name,is_active) VALUES ('vp_d1','verifyD1',true),('vp_d2','verifyD2',true);
 INSERT INTO data_permissions (subject_type,subject_id,branch_nums,brands,categories,can_see_cost,note)
-SELECT 'role', id::text, '["*"]','["*"]','["水果"]',false,'[verify]角色默认' FROM roles WHERE code='vp_role_a';
+SELECT 'role', code, '["*"]','["*"]','["水果"]',false,'[verify]角色默认' FROM roles WHERE code='vp_role_a'; -- 168 起 role 行键 = roles.code
 INSERT INTO data_permissions (subject_type,subject_id,branch_nums,brands,categories,can_see_cost,note)
 VALUES ('dept','vp_d1','["1","2"]',NULL,NULL,false,'[verify]部门1'),
        ('dept','vp_d2','["2","3"]',NULL,NULL,true,'[verify]部门2');

@@ -49,7 +49,7 @@ describe('PUT /roles/:id', () => {
     expect(init.method).toBe('PATCH');
     expect(JSON.parse(init.body as string)).toEqual({ default_landing: '/my-store' });
     expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      action: 'update_role', subjectType: 'role', subjectId: '1',
+      action: 'update_role', subjectType: 'role', subjectId: 'boss',
       after: { default_landing: '/my-store' },
     }));
   });
@@ -103,7 +103,7 @@ describe('PUT /roles/:id', () => {
     expect(url).toContain('data_permissions?id=eq.9');
     expect(init.method).toBe('DELETE');
     expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      action: 'update_role', subjectId: '1',
+      action: 'update_role', subjectId: 'boss',
       after: { branch_nums: null, brands: null, categories: null, can_see_cost: null },
     }));
   });
@@ -163,13 +163,12 @@ describe('PUT /roles/:id', () => {
 
   it('角色不存在 → 404，不写任何范围行（F7 防幽灵行）', async () => {
     fetchMock
-      .mockResolvedValueOnce({ json: async () => [] })   // 旧 roles：无此行
-      .mockResolvedValueOnce({ json: async () => [] });  // 旧 perm（不应被读到）
+      .mockResolvedValueOnce({ json: async () => [] });  // 旧 roles：无此行（perm 按 code 读，此处已提前 return）
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['1'] }), CTX);
     expect(res.status).toBe(404);
     expect((await res.json()).error).toBe('角色不存在');
-    // 只读了两处，无任何写调用
-    expect(fetchMock.mock.calls.length).toBe(2);
+    // 只读了一处（roles），无任何写调用
+    expect(fetchMock.mock.calls.length).toBe(1);
     expect(fetchMock.mock.calls.every(([, init]) => !init || init.method === undefined || init.method === 'GET')).toBe(true);
     expect(writeAuditMock).not.toHaveBeenCalled();
   });
@@ -190,6 +189,21 @@ describe('PUT /roles/:id', () => {
       .mockResolvedValueOnce({ json: async () => OLD_PERM_WITH_VALUES });
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { can_see_cost: 1 }), CTX);
     expect(res.status).toBe(400);
+  });
+
+  it('新范围行 POST → 按 code 读、subject_id 写 roles.code（168 键统一回归）', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ json: async () => OLD_ROLE })
+      .mockResolvedValueOnce({ json: async () => [] })   // 旧 perm：无行
+      .mockResolvedValueOnce({ ok: true });              // POST data_permissions
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['7'] }), CTX);
+    expect((await res.json()).ok).toBe(true);
+    const [permReadUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(permReadUrl).toContain('subject_type=eq.role&subject_id=eq.boss'); // 读按 code
+    const [postUrl, postInit] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(postUrl).toContain('/data_permissions');
+    expect(postInit.method).toBe('POST');
+    expect(JSON.parse(postInit.body as string)).toMatchObject({ subject_type: 'role', subject_id: 'boss', branch_nums: ['7'] }); // 写 code 非 role_id::text
   });
 
   it('显式空数组维 == 清空该维（F4 规范化）', async () => {
