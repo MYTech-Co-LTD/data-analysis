@@ -40,7 +40,9 @@ export async function GET(req: NextRequest) {
     return { ...d, branch_nums: p?.branch_nums ?? null, can_see_cost: p?.can_see_cost ?? null };
   });
   // data_permissions 无 RLS（072 设计：仅 SECURITY DEFINER 可读）；此处用 service key 直查（admin 已鉴权）
-  const subjectFilter = `or=(and(subject_type.eq.user,subject_id.eq.${encodeURIComponent(wecomId)}),and(subject_type.eq.role,subject_id.eq.${user?.role_id ?? -1}))`;
+  // 168 起 role 行键 = roles.code（roleArr 上面已按 role_id 折出 code）
+  const roleCode = Array.isArray(roleArr) ? roleArr[0]?.code ?? null : null;
+  const subjectFilter = `or=(and(subject_type.eq.user,subject_id.eq.${encodeURIComponent(wecomId)}),and(subject_type.eq.role,subject_id.eq.${roleCode ?? '__no_role__'}))`;
   const perms = await fetch(`${POSTGREST_URL}/data_permissions?select=subject_type,subject_id,branch_nums,brands,categories,can_see_cost,expires_at,note&${subjectFilter}`, { headers: H, cache: 'no-store' }).then(r => r.json()).catch(() => []);
 
   return NextResponse.json({

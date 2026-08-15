@@ -48,18 +48,18 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   if ('is_active' in b && typeof b.is_active !== 'boolean')
     return NextResponse.json({ ok: false, error: 'is_active 须为布尔' }, { status: 400 });
 
-  // 先读旧值（审计）
-  const [oldRole, oldPerm] = await Promise.all([
-    fetch(`${POSTGREST_URL}/roles?select=code,name,default_landing,default_metric,visible_panels,is_active&id=eq.${id}`, { headers: H }).then(r => r.json()).catch(() => []),
-    fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost&subject_type=eq.role&subject_id=eq.${id}&order=id,asc`, { headers: H }).then(r => r.json()).catch(() => []),
-  ]);
+  // 先读旧值（审计）。168 迁移起 role 行键 = roles.code：perm 行按 code 读，
+  // 故须先读 roles 拿到 code 再读 data_permissions（不能并行）。
+  const oldRole = await fetch(`${POSTGREST_URL}/roles?select=code,name,default_landing,default_metric,visible_panels,is_active&id=eq.${id}`, { headers: H }).then(r => r.json()).catch(() => []);
   const oldRoleArr = Array.isArray(oldRole) ? oldRole : [];
-  const oldPermArr = Array.isArray(oldPerm) ? oldPerm : [];
   const oldRoleRow = oldRoleArr[0] ?? null;
-  const oldPermRow = oldPermArr[0] ?? null;
 
   // F7：角色须存在才允许写（防幽灵 role 权限行指向不存在的角色）
   if (!oldRoleRow) return NextResponse.json({ ok: false, error: '角色不存在' }, { status: 404 });
+
+  const oldPerm = await fetch(`${POSTGREST_URL}/data_permissions?select=id,branch_nums,brands,categories,can_see_cost&subject_type=eq.role&subject_id=eq.${encodeURIComponent(oldRoleRow.code)}&order=id,asc`, { headers: H }).then(r => r.json()).catch(() => []);
+  const oldPermArr = Array.isArray(oldPerm) ? oldPerm : [];
+  const oldPermRow = oldPermArr[0] ?? null;
 
   // 1) roles 参数（只 patch 提供的字段）
   const rolePatch: Record<string, unknown> = {};
@@ -88,7 +88,7 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
       const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=eq.${oldPermRow.id}`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
       if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
     } else if (!allNull) {
-      const body = { subject_type: 'role', subject_id: String(id), ...merged, note: '角色tab修改' };
+      const body = { subject_type: 'role', subject_id: oldRoleRow.code, ...merged, note: '角色tab修改' }; // 168 起 role 行键 = roles.code
       const wr = oldPermArr.length
         ? await fetch(`${POSTGREST_URL}/data_permissions?id=eq.${oldPermRow.id}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify({ ...merged, note: body.note }) })
         : await fetch(`${POSTGREST_URL}/data_permissions`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(body) });
@@ -101,6 +101,6 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   if (merged) {
     for (const k of SCOPE_KEYS) if (k in b) after[k] = merged[k];
   }
-  await writeAudit(req, { action: 'update_role', subjectType: 'role', subjectId: String(id), before: { role: oldRoleRow, perm: oldPermRow }, after });
+  await writeAudit(req, { action: 'update_role', subjectType: 'role', subjectId: oldRoleRow.code, before: { role: oldRoleRow, perm: oldPermRow }, after }); // 审计键同步 code（168）
   return NextResponse.json({ ok: true });
 }

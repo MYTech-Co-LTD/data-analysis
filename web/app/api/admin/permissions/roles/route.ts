@@ -18,8 +18,8 @@ export async function GET(req: NextRequest) {
   const permArr = Array.isArray(perms) ? perms : [];
   const roleArr = Array.isArray(roles) ? roles : [];
   return NextResponse.json({
-    roles: roleArr.map((ro: { id: number }) => {
-      const dp = permArr.find((x: { subject_id: string }) => x.subject_id === String(ro.id));
+    roles: roleArr.map((ro: { id: number; code: string }) => {
+      const dp = permArr.find((x: { subject_id: string }) => x.subject_id === ro.code); // 168 起 role 行键 = roles.code
       return { ...ro, branch_nums: dp?.branch_nums ?? null, brands: dp?.brands ?? null, categories: dp?.categories ?? null, can_see_cost: dp?.can_see_cost ?? null };
     }),
   });

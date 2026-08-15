@@ -26,7 +26,7 @@ describe('GET /roles', () => {
   it('合并角色默认范围行（未配置 → null）', async () => {
     fetchMock
       .mockResolvedValueOnce({ json: async () => [{ id: 1, code: 'boss', name: '老板/运营总', default_landing: '/', default_metric: 'sale', visible_panels: ['targets'], is_active: true }] })
-      .mockResolvedValueOnce({ json: async () => [{ subject_id: '1', branch_nums: ['1', '2'], brands: ['3120'], categories: ['水果'], can_see_cost: true }] });
+      .mockResolvedValueOnce({ json: async () => [{ subject_id: 'boss', branch_nums: ['1', '2'], brands: ['3120'], categories: ['水果'], can_see_cost: true }] }); // 168 起 role 行键 = roles.code
     const res = await GET(mkReq('GET', ADMIN_COOKIE));
     const body = await res.json();
     expect(body.roles[0]).toMatchObject({
