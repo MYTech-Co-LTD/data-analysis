@@ -26,9 +26,9 @@ export interface Scope {
  */
 export function scopeSignature(scope: Scope): string {
   const canonical = {
-    b: scope.brands ? [...scope.brands].sort() : undefined,
-    br: scope.branch_nums ? [...scope.branch_nums].sort() : undefined,
-    c: scope.categories ? [...scope.categories].sort() : undefined,
+    b: scope.brands?.length ? [...scope.brands].sort() : undefined,
+    br: scope.branch_nums?.length ? [...scope.branch_nums].sort() : undefined,
+    c: scope.categories?.length ? [...scope.categories].sort() : undefined,
     cost: scope.can_see_cost ?? undefined,
   };
 

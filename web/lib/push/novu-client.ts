@@ -7,6 +7,8 @@
  * - engine_sig 内层签名（防伪冒）
  */
 
+import crypto from 'crypto';
+
 // 运行时读取（兼容测试注入）
 function getNovuConfig() {
   return {
@@ -108,7 +110,6 @@ export async function generateEngineSig(
   const { engineSecret } = getNovuConfig();
   if (!engineSecret) throw new Error('ENGINE_BRIDGE_SECRET not set');
 
-  const crypto = await import('crypto');
   return crypto
     .createHmac('sha256', engineSecret)
     .update(`${txnId}:${subscriberId}:${contentDigest}`)
@@ -119,7 +120,6 @@ export async function generateEngineSig(
  * 生成内容摘要（SHA256 前 16 位）
  */
 export async function contentDigest(content: string): Promise<string> {
-  const crypto = await import('crypto');
   return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 
@@ -142,36 +142,31 @@ export async function triggerBulk(
   const errors: string[] = [];
   let batches = 0;
 
-  for (let i = 0; i < subscribers.length; i += BATCH_SIZE) {
-    const batch = subscribers.slice(i, i + BATCH_SIZE);
+  // 为每个 subscriber 生成独立 engine_sig + 独立 event
+  const allEvents = await Promise.all(
+    subscribers.map(async (s) => {
+      const digest = await contentDigest(JSON.stringify(s.payload));
+      const sig = await generateEngineSig(workflowId, s.subscriberId, digest);
+      return {
+        name: workflowId,
+        to: [{ subscriberId: s.subscriberId }],
+        payload: { ...s.payload, engine_sig: sig },
+        overrides,
+      };
+    })
+  );
 
-    // 为每个 subscriber 注入 engine_sig
-    const toWithSig = await Promise.all(
-      batch.map(async (s) => {
-        const digest = await contentDigest(JSON.stringify(s.payload));
-        const sig = await generateEngineSig(workflowId, s.subscriberId, digest);
-        return {
-          subscriberId: s.subscriberId,
-          payload: { ...s.payload, engine_sig: sig },
-        };
-      })
-    );
+  // 按 BATCH_SIZE 分批 POST（每批 events 数组内每人独立 payload）
+  for (let i = 0; i < allEvents.length; i += BATCH_SIZE) {
+    const batch = allEvents.slice(i, i + BATCH_SIZE);
 
-    const body: NovuBulkTrigger = {
-      name: workflowId,
-      to: toWithSig.map((s) => ({ subscriberId: s.subscriberId })),
-      payload: toWithSig[0]?.payload || {},
-      overrides,
-    };
-
-    // Novu trigger API
     const resp = await fetch(`${apiUrl}/v1/events/trigger/bulk`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `ApiKey ${apiKey}`,
       },
-      body: JSON.stringify({ events: [body] }),
+      body: JSON.stringify({ events: batch }),
     });
 
     if (!resp.ok) {

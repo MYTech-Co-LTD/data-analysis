@@ -23,10 +23,10 @@ describe('scopeSignature', () => {
     expect(scopeSignature(a)).toBe(scopeSignature(b));
   });
 
-  it('空数组 vs undefined 不同', () => {
+  it('空数组 vs undefined 相同（归一化）', () => {
     const a: Scope = { brands: [] };
     const b: Scope = {};
-    expect(scopeSignature(a)).not.toBe(scopeSignature(b));
+    expect(scopeSignature(a)).toBe(scopeSignature(b));
   });
 
   it('can_see_cost 参与签名', () => {

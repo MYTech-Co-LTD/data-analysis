@@ -15,14 +15,18 @@ export interface PushVariable {
   extra_filter?: Record<string, unknown>;
   unit?: string;
   enabled: boolean;
+  cost_sensitive?: boolean; // 从 metric_registry.cost_sensitive 读取
 }
 
 /**
  * 成本/利润类敏感变量判定
  *
- * 规则：var_code 含 cost/profit → 敏感
+ * 优先读 cost_sensitive 字段（metric_registry 单源）
+ * fallback：var_code 含 cost/profit → 敏感（兼容无字段的种子数据）
  */
 export function isCostSensitive(v: PushVariable): boolean {
+  if (v.cost_sensitive !== undefined) return v.cost_sensitive;
+  // fallback: 字符串匹配（兼容种子数据）
   const code = v.var_code.toLowerCase();
   return code.includes('cost') || code.includes('profit');
 }

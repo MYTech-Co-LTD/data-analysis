@@ -8,6 +8,7 @@
  * - 分页游标变量（如 detail_url）必须含 JWT 代签（非明文 db_user/db_pass）
  */
 
+import crypto from 'crypto';
 import { type Perms } from './engine';
 import { type PushVariable, isCostSensitive, matchesScope } from './push-variables';
 
@@ -24,7 +25,7 @@ function getJwtSecret(): string {
  */
 export async function generateScopedJwt(perms: Perms): Promise<string> {
   const secret = getJwtSecret();
-  if (!secret) throw new Error('JWT_SECRET not set');
+  if (!secret || secret.length < 16) throw new Error('JWT_SECRET not set or too short');
 
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
@@ -46,7 +47,6 @@ export async function generateScopedJwt(perms: Perms): Promise<string> {
   const p = enc(payload);
 
   // HMAC-SHA256 签名
-  const crypto = await import('crypto');
   const sig = crypto
     .createHmac('sha256', secret)
     .update(`${h}.${p}`)

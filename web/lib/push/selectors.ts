@@ -67,10 +67,15 @@ export async function resolveRecipients(
 
   if (selector.kind === 'dept') {
     for (const deptId of selector.ids ?? []) {
-      const users = await deps.getUsersByDept(Number(deptId));
+      const n = Number(deptId);
+      if (isNaN(n)) {
+        console.warn(`[push] invalid dept id: ${deptId}, skipped`);
+        continue;
+      }
+      const users = await deps.getUsersByDept(n);
       const active = users.filter(u => u.is_active && u.wecom_id);
       if (active.length === 0) {
-        danglingDepts.push(Number(deptId));
+        danglingDepts.push(n);
       }
       for (const u of active) seen.add(u.id);
     }
@@ -79,7 +84,12 @@ export async function resolveRecipients(
 
   if (selector.kind === 'role') {
     for (const roleId of selector.ids ?? []) {
-      const users = await deps.getUsersByRole(Number(roleId));
+      const n = Number(roleId);
+      if (isNaN(n)) {
+        console.warn(`[push] invalid role id: ${roleId}, skipped`);
+        continue;
+      }
+      const users = await deps.getUsersByRole(n);
       for (const u of users) {
         if (u.is_active && u.wecom_id) seen.add(u.id);
       }

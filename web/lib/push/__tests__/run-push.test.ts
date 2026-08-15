@@ -37,9 +37,12 @@ const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
 describe('runPush', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    // 重置 push-variables 缓存
+    const { resetCache } = await import('../push-variables');
+    resetCache();
 
     // 设置必要的环境变量
     vi.stubEnv('POSTGREST_URL', 'http://localhost:3000');
@@ -49,6 +52,11 @@ describe('runPush', () => {
     vi.stubEnv('NOVU_API_URL', 'http://novu:3000');
     vi.stubEnv('NOVU_API_KEY', 'test-novu-key');
     vi.stubEnv('NOVU_BRIDGE_SECRET', 'test-bridge-secret');
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+      { var_code: 'cost_amount', name: '成本额', metric_code: 'cost_amount', scope_dim: 'total', unit: '元', enabled: true },
+      { var_code: 'profit_amount', name: '利润额', metric_code: 'profit_amount', scope_dim: 'total', unit: '元', enabled: true },
+    ]));
 
     // 默认 fetch mock
     mockFetch.mockImplementation((url: string) => {
@@ -219,9 +227,9 @@ describe('runPush', () => {
     const call = vi.mocked(auditPushPayload).mock.calls[0];
     expect(call).toBeTruthy();
     if (call) {
-      const payload = call[2] as Record<string, string>;
+      const record = call[0] as { txnId: string; groupSig: string; payload: Record<string, string> };
       // cost/profit 变量应该是脱敏值
-      for (const [key, value] of Object.entries(payload)) {
+      for (const [key, value] of Object.entries(record.payload)) {
         if (key.includes('cost') || key.includes('profit')) {
           expect(value).toBe('（无权限查看）');
         }

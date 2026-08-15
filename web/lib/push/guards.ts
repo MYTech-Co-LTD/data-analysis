@@ -29,11 +29,15 @@ export async function isPaused(): Promise<boolean> {
       }
     );
 
-    if (!resp.ok) return false;
+    if (!resp.ok) {
+      console.error('[push] isPaused check failed:', resp.status);
+      return true; // fail-closed: 不确定时当作暂停
+    }
     const data = await resp.json();
     return data?.[0]?.value === 'true';
-  } catch {
-    return false;
+  } catch (err) {
+    console.error('[push] isPaused check error:', err);
+    return true; // fail-closed
   }
 }
 

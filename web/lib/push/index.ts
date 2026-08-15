@@ -19,10 +19,10 @@
 import { randomUUID } from 'crypto';
 import { type Selector, resolveRecipients, type ResolverDeps } from './selectors';
 import { type Perms, groupRecipients } from './engine';
-import { renderVariables, type getVariableValueDefault } from './render';
+import { renderVariables } from './render';
 import { triggerBulk, upsertSubscriber } from './novu-client';
 import { fallbackSend, type FallbackGroup } from './fallback';
-import { pushVariables } from './push-variables';
+import { getPushVariables } from './push-variables';
 import { isPaused } from './guards';
 import { auditPushTrigger, auditPushPayload } from './audit';
 
@@ -94,7 +94,7 @@ async function getPermsStrict(userId: string): Promise<Perms | null> {
  */
 async function checkOwnerPermission(operatorId: string): Promise<void> {
   const { postgrestUrl, postgrestKey } = getConfig();
-  if (!postgrestUrl || !postgrestKey) return;
+  if (!postgrestUrl || !postgrestKey) throw new Error('PostgREST config missing, owner check cannot proceed');
 
   const resp = await fetch(
     `${postgrestUrl}/rpc/require_push_owner`,
@@ -169,8 +169,10 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
     };
   }
 
-  // 守卫 3: selector 存在性（隐含在 resolveRecipients 中）
-  // 守卫 4: broadcastPerm 校验（由调用方保证，此处不重复）
+  // 守卫 3: broadcastPerm 引擎闸（spec 5.2：绕插件同样拒）
+  if (opts.selector.kind === 'all' && !opts.broadcastPerm) {
+    throw new Error('全员推送需要 broadcastPerm 授权');
+  }
 
   // ─── 解析收件人 ───
 
@@ -246,7 +248,7 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
 
   // ─── 渲染 ───
 
-  const enabledVars = pushVariables.filter((v) => v.enabled);
+  const enabledVars = (await getPushVariables()).filter((v) => v.enabled);
   const varCodes = enabledVars.map((v) => v.var_code);
   const scopeSignatures = groups.map((g) => g.signature);
 
@@ -295,7 +297,7 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
 
   // payload 快照
   for (const group of renderedGroups) {
-    await auditPushPayload(txnId, group.signature, group.rendered);
+    await auditPushPayload({ txnId, groupSig: group.signature, payload: group.rendered });
   }
 
   // ─── 投递 ───
