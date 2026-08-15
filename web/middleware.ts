@@ -1,6 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { isWecomClient, isMobileDevice } from "@/lib/device";
-import { ADMIN_USERIDS } from "@/lib/auth";
+import { checkFeaturePerm, decodePermissionsClaim } from "@/lib/feature-perm";
 import { buildCasdoorAuthUrl } from "@/lib/wecom";
 
 export async function middleware(req: NextRequest) {
@@ -87,10 +87,11 @@ async function handleWecomClient(req: NextRequest) {
   const token = req.cookies.get("insforge_access_token")?.value;
 
   if (token) {
-    // 检查 admin 路径权限
+    // 检查 admin 路径权限（P0a：checkFeaturePerm 收口，claims 来自 token 不验签解码——
+    // 仅 UX 挡板，真实裁决在 API 路由内 requireAdmin）
     if (req.nextUrl.pathname.startsWith("/admin")) {
       const wecomId = req.cookies.get("wecom_userid")?.value;
-      if (!wecomId || !ADMIN_USERIDS.has(wecomId)) {
+      if (!wecomId || !(await checkFeaturePerm(wecomId, "data-analysis:admin", decodePermissionsClaim(token)))) {
         return NextResponse.redirect(new URL("/?error=admin_required", req.url));
       }
     }
@@ -120,10 +121,10 @@ async function handleRegularBrowser(req: NextRequest) {
     return response;
   }
 
-  // 检查 admin 路径权限
+  // 检查 admin 路径权限（P0a：同上，checkFeaturePerm 收口）
   if (req.nextUrl.pathname.startsWith("/admin")) {
     const wecomId = req.cookies.get("wecom_userid")?.value;
-    if (!wecomId || !ADMIN_USERIDS.has(wecomId)) {
+    if (!wecomId || !(await checkFeaturePerm(wecomId, "data-analysis:admin", decodePermissionsClaim(token)))) {
       return NextResponse.redirect(new URL("/?error=admin_required", req.url));
     }
   }

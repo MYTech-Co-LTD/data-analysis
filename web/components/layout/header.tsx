@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { LogoutButton } from "@/components/layout/logout-button";
 import { isWecomClient } from "@/lib/device";
-import { isAdmin } from "@/lib/auth";
+import { checkFeaturePerm } from "@/lib/feature-perm";
 import { getDeviceType } from "@/lib/get-device-type";
 
 // Header（server component）：在受保护页渲染，此时一定已登录（middleware 已拦截未登录）。
@@ -25,6 +25,10 @@ export async function Header() {
   // 优先显示姓名，fallback 到 userid
   const displayName = name || userid;
 
+  // P0a（plan Task 3）：管理后台入口门禁走 checkFeaturePerm 收口
+  // （server component，BREAKGLASS_ADMINS env 可见；claims 后续由 U2 注入）
+  const admin = userid ? await checkFeaturePerm(userid, "data-analysis:admin") : false;
+
   return (
     <header className="border-b bg-white">
       <div className={`flex items-center justify-between ${isMobile ? "h-12 px-4" : "h-16 px-6"}`}>
@@ -33,7 +37,7 @@ export async function Header() {
           {!isMobile && <Badge variant="secondary">Beta</Badge>}
         </div>
         <div className="flex items-center gap-4">
-          {isAdmin(userid) && !isMobile && (
+          {admin && !isMobile && (
             <Link href="/admin/dashboard" className="text-sm text-gray-600 hover:text-gray-900">
               管理后台
             </Link>

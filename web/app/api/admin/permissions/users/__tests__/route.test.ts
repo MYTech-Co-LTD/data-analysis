@@ -10,7 +10,13 @@ vi.mock('@/lib/permission-audit', () => ({ writeAudit: vi.fn() }));
 
 vi.mock('jose', () => ({ jwtVerify: vi.fn(async () => ({ payload: { sub: 'ZhangDuo' }, protectedHeader: { alg: 'HS256' } })) }));
 
-beforeAll(() => { process.env.JWT_SECRET = 'test-secret'; });
+// P0a：requireAdmin 切 checkFeaturePerm（claims 优先 + BREAKGLASS_ADMINS env 兜底），
+// 测试 token payload 无 permissions claim → 走 BREAKGLASS 路径；静音 [breakglass] 审计日志
+beforeAll(() => {
+  process.env.JWT_SECRET = 'test-secret';
+  process.env.BREAKGLASS_ADMINS = 'ZhangDuo';
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
 
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);
@@ -40,7 +46,7 @@ describe('GET /users — requireAdmin', () => {
     expect(res.status).toBe(401);
   });
 
-  it('403 for illegal actor (wecom_userid not in ADMIN_USERIDS)', async () => {
+  it('403 for illegal actor (wecom_userid 无 admin 权限：claims 无命中且不在 BREAKGLASS)', async () => {
     const res = await GET(mkReq('GET', 'insforge_access_token=x; wecom_userid=NotAdmin'));
     expect(res.status).toBe(403);
     const body = await res.json();
