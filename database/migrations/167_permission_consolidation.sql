@@ -4,17 +4,26 @@
 -- 幂等：migrate.sh 可重复执行；ON_ERROR_STOP=1 整体回滚。
 --   §②/§③ 用 DO 块 + 存在性判断包裹（列/表在首次执行后被 DROP，重跑迁移须跳过），
 --   语义与 plan 一致：仅迁入尚不存在的 dept/user 行。
+-- W5 守卫（Task 18 / 迁移 184，只加守卫不改语义）：
+--   §①-§③ 追加 data_permissions 存在性（W6 删表后跳过）；§②/§③ 追加 trg_dp_write_close
+--   触发器存在性——184 写关闭后本迁移的 INSERT 会被触发器拒绝，重跑 migrate.sh 须整体全绿，
+--   且 W5 后新同步出的 dept 行不再自动 INSERT（授权语义已上收 Casdoor）。
 BEGIN;
 
 -- ① data_permissions 语义：NULL = 该维未配置（不参与合成）
-ALTER TABLE data_permissions ALTER COLUMN branch_nums SET DEFAULT NULL;
-ALTER TABLE data_permissions ALTER COLUMN brands    SET DEFAULT NULL;
-ALTER TABLE data_permissions ALTER COLUMN categories SET DEFAULT NULL;
-ALTER TABLE data_permissions ALTER COLUMN can_see_cost SET DEFAULT NULL;
-COMMENT ON COLUMN data_permissions.branch_nums IS '门店范围；NULL=该维未配置；["*"]=全放行';
-COMMENT ON COLUMN data_permissions.brands IS '品牌范围；NULL=该维未配置（dept 行恒 NULL）';
-COMMENT ON COLUMN data_permissions.categories IS '品类范围；NULL=该维未配置（dept 行恒 NULL）';
-COMMENT ON COLUMN data_permissions.can_see_cost IS '成本可见；NULL=该维未配置';
+DO $$
+BEGIN
+  IF to_regclass('public.data_permissions') IS NOT NULL THEN
+    ALTER TABLE data_permissions ALTER COLUMN branch_nums SET DEFAULT NULL;
+    ALTER TABLE data_permissions ALTER COLUMN brands    SET DEFAULT NULL;
+    ALTER TABLE data_permissions ALTER COLUMN categories SET DEFAULT NULL;
+    ALTER TABLE data_permissions ALTER COLUMN can_see_cost SET DEFAULT NULL;
+    COMMENT ON COLUMN data_permissions.branch_nums IS '门店范围；NULL=该维未配置；["*"]=全放行';
+    COMMENT ON COLUMN data_permissions.brands IS '品牌范围；NULL=该维未配置（dept 行恒 NULL）';
+    COMMENT ON COLUMN data_permissions.categories IS '品类范围；NULL=该维未配置（dept 行恒 NULL）';
+    COMMENT ON COLUMN data_permissions.can_see_cost IS '成本可见；NULL=该维未配置';
+  END IF;
+END $$;
 
 -- ② 部门权限收编：org_departments(权限列) → data_permissions(subject_type='dept')
 --    幂等：列在首次执行后被 §④ DROP，重跑前由 015 ADD COLUMN IF NOT EXISTS 重建；
@@ -22,7 +31,10 @@ COMMENT ON COLUMN data_permissions.can_see_cost IS '成本可见；NULL=该维�
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_schema='public' AND table_name='org_departments' AND column_name='branch_nums') THEN
+             WHERE table_schema='public' AND table_name='org_departments' AND column_name='branch_nums')
+    -- W5 守卫（Task 18）：184 写关闭（触发器）后跳过；W6 删表后跳过
+    AND to_regclass('public.data_permissions') IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_dp_write_close') THEN
     INSERT INTO data_permissions (subject_type, subject_id, branch_nums, brands, categories, can_see_cost, note)
     SELECT 'dept', d.id::text, d.branch_nums, NULL, NULL, d.can_see_cost, '迁移自org_departments'
     FROM org_departments d
@@ -38,7 +50,10 @@ END $$;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables
-             WHERE table_schema='public' AND table_name='retail_query_user_perms') THEN
+             WHERE table_schema='public' AND table_name='retail_query_user_perms')
+    -- W5 守卫（Task 18）：184 写关闭（触发器）后跳过；W6 删表后跳过
+    AND to_regclass('public.data_permissions') IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_dp_write_close') THEN
     INSERT INTO data_permissions (subject_type, subject_id, branch_nums, can_see_cost, note)
     SELECT 'user', wecom_id, branch_nums, can_see_cost, '迁移自retail_query_user_perms'
     FROM retail_query_user_perms r

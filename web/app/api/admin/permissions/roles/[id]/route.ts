@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
 import { writeAudit } from '@/lib/permission-audit';
 import { normArr, arrOrNull, canSeeCostOk } from '@/lib/permission-guards';
+import { isPermFrozenError, permFrozenConflict } from '@/lib/perm-write-close';
 
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 const KEY = process.env.INSFORGE_API_KEY!;
@@ -84,15 +85,24 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
     };
     const allNull = Object.values(merged).every(v => v === null);
     if (allNull && oldPermArr.length) {
-      // 整行清空 → 删行（恢复「无默认范围」）；删失败 502 且不写审计（F2）
+      // 整行清空 → 删行（恢复「无默认范围」）；删失败 502 且不写审计（F2）；W5 写关闭（184）→ 409 引导
       const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=eq.${oldPermRow.id}`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
-      if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
+      if (!dr.ok) {
+        const errText = await dr.text();
+        if (isPermFrozenError(errText)) return permFrozenConflict();
+        return NextResponse.json({ ok: false, error: errText }, { status: 502 });
+      }
     } else if (!allNull) {
       const body = { subject_type: 'role', subject_id: oldRoleRow.code, ...merged, note: '角色tab修改' }; // 168 起 role 行键 = roles.code
       const wr = oldPermArr.length
         ? await fetch(`${POSTGREST_URL}/data_permissions?id=eq.${oldPermRow.id}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify({ ...merged, note: body.note }) })
         : await fetch(`${POSTGREST_URL}/data_permissions`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(body) });
-      if (!wr.ok) return NextResponse.json({ ok: false, error: await wr.text() }, { status: 502 }); // F2：PATCH/POST 失败 502 且不写审计
+      if (!wr.ok) {
+        // F2：PATCH/POST 失败 502 且不写审计；W5 写关闭（184）→ 409 引导（UI 参数已写入 roles 表，范围维被拒）
+        const errText = await wr.text();
+        if (isPermFrozenError(errText)) return permFrozenConflict();
+        return NextResponse.json({ ok: false, error: errText }, { status: 502 });
+      }
     }
   }
 

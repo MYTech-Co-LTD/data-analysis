@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
 import { writeAudit } from '@/lib/permission-audit';
 import { normArr, arrOrNull, canSeeCostOk, expiresAtOk } from '@/lib/permission-guards';
+import { isPermFrozenError, permFrozenConflict } from '@/lib/perm-write-close';
 
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 const KEY = process.env.INSFORGE_API_KEY!;
@@ -65,7 +66,11 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
     // 全 null（含空数组规范化）→ 删除（恢复继承）；删失败 502 且不写审计（F1）
     if (oldArr.length) {
       const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=in.(${oldArr.map((x: { id: number }) => x.id).join(',')})`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
-      if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
+      if (!dr.ok) {
+        const errText = await dr.text();
+        if (isPermFrozenError(errText)) return permFrozenConflict();   // W5 写关闭（184）→ 409 引导
+        return NextResponse.json({ ok: false, error: errText }, { status: 502 });
+      }
       await writeAudit(req, { action: 'delete_data_permission', subjectType: 'user', subjectId: w, before: last, after: null });
     }
     return NextResponse.json({ ok: true });
@@ -73,7 +78,11 @@ export async function PUT(req: NextRequest, { params }: RouteCtx) {
   const r = await (oldArr.length
     ? fetch(`${POSTGREST_URL}/data_permissions?id=eq.${(last as { id: number }).id}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify({ ...body, subject_type: undefined, subject_id: undefined }) })
     : fetch(`${POSTGREST_URL}/data_permissions`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(body) }));
-  if (!r.ok) return NextResponse.json({ ok: false, error: await r.text() }, { status: 502 });
+  if (!r.ok) {
+    const errText = await r.text();
+    if (isPermFrozenError(errText)) return permFrozenConflict();       // W5 写关闭（184）→ 409 引导
+    return NextResponse.json({ ok: false, error: errText }, { status: 502 });
+  }
   await writeAudit(req, { action: 'upsert_data_permission', subjectType: 'user', subjectId: w, before: last, after: body });
   return NextResponse.json({ ok: true });
 }
@@ -90,7 +99,11 @@ export async function DELETE(req: NextRequest, { params }: RouteCtx) {
   const oldArr = Array.isArray(old) ? old : [];
   if (oldArr.length) {
     const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=in.(${oldArr.map((x: { id: number }) => x.id).join(',')})`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
-    if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
+    if (!dr.ok) {
+      const errText = await dr.text();
+      if (isPermFrozenError(errText)) return permFrozenConflict();     // W5 写关闭（184）→ 409 引导
+      return NextResponse.json({ ok: false, error: errText }, { status: 502 });
+    }
   }
   await writeAudit(req, { action: 'delete_data_permission', subjectType: 'user', subjectId: w, before: oldArr[oldArr.length - 1] ?? null, after: null });
   return NextResponse.json({ ok: true });
