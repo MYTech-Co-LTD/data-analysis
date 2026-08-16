@@ -43,7 +43,9 @@ function decodeJwtPayload(token) {
 }
 
 // ② get-all-objects（F11：policy 侧可达对象，owner 任意 permission 的 casbin objects 并集）。
-//    userId 传 token payload.sub（org/name 格式）；缺省时 Casdoor 取 Bearer 会话用户（自指）。
+//    userId 要求 owner/name 双段格式（如 "shanhai/ZhangDuo"，上游 GetOwnerAndNameFromId 按 "/" 切 2 段）；
+//    JWT 的 sub 只是 user.Id 列（本部署库为裸名，直传报 wrong token count → data=null），
+//    由调用方从 token 的 owner/name claims 构造，缺失时回退 sub（老格式兼容）。
 //    返回 string[]；任何失败返回 null（由 buildClaims 判 C2 → 503）。
 async function fetchAllObjects(issuer, accessToken, userId) {
   try {
@@ -245,7 +247,11 @@ module.exports = async function (req) {
     }
 
     // ② get-all-objects 可达对象（F11）
-    const reachable = await fetchAllObjects(issuer, accessToken, tokenPayload.sub);
+    // 不能直传 sub：该 API 要求 owner/name 双段，sub 是裸 user.Id → wrong token count → data=null → 503
+    const casdoorUserId = tokenPayload.owner && tokenPayload.name
+      ? `${tokenPayload.owner}/${tokenPayload.name}`
+      : tokenPayload.sub;
+    const reachable = await fetchAllObjects(issuer, accessToken, casdoorUserId);
 
     // ③ 门店叶子展开（Task 9 三态内联）
     const expandResult = await expandGroupsToBranches(oidcGroups, pgrstUrl);
