@@ -116,7 +116,7 @@ describe('resolveRecipients', () => {
       { kind: 'person', ids: ['u1', 'nonexistent'] },
       mockDeps
     );
-    expect(result.recipients).toEqual(['u1']);
+    expect(result.recipients).toEqual(['wx1']);
   });
 
   it('dept selector + 悬空部门', async () => {
@@ -124,8 +124,8 @@ describe('resolveRecipients', () => {
       { kind: 'dept', ids: ['10', '99'] },
       mockDeps
     );
-    expect(result.recipients).toContain('u1');
-    expect(result.recipients).toContain('u2');
+    expect(result.recipients).toContain('wx1');
+    expect(result.recipients).toContain('wx2');
     expect(result.danglingDepts).toEqual([99]); // 部门99无活跃用户
   });
 
@@ -134,12 +134,12 @@ describe('resolveRecipients', () => {
       { kind: 'role', ids: ['5'] },
       mockDeps
     );
-    expect(result.recipients).toEqual(['u3']);
+    expect(result.recipients).toEqual(['wx3']);
   });
 
   it('all selector', async () => {
     const result = await resolveRecipients({ kind: 'all' }, mockDeps);
-    expect(result.recipients).toEqual(['u1', 'u2']);
+    expect(result.recipients).toEqual(['wx1', 'wx2']);
   });
 
   it('去重：同一用户在多个部门', async () => {
@@ -154,7 +154,7 @@ describe('resolveRecipients', () => {
       { kind: 'dept', ids: ['10'] },
       deps
     );
-    expect(result.recipients).toEqual(['u1']);
+    expect(result.recipients).toEqual(['wx1']);
   });
 
   it('不活跃用户被过滤', async () => {

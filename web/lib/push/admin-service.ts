@@ -42,6 +42,7 @@ export async function getCasdoorAdminToken(): Promise<string> {
       grant_type: 'client_credentials',
       client_id: clientId,
       client_secret: clientSecret,
+      scope: 'openclaw:push', // Review 修复：verifyServiceJwt 要求 scope 含 openclaw:push
     }),
   });
 

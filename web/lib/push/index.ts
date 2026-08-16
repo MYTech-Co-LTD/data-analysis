@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { type Selector, resolveRecipients, type ResolverDeps } from './selectors';
 import { type Perms, groupRecipients } from './engine';
 import { renderVariables } from './render';
-import { triggerBulk, upsertSubscriber } from './novu-client';
+import { triggerBulk, upsertSubscriber, newBridgeToken } from './novu-client';
 import { fallbackSend, type FallbackGroup } from './fallback';
 import { getPushVariables } from './push-variables';
 import { isPaused } from './guards';
@@ -57,8 +57,9 @@ export interface RunPushResult {
  * 查询用户权限（strict RPC）
  *
  * 不变量 1：全部走 strict RPC，不走 JWT claims 7 天缓存
+ * Review 修复（B4）：RPC 参数名 p_wecom_id，入参为用户 wecom_id（非 org_users.id UUID）。
  */
-async function getPermsStrict(userId: string): Promise<Perms | null> {
+async function getPermsStrict(wecomId: string): Promise<Perms | null> {
   const { postgrestUrl, postgrestKey } = getConfig();
   if (!postgrestUrl || !postgrestKey) return null;
 
@@ -71,7 +72,7 @@ async function getPermsStrict(userId: string): Promise<Perms | null> {
         Authorization: `Bearer ${postgrestKey}`,
       },
       // 参数名必须与 migration 170 的 p_wecom_id 一致（曾误写 p_user_id → 400）
-      body: JSON.stringify({ p_wecom_id: userId }),
+      body: JSON.stringify({ p_wecom_id: wecomId }),
     }
   );
 
@@ -123,26 +124,49 @@ async function checkOwnerPermission(operatorId: string): Promise<void> {
 
 /**
  * 查询收件人 bridge_token + wecom_id
+ *
+ * Review 修复（B4）：bridge_token 在 push_subscriber_tokens（org_users 无此列）。
+ * 无 token 行时生成 32B 高熵 token 并写入（幂等 merge-duplicates），保证 Novu 侧
+ * webhookUrl 路径段始终可用。
  */
 async function getRecipientInfo(
-  userId: string
+  wecomId: string
 ): Promise<{ bridgeToken: string; wecomId: string } | null> {
   const { postgrestUrl, postgrestKey } = getConfig();
   if (!postgrestUrl || !postgrestKey) return null;
 
   const resp = await fetch(
-    `${postgrestUrl}/org_users?id=eq.${userId}&select=bridge_token,wecom_id`,
+    `${postgrestUrl}/push_subscriber_tokens?wecom_id=eq.${encodeURIComponent(wecomId)}&select=bridge_token`,
     {
-      headers: {
-        Authorization: `Bearer ${postgrestKey}`,
-      },
+      headers: { Authorization: `Bearer ${postgrestKey}` },
     }
   );
 
-  if (!resp.ok) return null;
-  const data = await resp.json();
-  if (!data?.length || !data[0].bridge_token || !data[0].wecom_id) return null;
-  return { bridgeToken: data[0].bridge_token, wecomId: data[0].wecom_id };
+  if (resp.ok) {
+    try {
+      const data = await resp.json();
+      if (Array.isArray(data) && data[0]?.bridge_token) {
+        return { bridgeToken: data[0].bridge_token, wecomId };
+      }
+    } catch {
+      // fallthrough: 重新生成
+    }
+  }
+
+  // 无 token → 生成并写入（best-effort；写失败则本轮跳过该收件人）
+  const bridgeToken = newBridgeToken();
+  const writeResp = await fetch(`${postgrestUrl}/push_subscriber_tokens`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${postgrestKey}`,
+      Prefer: 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify({ bridge_token: bridgeToken, wecom_id: wecomId }),
+  });
+  if (!writeResp.ok) return null;
+
+  return { bridgeToken, wecomId };
 }
 
 /**
@@ -179,11 +203,12 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   // ─── 解析收件人 ───
 
   const resolverDeps: ResolverDeps = {
-    getUserById: async (id) => {
+    getUserById: async (wecomId) => {
+      // person selector 的 ids 是企微 wecom_id（B4 修复：org_users.id 是 UUID，不能用于查询）
       const { postgrestUrl, postgrestKey } = getConfig();
       if (!postgrestUrl || !postgrestKey) return null;
       const resp = await fetch(
-        `${postgrestUrl}/org_users?id=eq.${id}&select=id,wecom_id,dept_id,is_active`,
+        `${postgrestUrl}/org_users?wecom_id=eq.${encodeURIComponent(wecomId)}&select=id,wecom_id,is_active`,
         { headers: { Authorization: `Bearer ${postgrestKey}` } }
       );
       if (!resp.ok) return null;
@@ -191,10 +216,11 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       return data?.[0] || null;
     },
     getUsersByDept: async (deptId) => {
+      // org_users 无 dept_id 列；部门归属在 department_ids(JSONB 数组)，用 jsonb 包含查询
       const { postgrestUrl, postgrestKey } = getConfig();
       if (!postgrestUrl || !postgrestKey) return [];
       const resp = await fetch(
-        `${postgrestUrl}/org_users?dept_id=eq.${deptId}&is_active=eq.true&select=id,wecom_id,dept_id,is_active`,
+        `${postgrestUrl}/org_users?department_ids=cs.${encodeURIComponent(JSON.stringify([String(deptId)]))}&is_active=eq.true&select=id,wecom_id,is_active`,
         { headers: { Authorization: `Bearer ${postgrestKey}` } }
       );
       if (!resp.ok) return [];
@@ -265,6 +291,7 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
             const view = code.replace('_url', '');
             const params = new URLSearchParams();
             if (perms.brands?.length) params.set('brand', perms.brands.join(','));
+            if (perms.branch_nums?.length) params.set('branch', perms.branch_nums.join(','));
             if (perms.categories?.length) params.set('category', perms.categories.join(','));
             params.set('jwt', jwt);
             return `/report/${view}?${params.toString()}`;
@@ -307,6 +334,18 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   let fallbackUsed = false;
 
   if (deliver) {
+    // M7 fail-closed 守卫：数值变量计算未实现前，禁止把字面 `{{code}}` 占位符投给用户
+    for (const group of renderedGroups) {
+      for (const [code, value] of Object.entries(group.rendered)) {
+        if (typeof value === 'string' && /^\{\{.*\}\}$/.test(value)) {
+          throw new Error(
+            `[push] 变量 ${code} 仍是模板占位符（数值变量计算未实现），live 模式拒绝投递；` +
+            `请先实现语义视图取值或仅启用 *_url 变量`,
+          );
+        }
+      }
+    }
+
     // 不变量 9: subscriber upsert + push_subscriber_tokens
     const subscriberPayloads: Array<{
       subscriberId: string;
@@ -315,51 +354,51 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
     }> = [];
 
     for (const group of renderedGroups) {
-      for (const userId of group.members) {
-        const info = await getRecipientInfo(userId);
+      for (const wecomId of group.members) {
+        const info = await getRecipientInfo(wecomId);
         if (!info) {
-          skipped.push(userId);
+          skipped.push(wecomId);
           continue;
         }
 
         await upsertSubscriber(
           {
-            subscriberId: userId,
+            subscriberId: wecomId,
             data: { wecom_id: info.wecomId, bridge_token: info.bridgeToken },
           },
           info.bridgeToken
         );
 
         subscriberPayloads.push({
-          subscriberId: userId,
+          subscriberId: wecomId,
           payload: group.rendered,
           wecomId: info.wecomId,
         });
       }
     }
 
-    // 不变量 7+8: bulk ≤100 + engine_sig
-    const { errors } = await triggerBulk(
+    // 不变量 7+8: bulk ≤100 + engine_sig（txnId 贯穿，bridge 验签依据）
+    const { errors, failedSubscribers } = await triggerBulk(
       opts.workflowId,
-      subscriberPayloads
+      subscriberPayloads,
+      txnId
     );
 
-    // 不变量 10: Novu 故障 → fallback
+    // 不变量 10: Novu 故障 → fallback（M8：只补失败批次的收件人，避免已投递用户重复收）
     if (errors.length > 0 || getConfig().fallbackMode) {
       fallbackUsed = true;
 
-      // 构建 fallback groups（用 wecom_id）
+      const failedSet = new Set(failedSubscribers ?? []);
       const fallbackGroups: FallbackGroup[] = [];
       for (const group of renderedGroups) {
-        const wecomIds: string[] = [];
-        for (const userId of group.members) {
-          const info = await getRecipientInfo(userId);
-          if (info) wecomIds.push(info.wecomId);
-        }
-        if (wecomIds.length > 0) {
+        // members 已统一为 wecom_id（B4 修复），无需二次查询
+        const members = getConfig().fallbackMode
+          ? group.members
+          : group.members.filter((m) => failedSet.has(m));
+        if (members.length > 0) {
           fallbackGroups.push({
             signature: group.signature,
-            members: wecomIds,
+            members,
             perms: group.perms,
             rendered: group.rendered,
           });

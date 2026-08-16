@@ -297,6 +297,34 @@ module.exports = async function(req) {
       return json({ error: "delete_failed", detail: String(e) }, 502);
     }
   }
+  if (body.mode === "push_report") {
+    try {
+      const webBase = Deno.env.get("WEB_BASE_URL") || "http://web:3000";
+      const rawSel = body.selector || { type: "all" };
+      const selKind = rawSel && typeof rawSel === "object" && rawSel.kind ? rawSel.kind : rawSel && typeof rawSel === "object" && rawSel.type === "all" ? "all" : "all";
+      const pushResp = await fetch(webBase + "/api/push", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + (AGENT_API_KEY || "")
+        },
+        body: JSON.stringify({
+          workflowId: body.workflow_id || "scheduled_report",
+          userId: userId || "system:cron",
+          selector: { kind: selKind, ids: rawSel && Array.isArray(rawSel.ids) ? rawSel.ids : [] },
+          broadcastPerm: !!(body.broadcast_perm || body.broadcastPerm),
+          deliver: body.deliver !== false
+        })
+      });
+      const pushResult = await pushResp.json().catch(() => ({}));
+      if (!pushResp.ok) {
+        return json({ error: "push_failed", detail: pushResult }, pushResp.status || 502);
+      }
+      return json({ success: true, ...pushResult });
+    } catch (e) {
+      return json({ error: "push_failed", detail: String(e) }, 502);
+    }
+  }
   if (!sql || !userId) return json({ error: "missing sql/userId" }, 400);
   let perms;
   try {

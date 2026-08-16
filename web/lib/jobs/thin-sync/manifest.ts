@@ -69,6 +69,12 @@ async function actionAssignRoles(): Promise<{ processed: number; changed: number
 
     // 只在角色变化时写 Casdoor
     const currentCodes = user.role_codes ?? [];
+
+    // Review 修复（M12）：当前镜像含推导码之外的附加角色 → 视为 Casdoor 侧手工配置，
+    // 跳过写入（assignRoles 会删除附加角色 = 橡皮擦），交给 drift 翻转 manual 保护。
+    const extras = currentCodes.filter((c) => c !== derivedCode);
+    if (extras.length > 0) continue;
+
     if (currentCodes.length === 1 && currentCodes[0] === derivedCode) continue;
 
     const casdoorResult = await assignRoles(user.wecom_id, [derivedCode]);

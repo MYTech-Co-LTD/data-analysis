@@ -62,6 +62,15 @@ beforeEach(() => {
   __resetRateLimitForTest();
   setRunPushForTest(runPushMock);
 
+  // 操作者存在性校验（isActiveOperator）查询 org_users —— 默认返回在职用户
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('org_users')) {
+      return new Response(JSON.stringify([{ wecom_id: 'ZhangDuo', is_active: true }]), { status: 200 });
+    }
+    return new Response(JSON.stringify({}), { status: 200 });
+  }));
+
   // 默认：服务 JWT 验签通过
   verifyServiceJwtMock.mockResolvedValue(VALID_SERVICE_IDENTITY);
   // 默认：权限全部通过
@@ -76,6 +85,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('push API 越权三连拒', () => {
@@ -258,6 +268,46 @@ describe('push API schedule owner 校验（不变量 9）', () => {
   });
 });
 
+describe('create_workflow 鉴权（B6/M6：操作者 = body.userId，非 selector.ids[0]）', () => {
+  it('create_workflow 用 body.userId 鉴权，selector.ids[0] 无权不放行', async () => {
+    // body.userId 无 push:configure；即使 selector.ids[0] 是特权用户也应 403
+    checkFeaturePermMock.mockImplementation((_uid: string, perm: string) => {
+      if (perm === 'push:configure') return Promise.resolve(false);
+      return Promise.resolve(true);
+    });
+
+    const res = await POST(mkPushReq({
+      action: 'create_workflow',
+      workflowName: 'wf-x',
+      userId: 'NoPermUser',
+      selector: { kind: 'person', ids: ['PrivilegedAdmin'] },
+    }));
+
+    expect(res.status).toBe(403);
+  });
+
+  it('create_workflow 缺 userId → 400', async () => {
+    const res = await POST(mkPushReq({
+      action: 'create_workflow',
+      workflowName: 'wf-x',
+    }));
+    expect(res.status).toBe(400);
+  });
+
+  it('create_workflow 正常 → 200', async () => {
+    const res = await POST(mkPushReq({
+      action: 'create_workflow',
+      workflowName: 'wf-x',
+      workflowDescription: 'desc',
+      userId: 'ZhangDuo',
+    }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.workflow.id).toBe('wf-1');
+  });
+});
+
 describe('push API 基本校验', () => {
   it('服务 JWT 验签失败 → 401', async () => {
     verifyServiceJwtMock.mockResolvedValue(null);
@@ -345,11 +395,12 @@ describe('push API 基本校验', () => {
     expect(body.firstTrigger).toBe(true);
     expect(body.note).toContain('self only');
 
-    // 验证 run_push 收到的 selector 是 person=[ZhangDuo]，不是原始 dept selector
+    // 验证 run_push 收到的 selector 是 person=[ZhangDuo]，不是原始 dept selector；
+    // M4 修复：首触发 deliver=true（真发给自己），而非 shadow 空跑
     expect(runPushMock).toHaveBeenCalledWith(
       expect.objectContaining({
         selector: { kind: 'person', ids: ['ZhangDuo'] },
-        deliver: false,
+        deliver: true,
       }),
     );
 

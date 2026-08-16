@@ -13,8 +13,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // mock 外部依赖
 vi.mock('../novu-client', () => ({
-  triggerBulk: vi.fn().mockResolvedValue({ total: 2, batches: 1, errors: [] }),
+  triggerBulk: vi.fn().mockResolvedValue({ total: 2, batches: 1, errors: [], failedSubscribers: [] }),
   upsertSubscriber: vi.fn().mockResolvedValue({ subscriberId: 'u1' }),
+  newBridgeToken: vi.fn().mockReturnValue('bt-new'),
   generateEngineSig: vi.fn().mockResolvedValue('mock-sig'),
   contentDigest: vi.fn().mockResolvedValue('mock-digest'),
 }));
@@ -101,9 +102,12 @@ describe('runPush', () => {
           json: () => Promise.resolve([{ paused: false }]),
         });
       }
-      // push_subscriber_tokens
+      // push_subscriber_tokens（getRecipientInfo 读取）
       if (url.includes('push_subscriber_tokens')) {
-        return Promise.resolve({ ok: true });
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([{ bridge_token: 'bt1' }]),
+        });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
@@ -255,12 +259,21 @@ describe('runPush', () => {
     expect(result.error).toContain('无有效收件人');
   });
 
-  it('Novu 故障 → fallback 触发', async () => {
+  it('Novu 故障 → fallback 触发（只补失败收件人）', async () => {
+    // live 模式占位符守卫（M7）：数值变量仍是 {{code}} 占位 → 拒绝投递；
+    // 本测试用 URL-only 变量集验证 fallback 路径。
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'detail_url', name: '明细', metric_code: null, scope_dim: 'total', unit: null, enabled: true },
+    ]));
+    const { resetCache } = await import('../push-variables');
+    resetCache();
+
     const { triggerBulk } = await import('../novu-client');
     vi.mocked(triggerBulk).mockResolvedValueOnce({
       total: 2,
       batches: 1,
       errors: ['batch 0: 500'],
+      failedSubscribers: ['wx1', 'wx2'],
     });
 
     const { runPush } = await import('../index');
@@ -275,5 +288,19 @@ describe('runPush', () => {
     expect(result.fallbackUsed).toBe(true);
     const { sendWecomMarkdown } = await import('../../wecom-send');
     expect(sendWecomMarkdown).toHaveBeenCalled();
+  });
+
+  it('live 模式数值变量仍是占位符 → 拒绝投递（M7 fail-closed）', async () => {
+    // 默认 PUSH_VARIABLES_JSON 含 sale_amount/cost_amount/profit_amount（数值变量）
+    const { runPush } = await import('../index');
+    await expect(
+      runPush({
+        workflowId: 'test',
+        selector: { kind: 'all' },
+        operatorId: 'admin',
+        broadcastPerm: true,
+        deliver: true,
+      })
+    ).rejects.toThrow('占位符');
   });
 });

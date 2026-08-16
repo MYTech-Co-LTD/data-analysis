@@ -29,9 +29,17 @@ export async function generateScopedJwt(perms: Perms): Promise<string> {
 
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
+  // Review 修复（M5）：scope 四维提为顶层 claim——114_pgrst_pre_request_flatten_claims
+  // 只把 request.jwt.claims 的顶层 key 扁平化为 request.jwt.claims.<key>，旧的嵌套
+  // payload.scope 不会被展开，RLS/成本脱敏读到 NULL → 门店维放行、can_see_cost 恒 false。
   const payload = {
     role: 'authenticated',
+    brands: perms.brands,
+    branch_nums: perms.branch_nums,
+    categories: perms.categories,
+    can_see_cost: perms.can_see_cost,
     scope: {
+      // 兼容保留（新消费端以顶层为准）
       brands: perms.brands,
       branch_nums: perms.branch_nums,
       categories: perms.categories,
@@ -112,6 +120,7 @@ export async function getVariableValueDefault(
     const view = code.replace('_url', '');
     const params = new URLSearchParams();
     if (perms.brands?.length) params.set('brand', perms.brands.join(','));
+    if (perms.branch_nums?.length) params.set('branch', perms.branch_nums.join(','));
     if (perms.categories?.length) params.set('category', perms.categories.join(','));
     params.set('jwt', jwt);
     return `/report/${view}?${params.toString()}`;

@@ -3,11 +3,20 @@
  *
  * 契约来源：spec §5.3
  * - subscriber upsert（含 push_subscriber_tokens 同步）
- * - triggerBulk（≤100 分批）
- * - engine_sig 内层签名（防伪冒）
+ * - triggerBulk（≤100 分批，event 级 transactionId + engine_sig 内层签名）
+ *
+ * engine_sig 契约见 ./engine-sig.ts（与 bridge-verify 共享实现，Review B5 修复）。
+ * 每个 event：
+ *   - transactionId = txnId（Novu 原生事件级字段）
+ *   - payload 内含 engine_sig / engine_content / txn_id / subscriber_id，
+ *     供 Novu workflow 的 chat-webhook step 透传进送达 body（bridge 依此验签）。
  */
 
-import crypto from 'crypto';
+import { randomBytes } from 'crypto';
+import { contentDigest, generateEngineSig } from './engine-sig';
+
+// 兼容既有引用/测试 mock 形状（run-push 测试 vi.mock('../novu-client') 依赖这些导出名）
+export { contentDigest, generateEngineSig };
 
 // 运行时读取（兼容测试注入）
 function getNovuConfig() {
@@ -97,64 +106,56 @@ async function syncBridgeToken(bridgeToken: string, wecomId: string): Promise<vo
 }
 
 /**
- * 生成 engine_sig 内层签名
- *
- * HMAC-SHA256(txnId + subscriberId + contentDigest, ENGINE_BRIDGE_SECRET)
- * 用于 wecom-bridge 验证内容真实性
+ * 生成 Novu subscriber 的 bridge_token（缺失时新建）
+ * - 32B 高熵 hex（64 字符），作为 Novu webhookUrl 路径段
  */
-export async function generateEngineSig(
-  txnId: string,
-  subscriberId: string,
-  contentDigest: string
-): Promise<string> {
-  const { engineSecret } = getNovuConfig();
-  if (!engineSecret) throw new Error('ENGINE_BRIDGE_SECRET not set');
-
-  return crypto
-    .createHmac('sha256', engineSecret)
-    .update(`${txnId}:${subscriberId}:${contentDigest}`)
-    .digest('hex');
-}
-
-/**
- * 生成内容摘要（SHA256 前 16 位）
- */
-export async function contentDigest(content: string): Promise<string> {
-  return crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
+export function newBridgeToken(): string {
+  return randomBytes(32).toString('hex');
 }
 
 /**
  * 触发 Novu bulk 消息
  *
  * - 每批 ≤100 人
- * - payload 含 engine_sig（内层签名）
- * - 返回所有批次结果
+ * - 每个 event 带 transactionId = txnId（Novu 原生事件级字段）
+ * - payload 含 engine_sig / engine_content / txn_id / subscriber_id（bridge 验签依据）
+ * - 返回批量结果 + 失败批次内的 subscriberId（供 fallback 只补失败者，Review M8 修复）
  */
 export async function triggerBulk(
   workflowId: string,
   subscribers: Array<{ subscriberId: string; payload: Record<string, unknown> }>,
+  txnId?: string,
   overrides?: Record<string, unknown>
-): Promise<{ total: number; batches: number; errors: string[] }> {
+): Promise<{ total: number; batches: number; errors: string[]; failedSubscribers: string[] }> {
   const { apiUrl, apiKey } = getNovuConfig();
   if (!apiUrl || !apiKey) throw new Error('Novu API config missing');
 
   const BATCH_SIZE = 100;
   const errors: string[] = [];
+  const failedSubscribers: string[] = [];
   let batches = 0;
 
   // 为每个 subscriber 生成独立 engine_sig + 独立 event
-  const allEvents = await Promise.all(
-    subscribers.map(async (s) => {
-      const digest = await contentDigest(JSON.stringify(s.payload));
-      const sig = await generateEngineSig(workflowId, s.subscriberId, digest);
-      return {
-        name: workflowId,
-        to: [{ subscriberId: s.subscriberId }],
-        payload: { ...s.payload, engine_sig: sig },
-        overrides,
-      };
-    })
-  );
+  const eventTxnId = txnId ?? workflowId;
+  const allEvents = subscribers.map((s) => {
+    // 规范内容串：签名与 bridge 验证共用同一字节序列
+    const engineContent = JSON.stringify({ subscriberId: s.subscriberId, payload: s.payload });
+    const digest = contentDigest(engineContent);
+    const sig = generateEngineSig(eventTxnId, s.subscriberId, digest);
+    return {
+      name: workflowId,
+      to: [{ subscriberId: s.subscriberId }],
+      transactionId: eventTxnId,
+      payload: {
+        ...s.payload,
+        engine_sig: sig,
+        engine_content: engineContent,
+        txn_id: eventTxnId,
+        subscriber_id: s.subscriberId,
+      },
+      ...(overrides ? { overrides } : {}),
+    };
+  });
 
   // 按 BATCH_SIZE 分批 POST（每批 events 数组内每人独立 payload）
   for (let i = 0; i < allEvents.length; i += BATCH_SIZE) {
@@ -172,9 +173,10 @@ export async function triggerBulk(
     if (!resp.ok) {
       const text = await resp.text();
       errors.push(`batch ${batches}: ${resp.status} ${text}`);
+      for (const ev of batch) failedSubscribers.push(ev.to[0].subscriberId);
     }
     batches++;
   }
 
-  return { total: subscribers.length, batches, errors };
+  return { total: subscribers.length, batches, errors, failedSubscribers };
 }

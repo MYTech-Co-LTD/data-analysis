@@ -284,6 +284,12 @@ module.exports = async function (req) {
   if (body.mode === "push_report") {
     try {
       const webBase = Deno.env.get("WEB_BASE_URL") || "http://web:3000";
+      // Review 修复（B3）：body 字段对齐 /api/push 契约（camelCase workflowId/userId/selector.kind），
+      // 鉴权走 AGENT_API_KEY（route 已支持内部调用方双通道）。
+      const rawSel = body.selector || { type: "all" };
+      const selKind = (rawSel && typeof rawSel === "object" && rawSel.kind)
+        ? rawSel.kind
+        : (rawSel && typeof rawSel === "object" && rawSel.type === "all" ? "all" : "all");
       const pushResp = await fetch(webBase + "/api/push", {
         method: "POST",
         headers: {
@@ -291,14 +297,11 @@ module.exports = async function (req) {
           "Authorization": "Bearer " + (AGENT_API_KEY || ""),
         },
         body: JSON.stringify({
-          workflow_id: body.workflow_id || "scheduled_report",
-          operator_id: userId || "system:cron",
-          selector: body.selector || { type: "all" },
-          template_key: body.template_key || null,
-          query_intent: body.query_intent || null,
-          broadcastPerm: !!body.broadcast_perm,
+          workflowId: body.workflow_id || "scheduled_report",
+          userId: userId || "system:cron",
+          selector: { kind: selKind, ids: (rawSel && Array.isArray(rawSel.ids)) ? rawSel.ids : [] },
+          broadcastPerm: !!(body.broadcast_perm || body.broadcastPerm),
           deliver: body.deliver !== false,
-          cron_job_id: body.cron_job_id || null,
         }),
       });
       const pushResult = await pushResp.json().catch(() => ({}));

@@ -49,6 +49,7 @@ async function getServiceJwt() {
       grant_type: "client_credentials",
       client_id: CASDOOR_CLIENT_ID,
       client_secret: CASDOOR_CLIENT_SECRET,
+      scope: "openclaw:push",
     }),
   });
 

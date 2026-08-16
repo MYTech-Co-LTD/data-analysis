@@ -17,9 +17,12 @@
 //  selector 只组织维（首期 dept/person，role 随 U2）；手写收件人列表拒。
 
 import { NextRequest, NextResponse } from 'next/server';
+import { timingSafeEqual } from 'crypto';
 import { verifyServiceJwt } from '@/lib/token-verify';
 import { checkFeaturePerm } from '@/lib/feature-perm';
 import { listPushVariables, createNovuWorkflow, listNovuWorkflows } from '@/lib/push/admin-service';
+// Review 修复（B2）：POST 默认动作接入真实 run_push 引擎（此前为桩，生产恒 groups=0）
+import { runPush as engineRunPush } from '@/lib/push';
 
 // ===== Types =====
 
@@ -219,9 +222,7 @@ export function __resetFirstTriggerForTest(): void {
   firstTriggerSent.clear();
 }
 
-// ===== run_push stub（Task 9 产物注入） =====
-// 本 task 只做接口层；run_push 引擎由 Task 9 实现。
-// 这里做一层安全的 forward，不内联引擎逻辑。
+// ===== run_push 转发（真实引擎 + 测试注入钩子） =====
 
 interface RunPushOpts {
   workflowId: string;
@@ -238,7 +239,7 @@ interface RunPushResult {
   skipped: string[];
 }
 
-// 可注入的 run_push（测试钩子 + 未来 Task 9 替换）
+// 可注入的 run_push（测试钩子；生产走真实引擎）
 let _runPushImpl: ((opts: RunPushOpts) => Promise<RunPushResult>) | null = null;
 
 export function setRunPushForTest(impl: (opts: RunPushOpts) => Promise<RunPushResult>): void {
@@ -247,23 +248,69 @@ export function setRunPushForTest(impl: (opts: RunPushOpts) => Promise<RunPushRe
 
 async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   if (_runPushImpl) return _runPushImpl(opts);
-  // 临时占位：Task 9 实现后替换为真实 import
-  return {
-    txnId: crypto.randomUUID(),
-    groups: 0,
-    skipped: [],
-  };
+  // B2 修复：调用真实引擎（web/lib/push/index.ts runPush）
+  return engineRunPush({
+    workflowId: opts.workflowId,
+    selector: opts.selector,
+    operatorId: opts.operatorId,
+    broadcastPerm: opts.broadcastPerm,
+    deliver: opts.deliver ?? true,
+  });
+}
+
+// ===== 服务身份认证（双通道） =====
+// ① Casdoor client_credentials JWT（openclaw 插件等，scope=openclaw:push）
+// ② AGENT_API_KEY（内部调用方：scheduled-reports job / agent-query push_report，B3 修复）
+function constantTimeEqualStr(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ba.length !== bb.length) return false;
+  return timingSafeEqual(ba, bb);
+}
+
+async function authenticateService(req: NextRequest): Promise<{ sub: string } | null> {
+  const authHeader = req.headers.get('authorization') || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token) return null;
+
+  const svc = await verifyServiceJwt(token, 'openclaw:push');
+  if (svc) return svc;
+
+  const agentKey = process.env.AGENT_API_KEY || '';
+  if (agentKey && constantTimeEqualStr(token, agentKey)) {
+    return { sub: 'agent-query' }; // 内部调用方（服务身份，非人员）
+  }
+  return null;
+}
+
+// ===== 操作者校验：body.userId 必须是在职用户（B6 加固） =====
+// 注：完整方案是操作者身份与 service JWT sub 绑定（如 JWT 携带 operator claim）；
+// 此处先做存在性/在职校验，杜绝任意字符串冒充（如旧 create_workflow 的 'unknown'）。
+async function isActiveOperator(userId: string): Promise<boolean> {
+  const pgUrl = process.env.POSTGREST_URL || 'http://localhost:3000';
+  const key = process.env.INSFORGE_API_KEY || process.env.POSTGREST_ANON_KEY || '';
+  try {
+    const resp = await fetch(
+      `${pgUrl}/org_users?wecom_id=eq.${encodeURIComponent(userId)}&select=wecom_id,is_active&limit=1`,
+      { headers: { Authorization: `Bearer ${key}`, apikey: key } },
+    );
+    if (!resp.ok) return false;
+    const rows = await resp.json();
+    return Array.isArray(rows) && rows.length > 0 && rows[0].is_active === true;
+  } catch {
+    // 基础设施异常：主鉴权（checkFeaturePerm fail-close）仍生效，这里放行避免误伤可用性
+    console.error('[push] operator existence check failed:', userId);
+    return true;
+  }
 }
 
 // ===== Route handler =====
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  // ① 服务身份：verifyServiceJwt('openclaw:push')
-  const authHeader = req.headers.get('authorization') || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  const serviceIdentity = await verifyServiceJwt(token, 'openclaw:push');
+  // ① 服务身份：service JWT（openclaw:push）或内部 AGENT_API_KEY
+  const serviceIdentity = await authenticateService(req);
   if (!serviceIdentity) {
-    return NextResponse.json({ ok: false, error: 'unauthorized', detail: 'service JWT verification failed' }, { status: 401 });
+    return NextResponse.json({ ok: false, error: 'unauthorized', detail: 'service identity verification failed' }, { status: 401 });
   }
 
   // Parse body
@@ -360,6 +407,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: 'userId required (operator identity)' }, { status: 400 });
   }
 
+  // B6 加固：操作者必须是在职用户（防任意字符串冒充/越权）
+  if (!(await isActiveOperator(operatorId))) {
+    return NextResponse.json({ ok: false, error: 'permission_denied', detail: 'operator not found or inactive' }, { status: 403 });
+  }
+
   const hasConfigPerm = await checkPushPerm(operatorId, 'push:configure');
   if (!hasConfigPerm) {
     return NextResponse.json({ ok: false, error: 'permission_denied', detail: 'push:configure required' }, { status: 403 });
@@ -398,7 +450,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       selector: finalSelector,
       operatorId,
       broadcastPerm,
-      deliver: !firstTime, // 首触发 deliver=false（只发给自己，但仍走引擎验证路径）
+      deliver: true, // M4 修复：首触发也真投递（selector 已被强制为 person=[自己]）
       variables: body.variables,
     });
 
@@ -423,9 +475,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 // GET: list workflows + list variables
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const authHeader = req.headers.get('authorization') || '';
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  const serviceIdentity = await verifyServiceJwt(token, 'openclaw:push');
+  const serviceIdentity = await authenticateService(req);
   if (!serviceIdentity) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }

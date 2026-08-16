@@ -6,7 +6,7 @@
 // rollback：重启用 wecom-push cron 即可回退旧路径（代码未删）。
 import type { JobManifest, JobResult } from '../../contracts';
 import { tryAcquireLock } from '../../scheduler-lock';
-import { INSFORGE_API_BASE, AGENT_API_KEY } from '../env';
+import { AGENT_API_KEY } from '../env';
 import { runningTasks } from '../state';
 
 // run_push 接口契约（Task 9 产出，按 spec §5.4 签名）
@@ -32,16 +32,36 @@ interface RunPushResult {
 /**
  * 调 web /api/push 路由到 run_push 引擎。
  * 与 agent-query push_report 模式同路径，保证投递口径一致。
+ * Review 修复（B3）：body 字段对齐 route 契约（camelCase workflowId/userId/selector.kind），
+ * 鉴权用 AGENT_API_KEY（route 已支持内部调用方双通道）。
  */
+function normalizeSelector(raw: unknown): { kind: string; ids?: string[] } {
+  if (!raw || typeof raw !== 'object') return { kind: 'all' };
+  const r = raw as Record<string, unknown>;
+  if (typeof r.kind === 'string') return { kind: r.kind, ids: Array.isArray(r.ids) ? (r.ids as string[]) : undefined };
+  // 旧格式 {type: 'all'} → {kind: 'all'}
+  const t = r.type;
+  if (t === 'all') return { kind: 'all' };
+  if (typeof t === 'string') return { kind: t, ids: Array.isArray(r.ids) ? (r.ids as string[]) : undefined };
+  return { kind: 'all' };
+}
+
 async function callRunPush(opts: RunPushOpts): Promise<RunPushResult> {
   const webBase = process.env.WEB_BASE_URL || 'http://localhost:3000';
+  const selector = normalizeSelector(opts.selector);
   const resp = await fetch(`${webBase}/api/push`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${AGENT_API_KEY}`,
     },
-    body: JSON.stringify(opts),
+    body: JSON.stringify({
+      workflowId: opts.workflow_id,
+      userId: opts.operator_id,
+      selector,
+      broadcastPerm: opts.broadcast_perm ?? false,
+      deliver: opts.deliver ?? true,
+    }),
   });
   if (!resp.ok) {
     const detail = await resp.text().catch(() => '');

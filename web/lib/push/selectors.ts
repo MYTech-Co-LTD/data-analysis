@@ -36,10 +36,13 @@ export interface ResolverDeps {
 }
 
 /**
- * 解析 selector 为收件人列表（去重后的 id 数组）
+ * 解析 selector 为收件人列表（按 wecom_id 去重后的数组）
+ *
+ * Review 修复（B4）：收件人身份统一为 wecom_id（与 get_user_perms_strict /
+ * push_subscriber_tokens / Casdoor 一致；org_users.id 是 UUID，只作行键）。
  *
  * 返回 { recipients, danglingDepts }
- * - recipients: 去重后的用户 id 数组
+ * - recipients: 去重后的 wecom_id 数组
  * - danglingDepts: selector.kind='dept' 但该部门下无活跃用户
  */
 export async function resolveRecipients(
@@ -52,15 +55,15 @@ export async function resolveRecipients(
   if (selector.kind === 'all') {
     const users = await deps.getAllActiveUsers();
     for (const u of users) {
-      if (u.is_active && u.wecom_id) seen.add(u.id);
+      if (u.is_active && u.wecom_id) seen.add(u.wecom_id);
     }
     return { recipients: [...seen], danglingDepts: [] };
   }
 
   if (selector.kind === 'person') {
     for (const id of selector.ids ?? []) {
-      const u = await deps.getUserById(id);
-      if (u?.is_active && u.wecom_id) seen.add(u.id);
+      const u = await deps.getUserById(id); // id = wecom_id
+      if (u?.is_active && u.wecom_id) seen.add(u.wecom_id);
     }
     return { recipients: [...seen], danglingDepts: [] };
   }
@@ -77,7 +80,7 @@ export async function resolveRecipients(
       if (active.length === 0) {
         danglingDepts.push(n);
       }
-      for (const u of active) seen.add(u.id);
+      for (const u of active) seen.add(u.wecom_id);
     }
     return { recipients: [...seen], danglingDepts };
   }
@@ -91,7 +94,7 @@ export async function resolveRecipients(
       }
       const users = await deps.getUsersByRole(n);
       for (const u of users) {
-        if (u.is_active && u.wecom_id) seen.add(u.id);
+        if (u.is_active && u.wecom_id) seen.add(u.wecom_id);
       }
     }
     return { recipients: [...seen], danglingDepts: [] };

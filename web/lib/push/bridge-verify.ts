@@ -3,11 +3,16 @@
  *
  * 契约来源：docs/ops/novu-bridge-signature-verification.md（V1 快照）
  * - 外层：X-Novu-Signature = HMAC-SHA256-hex(rawBody, NOVU_BRIDGE_SECRET)
- * - 内层：body.engine_sig = HMAC-SHA256-hex(txnId+subscriberId+contentDigest, ENGINE_BRIDGE_SECRET)
- * - nonce 防重放：键 = `${bridge_token}:${sha256(rawBody)}`，TTL 24h
+ * - 内层：body.engine_sig 验签（共享实现 ./engine-sig.ts，Review B5 修复）：
+ *     HMAC-SHA256-hex(`${txnId}:${subscriberId}:${contentDigest}`, ENGINE_BRIDGE_SECRET)
+ *     其中 txnId/subscriberId/engine_content 由引擎写入 payload（txn_id/subscriber_id/engine_content）
+ *     并经 Novu workflow 透传进送达 body；兼容旧 transactionId/subscriberId/content 字段。
+ * - webhookUrl 路径段必须等于请求路径的 bridge_token（Review M1：防跨 token 移植/重放）
+ * - nonce 防重放：键 = `${bridge_token}:${sha256(rawBody)}`，TTL 24h（进程级；多副本需共享存储，见 NIT）
  */
 
 import { createHmac, createHash, timingSafeEqual } from 'crypto';
+import { contentDigest, verifyEngineSig } from './engine-sig';
 
 // ---- 配置（运行时读取，支持测试 mock） ----
 
@@ -94,26 +99,41 @@ export async function verifyBridge({
     return { ok: false, error: 'invalid JSON body' };
   }
 
+  // 2b. 防跨 token 移植（M1）：body.webhookUrl 路径段必须等于请求路径的 bridge_token。
+  //     签名不绑定 URL（Novu 契约），但 webhookUrl 在被签 body 内；
+  //     不校验则截获的合法 body 可重放到任意 token 路径 → 任意用户收到伪造推送。
+  const webhookUrl = typeof body.webhookUrl === 'string' ? body.webhookUrl : '';
+  if (webhookUrl) {
+    try {
+      const url = new URL(webhookUrl);
+      const pathSeg = url.pathname.split('/').filter(Boolean).pop() ?? '';
+      if (pathSeg !== bridgeToken) {
+        return { ok: false, error: 'webhookUrl token mismatch' };
+      }
+    } catch {
+      return { ok: false, error: 'invalid webhookUrl' };
+    }
+  }
+
   // 3. 查 subscriber token → wecom_id
   const wecomId = await getWecomIdByToken(bridgeToken);
   if (!wecomId) {
     return { ok: false, error: 'unknown bridge_token' };
   }
 
-  // 4. 内层验签：engine_sig = HMAC-SHA256(txnId+subscriberId+contentDigest, ENGINE_BRIDGE_SECRET)
+  // 4. 内层验签（共享实现 engine-sig.ts）
   const engineSig = body.engine_sig as string | undefined;
   if (!engineSig || !/^[0-9a-f]{64}$/.test(engineSig)) {
     return { ok: false, error: 'missing or invalid engine_sig' };
   }
 
-  const txnId = (body.transactionId as string) || '';
-  const subscriberId = (body.subscriberId as string) || '';
-  const content = (body.content as string) || '';
-  const contentDigest = sha256Hex(content);
-  const enginePayload = `${txnId}${subscriberId}${contentDigest}`;
+  // 引擎写入字段（txn_id/subscriber_id/engine_content）优先，兼容旧字段名
+  const txnId = (body.txn_id as string) ?? (body.transactionId as string) ?? '';
+  const subscriberId = (body.subscriber_id as string) ?? (body.subscriberId as string) ?? '';
+  const content = (body.engine_content as string) ?? (body.content as string) ?? '';
+  const digest = contentDigest(content);
 
-  const expectedEngineSig = hmacSha256Hex(enginePayload, engineBridgeSecret);
-  if (!constantTimeEqual(engineSig, expectedEngineSig)) {
+  if (!verifyEngineSig(engineSig, txnId, subscriberId, digest, engineBridgeSecret)) {
     return { ok: false, error: 'engine_sig mismatch' };
   }
 
