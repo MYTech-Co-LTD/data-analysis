@@ -5,8 +5,12 @@ import { generateTier1View } from '../src/generators/tier1';
 import { generateHierarchyView } from '../src/generators/hierarchy';
 import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../src/types';
 
-const BRANDS_PRED = `claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb`;
-const BRANCH_PRED = `claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb`;
+// T19 B 项裁决（DW2 gate_2c6ebef04ea1）：视图层行过滤切 scope_match_v2（与 179/183 RLS 同源判定）。
+// 门店维双格式 OR（T12 先例）：裸 branch_num 支接 legacy 顶层形状 + sbc-branch_num 支接新 data_scope
+// 全局键（branch_number，门店键铁律）。
+const BRANDS_PRED = `scope_match_v2('brands'`;
+const BRANCH_PRED = `scope_match_v2('branch_nums'`;
+const BRANCH_GLOBAL_KEY_PRED = (a: string) => `scope_match_v2('branch_nums', ${a}.system_book_code || '-' || ${a}.branch_num)`;
 
 const GEN_DIR = fileURLToPath(new URL('../../../database/generated', import.meta.url));
 
@@ -90,6 +94,14 @@ describe('权限收口：tier1 行级过滤注入', () => {
     expect(sql).toContain(BRANCH_PRED);
   });
 
+  it('B 项：门店维双格式 OR——branch_number 全局键支接新形状（T12 先例）', () => {
+    expect(sql).toContain(BRANCH_GLOBAL_KEY_PRED('s'));
+  });
+
+  it('B 项：生成产物零 claim_match_or_star（消费位收敛 scope_match_v2）', () => {
+    expect(sql).not.toContain('claim_match_or_star');
+  });
+
   it('target CTE 过滤带 ALL 汇总行放行', () => {
     expect(sql).toContain(`t.branch_num = 'ALL'`);
   });
@@ -169,9 +181,10 @@ describe('权限收口：hierarchy 行级过滤注入', () => {
 
   it('dim 行（dim_branch）也被双维度过滤', () => {
     const sql = generateHierarchyView(hierConfig, mockMetrics, mockSources);
-    // permFilterFact('db') -> db.system_book_code + db.branch_num::text
-    expect(sql).toContain(`claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, db.system_book_code)`);
-    expect(sql).toContain(`claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, db.branch_num::text)`);
+    // permFilterFact('db') -> scope_match_v2('brands', db.system_book_code) + 双格式 OR
+    expect(sql).toContain(`scope_match_v2('brands', db.system_book_code)`);
+    expect(sql).toContain(`scope_match_v2('branch_nums', db.branch_num::text)`);
+    expect(sql).toContain(BRANCH_GLOBAL_KEY_PRED('db'));
   });
 
   it('category 视图 delivery/wholesale actuals 均含过滤', () => {
@@ -202,7 +215,9 @@ describe('权限收口契约：所有提交产物必含行级过滤', () => {
       expect(sql).toContain(BRANDS_PRED);
       if (!skipBranch.has(f)) {
         expect(sql).toContain(BRANCH_PRED);
+        expect(sql).toContain(`scope_match_v2('branch_nums'`);   // B 项：双格式 OR 至少一支
       }
+      expect(sql).not.toContain('claim_match_or_star');           // B 项：消费位零残留
     });
   }
 });
