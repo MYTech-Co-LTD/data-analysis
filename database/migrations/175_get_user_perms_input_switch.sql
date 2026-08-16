@@ -226,7 +226,7 @@ BEGIN
 END;
 $$;
 COMMENT ON FUNCTION get_user_perms(VARCHAR) IS '权限合成 RPC（175 分支版）：读 system_flags(perms_input) 决定 legacy(role_id) 或 casdoor(role_codes UNION)；个人 override 不变';
-GRANT EXECUTE ON get_user_perms(VARCHAR) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION get_user_perms(VARCHAR) TO anon, authenticated;
 
 -- ③ get_user_perms_casdoor：纯 casdoor 路径独立副本（shadow diff 用，不读开关，硬编码 casdoor 逻辑）
 DROP FUNCTION IF EXISTS get_user_perms_casdoor(TEXT);
@@ -331,7 +331,7 @@ BEGIN
 END;
 $$;
 COMMENT ON FUNCTION get_user_perms_casdoor(VARCHAR) IS 'Shadow diff 专用：纯 casdoor(role_codes) 路径独立副本，不读 system_flags，供 perm-shadow job 双源比对';
-GRANT EXECUTE ON get_user_perms_casdoor(VARCHAR) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION get_user_perms_casdoor(VARCHAR) TO anon, authenticated;
 
 -- ④ get_user_perms_legacy：纯 legacy 路径独立副本（shadow diff 用，不读开关，硬编码 role_id 逻辑）
 DROP FUNCTION IF EXISTS get_user_perms_legacy(TEXT);
@@ -430,6 +430,6 @@ BEGIN
 END;
 $$;
 COMMENT ON FUNCTION get_user_perms_legacy(VARCHAR) IS 'Shadow diff 专用：纯 legacy(role_id) 路径独立副本，不读 system_flags，供 perm-shadow job 双源比对';
-GRANT EXECUTE ON get_user_perms_legacy(VARCHAR) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION get_user_perms_legacy(VARCHAR) TO anon, authenticated;
 
 COMMIT;
