@@ -13,8 +13,13 @@ export interface GroupUpserResult { created: string[]; updated: string[]; }
 
 // 仓库既有 env 约定：collect-items.ts 用 NEXT_PUBLIC_INSFORGE_*（服务端同样可见），plan 原文的裸
 // INSFORGE_URL/INSFORGE_ANON_KEY 保留为首选，避免环境漏配静默空串（CLAUDE.md 教训）。
-const INSFORGE_URL = process.env.INSFORGE_URL || process.env.NEXT_PUBLIC_INSFORGE_URL || '';
-const INSFORGE_ANON_KEY = process.env.INSFORGE_ANON_KEY || process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY || '';
+// 函数内求值（非模块级 const）：测试可 vi.stubEnv 注入端点形态；模块级固化会把空串焊死到调用点。
+function insforgeEnv() {
+  return {
+    url: process.env.INSFORGE_URL || process.env.NEXT_PUBLIC_INSFORGE_URL || '',
+    anonKey: process.env.INSFORGE_ANON_KEY || process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY || '',
+  };
+}
 
 export async function upsertGroup(owner: string, name: string, parentName: string | null, type: 'store'|'region'|'dept'): Promise<void> {
   const existing = await casdoorFetch(`/api/get-groups?owner=${encodeURIComponent(owner)}`, {});
@@ -47,7 +52,14 @@ export async function upsertGroup(owner: string, name: string, parentName: strin
 
 export async function syncStoreTree(): Promise<{ created: { branch_number: string; group_name: string }[]; renamed: string[] }> {
   // 三源：dim_branch（真源）/ maps_branch_group（映射）/ Group 树（Casdoor）
-  const branches = await casdoorFetch('/api/get-branches?select=branch_number,branch_name,system_book_code&is_active=eq.true', {});
+  // T8 死传输修复（DW1 review 跟踪#1，2026-08-16）：原 casdoorFetch('/api/get-branches?...') 把 PostgREST
+  // 语法打 Casdoor 域名——生产必 404 → 门店树永不建（绿测试因 mock 掩盖）。dim_branch 是库内表，改走
+  // PostgREST 真实端点（T9 group-expand 同款先例：绝对 URL 经 casdoorFetch 直传 + apikey/Bearer 覆盖 Casdoor token）。
+  const { url: INSFORGE_URL, anonKey: INSFORGE_ANON_KEY } = insforgeEnv();
+  const branches = await casdoorFetch(
+    `${INSFORGE_URL}/dim_branch?select=branch_number,branch_name,system_book_code&is_active=eq.true`,
+    { headers: { apikey: INSFORGE_ANON_KEY, Authorization: `Bearer ${INSFORGE_ANON_KEY}` } },
+  );
   const groups = await casdoorFetch('/api/get-groups?owner=shanhai', {});
   const maps = await fetch(`${INSFORGE_URL}/maps_branch_group?is_active=eq.true`, {
     headers: { apikey: INSFORGE_ANON_KEY },
@@ -55,6 +67,7 @@ export async function syncStoreTree(): Promise<{ created: { branch_number: strin
   const groupNames = new Set(((groups as { data?: { name?: string }[] }).data ?? []).map((g) => g.name ?? ''));
   const mapped = new Set(maps.map((m) => m.branch_number));
   const created: { branch_number: string; group_name: string }[] = [];
+  // PostgREST 返回裸数组（casdoorFetch 把它放进 .data；Casdoor API 的 {data:[...]} 双层包装不适用于此端点）
   for (const b of (branches as { data?: { branch_number: string; branch_name: string; system_book_code: string }[] }).data ?? []) {
     if (mapped.has(b.branch_number)) continue;
     // 组名含 branch_number（全局唯一），区域父组按 dim_branch 区域字段——此处用品牌链根占位，区域细分由 Task 10 对账驱动补

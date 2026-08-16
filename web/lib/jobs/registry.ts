@@ -10,6 +10,7 @@ import { dimCustomerManifest } from './dim-customer/manifest';
 import { monitorManifests } from './monitor/manifest';
 import { qaFullManifest } from './qa/manifest';
 import { dailyReconcileManifest, sourceReconcileManifest } from './reconcile/manifest';
+import { reconcileGroupsManifest } from './reconcile-groups/manifest';
 import { scheduledReportsManifest } from './scheduled-reports/manifest';
 import { targetCloseManifest } from './target-close/manifest';
 // Review 修复（M16）：此前 thin-sync / drift / perm-shadow / push-contract 四个 manifest
@@ -34,5 +35,6 @@ export const JOBS: JobManifest[] = [
   driftReportManifest,
   permShadowManifest,
   pushContractManifest,
+  reconcileGroupsManifest,
   ...monitorManifests,
 ];
