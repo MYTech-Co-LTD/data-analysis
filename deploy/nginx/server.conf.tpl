@@ -74,6 +74,17 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # 当前用户权限 claims（web/api，F2.1）——前端 use-can-see-cost / 目标页裁剪提示
+    # 依赖 /api/me 判 can_see_cost 等 claims；先前漏放行致生产 404（Cannot GET，兜底到 insforge）
+    location /api/me {
+        proxy_pass http://web:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # ---------- InsForge API ----------
     location /api {
         proxy_pass http://insforge:7130;
