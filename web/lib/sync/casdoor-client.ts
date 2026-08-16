@@ -44,7 +44,7 @@ async function getAccessToken(): Promise<string | null> {
   }
 }
 
-// 导出（W1 Task4 勘误，2026-08-16）：resource-sync 等 adapter 复用同款 client_credentials 通道
+// 导出供 group-expand 等模块复用同一 fetch seam（契约测试 vi.mock('../casdoor-client')）。
 export async function casdoorFetch(
   path: string,
   opts: RequestInit = {},
@@ -53,7 +53,9 @@ export async function casdoorFetch(
   if (!token) return { ok: false, error: 'no_access_token' };
 
   try {
-    const resp = await fetch(`${CASDOOR_API}${path}`, {
+    // 绝对 URL 直传：group-expand 经此 seam 读 PostgREST（maps_branch_group），非 Casdoor 域
+    const url = /^https?:\/\//.test(path) ? path : `${CASDOOR_API}${path}`;
+    const resp = await fetch(url, {
       ...opts,
       headers: {
         'Content-Type': 'application/json',
