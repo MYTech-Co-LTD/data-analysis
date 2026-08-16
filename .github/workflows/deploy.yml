@@ -12,8 +12,12 @@
 #     → SSH 起后端栈 + 数据库迁移 + 刷 postgrest 缓存；失败阻断全部（数据库必须）
 #   → functions job（needs migrate，continue-on-error: true）: rsync(functions/scripts/deploy)
 #     → SSH 部署 edge functions + secrets；失败不阻断 build-web（function 可用 MCP 单独更新）
+#     · W1 Task6：checkout 内算 CATALOG_V（catalog 内容 hash）注入 deploy-functions.sh set_secret
+#   → catalog job（needs [migrate, functions]，continue-on-error: true，与 build-web 并行）:
+#     scan 校验 + SSH 在 web 镜像内跑 catalog 对账（W1 Task6，红仅告警）
 #   → build-web job（needs [migrate, functions]）: rsync(web/services/scripts/deploy)
 #     → SSH 构建前端镜像 + 推天翼云 + compose up（web/nginx/duckdb）
+#     · W1 Task6：同公式算 CATALOG_V 注入 deploy.sh → web 构建 build-arg（middleware 内联）
 #
 # 三个部署 job 共用同一份 scripts/deploy.sh，用 DEPLOY_PHASE=migrate|functions|web 跑对应阶段；
 # 手动完整部署仍 `bash scripts/deploy.sh`（DEPLOY_PHASE 缺省 all，行为不变）。
@@ -154,17 +158,83 @@ jobs:
             ./functions ./scripts ./deploy \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
 
+      # W1 Task6 fix：本 job 不 rsync web/，服务器侧 deploy-functions.sh 只能从上一轮
+      # rsync 残留的旧 catalog 树算 hash → 与 build-web 侧（新树）漂移，claims catalog_v
+      # 快路径比对恒不等。改为 GHA checkout（= 本次 commit 精确内容）内计算后经 SSH 注入，
+      # 与 build-web job 同公式同值（fix-round-1，DW2 跟踪#3）。
+      - name: 计算 CATALOG_V（catalog 内容 hash，注入 function secrets）
+        run: |
+          CATALOG_V="$(cat web/lib/capability-catalog.ts web/lib/capability-catalog.generated.ts \
+            | sha256sum | cut -c1-8)"
+          echo "CATALOG_V=$CATALOG_V" >> "$GITHUB_ENV"
+          echo "  · CATALOG_V=$CATALOG_V（catalog 内容 hash，wecom-oidc-callback claims catalog_v 基准）"
+
       - name: SSH 部署 edge functions + secrets
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          CATALOG_V: ${{ env.CATALOG_V }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          envs: CATALOG_V
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            export CATALOG_V
+            cd ${{ secrets.DEPLOY_PATH }}
+            DEPLOY_PHASE=functions bash scripts/deploy.sh
+
+  # W1 Task6：catalog scan 校验 + 部署后对账（容错不阻断——与 functions 同 continue-on-error 模式）。
+  # 服务器无 node 二进制（deploy-functions.sh 回退先例）→ reconcile 在 web 镜像（node:22 基底，
+  # 服务器本地已有）内挂仓运行；脚本纯 node 零 npm 依赖。CASDOOR_* 凭证从服务器 deploy/.env 注入
+  # （不在 GHA secrets 侧复制）。对账红 = exit 1 → 仅 ::warn 告警不阻断（每日 03:47 cron 兜底观测）。
+  # 与 build-web 并行（同 needs）：catalog 钩子不拖延前端部署。
+  catalog:
+    if: github.event_name != 'pull_request'
+    needs: [migrate, functions]
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # generated 与扫描一致性校验（Task 2 门禁）；漂移仅告警（容错语义），单测快跑一遍
+      - name: Catalog scan 校验（generated 漂移仅告警）
+        run: |
+          node scripts/scan-capabilities.mjs || echo "::warn::catalog generated 漂移——运行 npm run scan:capabilities -- --write 后提交"
+          node --test scripts/tests/scan-capabilities.test.mjs
+
+      - name: 配置 SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: SSH catalog 对账（permission.resources vs catalog，红仅告警）
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
           script_stop: true
-          command_timeout: 30m
+          command_timeout: 10m
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
-            DEPLOY_PHASE=functions bash scripts/deploy.sh
+            set -a; . deploy/.env; set +a
+            docker run --rm \
+              -e CASDOOR_API_URL="${CASDOOR_API_URL:-}" \
+              -e CASDOOR_CLIENT_ID -e CASDOOR_CLIENT_SECRET \
+              -e CASDOOR_ORG="${CASDOOR_ORG:-shanhai}" \
+              -v "$PWD":/repo:ro -w /repo \
+              registry-crs-xinan1.ctyun.cn/hookflow/data-analysis-web:latest \
+              node scripts/reconcile-catalog.mjs \
+              || echo '::warn::catalog 对账红/失败（不阻断；详见 /admin/capabilities 辅助页）'
 
   # web 构建：前端镜像 build → 推天翼云 → 起 web/nginx/duckdb。
   # needs [migrate, functions]：migrate 失败则跳过（数据库必须）；functions 有 continue-on-error 故不阻断。
@@ -193,20 +263,30 @@ jobs:
             ./web ./services ./scripts ./deploy \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
 
+      # W1 Task6 fix：与 functions job 同公式从 checkout 计算，注入 deploy.sh（middleware
+      # 构建期内联 process.env.CATALOG_V → build-arg）——两侧同 commit 同值，fix-round-1。
+      - name: 计算 CATALOG_V（catalog 内容 hash，注入 web 构建 build-arg）
+        run: |
+          CATALOG_V="$(cat web/lib/capability-catalog.ts web/lib/capability-catalog.generated.ts \
+            | sha256sum | cut -c1-8)"
+          echo "CATALOG_V=$CATALOG_V" >> "$GITHUB_ENV"
+          echo "  · CATALOG_V=$CATALOG_V（catalog 内容 hash，middleware catalog_v 比对基准）"
+
       - name: SSH 构建前端镜像 → 推天翼云 → 起网关
         uses: appleboy/ssh-action@v1.2.0
         env:
           CTYUN_USERNAME: ${{ secrets.CTYUN_USERNAME }}
           CTYUN_PASSWORD: ${{ secrets.CTYUN_PASSWORD }}
+          CATALOG_V: ${{ env.CATALOG_V }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          envs: CTYUN_USERNAME,CTYUN_PASSWORD
+          envs: CTYUN_USERNAME,CTYUN_PASSWORD,CATALOG_V
           script_stop: true
           command_timeout: 30m
           script: |
-            export CTYUN_USERNAME CTYUN_PASSWORD
+            export CTYUN_USERNAME CTYUN_PASSWORD CATALOG_V
             cd ${{ secrets.DEPLOY_PATH }}
             DEPLOY_PHASE=web bash scripts/deploy.sh
 
