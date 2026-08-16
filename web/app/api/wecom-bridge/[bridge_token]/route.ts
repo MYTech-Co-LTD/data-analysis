@@ -26,9 +26,9 @@ function getPostgrestUrl(): string {
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { bridge_token: string } }
+  { params }: { params: Promise<{ bridge_token: string }> }
 ) {
-  const bridgeToken = params.bridge_token;
+  const { bridge_token: bridgeToken } = await params;
 
   // 1. 读取 raw body
   const rawBody = await req.arrayBuffer();
