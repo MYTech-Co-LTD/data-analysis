@@ -8,7 +8,7 @@
 |------|------|------|
 | `list_push_variables` | 列出可推送的业务变量 | 所有登录用户 |
 | `create_push_workflow` | 创建推送模板 | push:configure |
-| `create_push_schedule` | 创建定时推送计划 | push:configure（全员需 push:broadcast） |
+| `create_push_schedule` | 创建定时推送计划（**U7 未落地，暂冻结**） | push:configure（全员需 push:broadcast） |
 | `push_now` | 立即触发推送 | push:configure（全员需 push:broadcast） |
 
 ## 使用流程
@@ -16,8 +16,10 @@
 1. **查看变量**：先调 `list_push_variables` 了解有哪些可推送变量
 2. **创建模板**：调 `create_push_workflow` 创建推送模板（含变量列表）
 3. **触发推送**：
-   - 一次性推送：`push_now`（立即发送）
-   - 定时推送：`create_push_schedule`（cron 调度）
+   - 立即推送：`push_now`（可配合外部 cron 调度）
+   - 定时推送：`create_push_schedule` 当前**不可用**——U7 统一推送中心定时链路
+     （OpenClaw cron → scheduled_reports 绑定 → run_push 引擎）尚未落地，
+     调用会明确报错，不会持久化任何计划；U7 上线后自动开放。
 
 ## Selector 规则
 

@@ -5,19 +5,15 @@ import { exchangeCasdoorCode } from "@/lib/wecom";
 
 /**
  * Casdoor OIDC 回调
- * state 参数格式：URL 编码的目标路径（如 /reports/123）
+ * state 参数格式：`${nonce}::${encodeURIComponent(targetPath)}`（review B1 CSRF 修复）。
  *
- * 流程：Casdoor authorize 回跳带 code → 调 wecom-oidc-callback function
- * 换 PostgREST JWT → 写 cookie（middleware + PostgREST 消费，RLS 依赖）。
+ * 流程：Casdoor authorize 回跳带 code → 校验 cookie nonce 与 state nonce 一致（登录 CSRF 防护）
+ * → 调 wecom-oidc-callback function 换 PostgREST JWT → 写 cookie（middleware + PostgREST 消费，RLS 依赖）。
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state") || "/";
-
-  // 解码 state 中的目标路径
-  const targetPath = decodeURIComponent(state);
-  const safeTarget = targetPath.startsWith("/") ? targetPath : "/";
+  const state = url.searchParams.get("state") || "";
 
   // 用 X-Forwarded-Host / Host 头构造外部 origin，避免 Next.js 把 req.url 解析成
   // 容器内监听地址（0.0.0.0:3000）导致 redirect 的 Location 跳到内网而打不开。
@@ -31,14 +27,36 @@ export async function GET(req: Request) {
   const login = (err: string) =>
     NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(err)}`, origin));
 
-  if (!code) return login("missing_code");
+  const c = await cookies();
 
-  const { data, error } = await exchangeCasdoorCode(code, redirectUri);
+  // ---- B1：校验 state nonce 绑定（CSRF 登录防护） ----
+  // state 前段 = /auth/start 种的 cookie nonce。缺 cookie / 不匹配 → 拒绝，走后 login 兜底。
+  const STATE_SEP = "::";
+  const sepIdx = state.indexOf(STATE_SEP);
+  const stateNonce = sepIdx > 0 ? state.slice(0, sepIdx) : "";
+  const savedNonce = c.get("casdoor_state_nonce")?.value;
+  // 一次性使用：无论成败先清除，防重放。
+  c.delete("casdoor_state_nonce");
+
+  if (!code) return login("missing_code");
+  if (!stateNonce || !savedNonce || stateNonce !== savedNonce) {
+    return login("state_mismatch");
+  }
+
+  // 解析目标路径：state 后段是 encodeURIComponent 的目标路径；解码失败或非站内路径 → "/"。
+  let targetPath: string;
+  try {
+    targetPath = decodeURIComponent(sepIdx >= 0 ? state.slice(sepIdx + STATE_SEP.length) : "");
+  } catch {
+    targetPath = "";
+  }
+  const safeTarget = targetPath.startsWith("/") && !targetPath.startsWith("//") ? targetPath : "/";
+
+  const { data, error } = await exchangeCasdoorCode(code, redirectUri, state);
   if (error || !data?.ok || !data.access_token) {
     return login(String((data as any)?.error ?? error ?? "exchange_failed"));
   }
 
-  const c = await cookies();
   // 判断是否为 HTTPS（根据 x-forwarded-proto）
   const isHttps = proto === "https";
 

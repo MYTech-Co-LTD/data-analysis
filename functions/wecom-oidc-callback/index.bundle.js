@@ -67,7 +67,16 @@ module.exports = async function(req) {
     const body = await req.json().catch(() => ({}));
     const code = body.code;
     const redirectUri = body.redirect_uri;
+    const state = body.state;
     if (!code || !redirectUri) return json({ error: "missing code or redirect_uri" }, 400);
+    const STATE_RE = /^[A-Za-z0-9_-]{32,}::/;
+    if (typeof state !== "string" || !STATE_RE.test(state)) {
+      return json({ error: "invalid_state" }, 400);
+    }
+    const REDIRECT_URI_RE = /^(https:\/\/[^\s]*\/auth\/callback|http:\/\/localhost(:\d+)?\/auth\/callback)$/;
+    if (!REDIRECT_URI_RE.test(redirectUri)) {
+      return json({ error: "invalid_redirect_uri" }, 400);
+    }
     const tokenRes = await fetch(`${issuer}/api/login/oauth/access_token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -81,20 +90,54 @@ module.exports = async function(req) {
     });
     const tokenData = await tokenRes.json();
     const accessToken = tokenData.access_token;
-    if (!accessToken) return json({ error: "failed_to_get_casdoor_token", detail: tokenData }, 502);
+    if (!accessToken) {
+      console.error(
+        "wecom-oidc-callback: casdoor token exchange failed",
+        { status: tokenRes.status, body: JSON.stringify(tokenData).slice(0, 500) }
+      );
+      return json({ error: "failed_to_get_casdoor_token" }, 502);
+    }
     const userRes = await fetch(`${issuer}/api/userinfo`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const userData = await userRes.json();
     const wecomUserId = userData.sub;
-    if (!wecomUserId) return json({ error: "failed_to_get_wecom_id", detail: userData }, 401);
+    if (!wecomUserId) {
+      console.error(
+        "wecom-oidc-callback: userinfo missing sub",
+        { status: userRes.status, respBody: JSON.stringify(userData).slice(0, 500) }
+      );
+      return json({ error: "failed_to_get_wecom_id" }, 401);
+    }
+    let casdoorRoles = [];
+    if (Array.isArray(userData.roles)) {
+      casdoorRoles = userData.roles.filter((r) => typeof r === "string" && r.length > 0);
+    } else if (typeof userData.roles === "string" && userData.roles.length > 0) {
+      casdoorRoles = [userData.roles];
+    }
     const client = createClient({
       baseUrl: Deno.env.get("INSFORGE_API_BASE") || "http://insforge:7130",
       anonKey: Deno.env.get("ANON_KEY")
     });
-    const { data: user } = await client.database.from("org_users").select("department_ids, name").eq("wecom_id", wecomUserId).single();
+    const { data: user, error: userErr } = await client.database.from("org_users").select("is_active, department_ids, name").eq("wecom_id", wecomUserId).single();
+    if (userErr && !user) {
+      console.error("wecom-oidc-callback: org_users query error", userErr?.message ?? userErr);
+    }
+    if (user && user.is_active === false) {
+      return json({ error: "user_inactive" }, 403);
+    }
     const departmentIds = user?.department_ids || [];
     const userName = user?.name || wecomUserId;
+    if (casdoorRoles.length > 0) {
+      try {
+        await client.database.from("org_users").update({
+          role_codes: casdoorRoles,
+          casdoor_synced_at: (/* @__PURE__ */ new Date()).toISOString()
+        }).eq("wecom_id", wecomUserId).eq("casdoor_writer", "auto");
+      } catch (e) {
+        console.error("role_codes mirror write failed", e);
+      }
+    }
     const pgrstUrl = Deno.env.get("POSTGREST_URL") || "http://postgrest:3000";
     let perms = {};
     try {
@@ -108,6 +151,11 @@ module.exports = async function(req) {
     } catch (e) {
       console.error("get_user_perms failed", e);
     }
+    const permKeys = [];
+    if (perms.branch_nums) permKeys.push("branch_nums");
+    if (perms.brands) permKeys.push("brands");
+    if (perms.categories) permKeys.push("categories");
+    if (perms.can_see_cost) permKeys.push("can_see_cost");
     const now = Math.floor(Date.now() / 1e3);
     const jwt = await signJwt({
       sub: wecomUserId,
@@ -121,12 +169,17 @@ module.exports = async function(req) {
       default_landing: perms.default_landing || "/",
       default_metric: perms.default_metric || "sale",
       visible_panels: perms.visible_panels || [],
+      roles: casdoorRoles,
+      // Task 13: Casdoor 角色码（string[]）
+      permissions: permKeys,
+      // Task 13: 已授权维度 key 列表（additive）
       iss: "casdoor-oidc",
       iat: now,
       exp: now + 7 * 86400
     }, Deno.env.get("JWT_SECRET"));
     return json({ ok: true, wecom_userid: wecomUserId, wecom_name: userName, access_token: jwt });
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    console.error("wecom-oidc-callback error:", e);
+    return json({ error: "internal_error" }, 500);
   }
 };

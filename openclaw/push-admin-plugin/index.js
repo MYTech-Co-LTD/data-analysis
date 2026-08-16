@@ -135,13 +135,18 @@ const CREATE_WF_PARAMS = {
 };
 
 // 3. create_push_schedule：创建定时推送
+// B8（review 修复）：本工具半成品——返回「确认回显」后无任何持久化分支
+// （params 无 confirm 字段，schedule_spec 只作提示），且持久化目标
+// （scheduled_reports binding + OpenClaw cron）属 U7 定时链路，尚未落地
+// （get_due_scheduled_reports 无 migration，scheduled_reports 无 selector 列）。
+// 与 selector.kind='role' 的「pending U2」同款处理：fail-closed 冻结，不给假承诺；
+// 指引用户走已可用的 push_now。U7 上线后随推送中心一并开放。
 const CREATE_SCHED_NAME = "create_push_schedule";
 const CREATE_SCHED_DESC =
-  "创建定时推送计划（关联已有 workflow + selector + cron 表达式）。" +
-  "需要 push:configure 权限。全员推送额外需要 push:broadcast。" +
-  "selector 只接受组织维（dept/person/all），不接受手写收件人列表。" +
-  "返回确认回显（结构化：workflow/schedule/selector），需用户确认后生效。" +
-  "首次触发将自动发送给创建者本人（安全门），确认内容无误后放开。";
+  "创建定时推送计划（cron 调度）。" +
+  "【暂不可用】U7 统一推送中心定时链路（OpenClaw cron → scheduled_reports 绑定 → run_push 引擎）" +
+  "尚未落地，本工具冻结，调用即返回错误。" +
+  "当前定时推送请用 push_now（立即推送）+ 外部调度；U7 上线后本工具自动开放。";
 const CREATE_SCHED_PARAMS = {
   type: "object",
   properties: {
@@ -230,12 +235,15 @@ export default definePluginEntry({
     // 1. list_push_variables
     api.registerTool(
       (ctx) => {
+        const userId = ctx && ctx.requesterSenderId;
         return {
           name: LIST_VARS_NAME,
           description: LIST_VARS_DESC,
           parameters: LIST_VARS_PARAMS,
           execute: async () => {
-            const result = await callPushApi({ action: "list_variables" });
+            if (!userId) return { error: "无法识别请求者身份（requesterSenderId 缺失）" };
+            // B4：子路由需人员身份（push API 按 userId 鉴权 push:configure）
+            const result = await callPushApi({ action: "list_variables", userId });
             if (!result.ok) return result;
             return {
               ok: true,
@@ -293,7 +301,7 @@ export default definePluginEntry({
       { name: CREATE_WF_NAME },
     );
 
-    // 3. create_push_schedule
+    // 3. create_push_schedule（B8 冻结：U7 定时链路未落地，fail-closed，不假确认回显）
     api.registerTool(
       (ctx) => {
         const userId = ctx && ctx.requesterSenderId;
@@ -301,49 +309,14 @@ export default definePluginEntry({
           name: CREATE_SCHED_NAME,
           description: CREATE_SCHED_DESC,
           parameters: CREATE_SCHED_PARAMS,
-          execute: async (_id, params) => {
-            const obj = typeof params === "string" ? JSON.parse(params) : (params || {});
+          execute: async () => {
             if (!userId) return { error: "无法识别请求者身份（requesterSenderId 缺失）" };
-
-            // 插件层校验：selector 只接受组织维
-            const sel = obj.selector;
-            if (!sel || !sel.kind) return { error: "selector.kind required" };
-            if (!["dept", "person", "all"].includes(sel.kind)) {
-              return { error: "selector.kind must be dept/person/all（不接受手写收件人列表）" };
-            }
-            if (sel.kind !== "all" && (!Array.isArray(sel.ids) || sel.ids.length === 0)) {
-              return { error: `selector.kind=${sel.kind} requires non-empty ids array` };
-            }
-            if (!obj.workflow_id) return { error: "workflow_id required" };
-            if (!obj.schedule) return { error: "schedule required" };
-
-            // 结构化确认回显（挡 cron 中文歧义）
-            const cronDisplay = obj.schedule.expr || obj.schedule.at || `every ${obj.schedule.everyMs}ms`;
-            const selDisplay = sel.kind === "all"
-              ? "全员"
-              : `${sel.kind}=[${(sel.ids || []).join(', ')}]`;
-            const confirmMsg =
-              `请确认定时推送计划：\n` +
-              `- 名称: ${obj.name}\n` +
-              `- 模板: ${obj.workflow_id}\n` +
-              `- 调度: ${cronDisplay} (${obj.schedule.tz || 'Asia/Shanghai'})\n` +
-              `- 收件人: ${selDisplay}\n` +
-              (obj.variables ? `- 变量: ${obj.variables.join(', ')}\n` : '') +
-              `\n首次触发将自动发送给你本人（安全门），确认无误后放开。`;
-
+            // B8：无持久化目标（U7 定时链路未落地）→ 明确拒绝，不给「确认后创建」的假承诺。
             return {
-              ok: true,
-              pending_confirmation: true,
-              message: confirmMsg,
-              schedule_spec: {
-                workflow_id: obj.workflow_id,
-                name: obj.name,
-                schedule: obj.schedule,
-                selector: sel,
-                variables: obj.variables,
-                operator: userId,
-              },
-              note: "请回复「确认」后，我将调用 push API 创建此定时计划。",
+              ok: false,
+              error: "create_push_schedule 暂不可用：U7 统一推送中心定时链路未落地，调用后端不会持久化任何计划。" +
+                "当前请用 push_now 立即推送（可配外部调度触发）；U7 上线后本工具跟随开放。",
+              available_alternatives: ["push_now"],
             };
           },
         };

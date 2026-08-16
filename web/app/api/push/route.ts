@@ -1,7 +1,11 @@
 // web/app/api/push/route.ts
 // 内部 push API（plan Task 14 / spec §6.1 三层鉴权）：
 // ① verifyServiceJwt('openclaw:push') — Casdoor JWKS 验签（RS256 + iss + aud + exp + scope）
-// ② checkPushPerm — Casdoor 实查 push:configure / push:broadcast（5min 缓存 + 24h stale，裁决-1 = deny）
+// ② checkPushPerm — 人员权限实查（5min 缓存 + 24h stale，裁决-1 = deny）：
+//    claims 快路径（仅可信用户 JWT 场景传）→ BREAKGLASS 手动兜底 → 过渡实查
+//    get_user_perms_strict（push:configure 专属；broadcast 维持 fail-closed，只认 claims/breakglass）
+//    ——本 API 是服务到服务边界，operator 身份来自 plugin 可信注入（body.userId），
+//       body 自带的 permissions/claims 一律拒绝（防自授）。U2 casbin 落位后在 ② 处叠加细粒度。
 // ③ run_push 引擎闸兜底
 //
 // POST body: { workflowId, selector, variables?, template? }
@@ -139,8 +143,50 @@ async function checkPushPerm(
   return refreshPerm(userId, perm, claims);
 }
 
+/**
+ * Casdoor 实查（B2 过渡映射）：get_user_perms_strict 非 NULL = active 实人 + 当前持权
+ * （迁移 170，PERMS_INPUT 感知：casdoor 模式下即 Casdoor 权威 perms）。
+ * 返回 JSONB：null = 未知/停用/空基座（拒）；对象 = 持权用户。无配置 → fail-close。
+ * U2 casbin 落位后此层升级为 push:configure/broadcast 细粒度，1 处替换。
+ */
+async function fetchStrictPerms(userId: string): Promise<boolean> {
+  const pgrstUrl = process.env.POSTGREST_URL;
+  const key = process.env.POSTGREST_ANON_KEY || process.env.INSFORGE_API_KEY;
+  if (!pgrstUrl || !key || !userId) return false;
+  try {
+    const resp = await fetch(`${pgrstUrl}/rpc/get_user_perms_strict`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({ p_wecom_id: userId }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) {
+      console.error(`[push] strict perm http ${resp.status}`, userId);
+      return false;
+    }
+    const data: unknown = await resp.json();
+    return data !== null && data !== undefined && typeof data === 'object' && !Array.isArray(data);
+  } catch (e) {
+    console.error('[push] strict perm check failed:', userId, e instanceof Error ? e.message : e);
+    return false; // fail-close
+  }
+}
+
 async function refreshPerm(userId: string, perm: string, claims?: { permissions?: string[] }): Promise<boolean> {
-  const result = await checkFeaturePerm(userId, perm, claims);
+  // ① claims/breakglass 快路径（feature-perm 单模块收口；claims 仅可信用户 JWT 场景可传。
+  //    B2：本 API 服务边界绝不自 body 读 claims——见 POST 内显式拒绝）
+  let result = await checkFeaturePerm(userId, perm, claims);
+
+  // ② U2 前过渡实查：configure 需实人+当前持权（strict 非 NULL）；
+  //    broadcast 不在此列——危险操作维持 fail-closed，只认 claims/breakglass。
+  if (!result && perm === 'push:configure') {
+    result = await fetchStrictPerms(userId);
+  }
+
   const cacheKey = `${userId}:${perm}`;
   permCache.set(cacheKey, { result, fetchedAt: Date.now() });
   return result;
@@ -228,13 +274,41 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 });
   }
 
+  // B2 加固：拒绝调用方自报 claims/permissions/role（自授予）。人员权限只能由 ② 层
+  // 从可信源（claims 须可信用户 JWT 提供；本服务边界用 strict RPC 过渡实查）得出。
+  if (
+    body &&
+    typeof body === 'object' &&
+    ('permissions' in body || 'claims' in body || 'role' in body || 'roles' in body)
+  ) {
+    return NextResponse.json(
+      { ok: false, error: 'invalid body: permissions/claims/roles not accepted from caller' },
+      { status: 400 },
+    );
+  }
+
   // ===== Sub-routes: list_variables / create_workflow / list_workflows =====
-  if (body.action === 'list_variables') {
-    try {
-      const vars = await listPushVariables();
-      return NextResponse.json({ ok: true, variables: vars });
-    } catch (e) {
-      return NextResponse.json({ ok: false, error: String(e instanceof Error ? e.message : e) }, { status: 502 });
+  // B4：子路由同样需要人员身份 + push:configure（operator 身份必填，同触发路径）
+  if (body.action === 'list_variables' || body.action === 'list_workflows') {
+    const operatorId = (body as Record<string, unknown>).userId as string || '';
+    if (!operatorId) {
+      return NextResponse.json({ ok: false, error: 'userId required (operator identity)' }, { status: 400 });
+    }
+    if (body.action === 'list_variables') {
+      try {
+        const vars = await listPushVariables();
+        return NextResponse.json({ ok: true, variables: vars });
+      } catch (e) {
+        return NextResponse.json({ ok: false, error: String(e instanceof Error ? e.message : e) }, { status: 502 });
+      }
+    }
+    if (body.action === 'list_workflows') {
+      try {
+        const workflows = await listNovuWorkflows({ tag: 'push-admin' });
+        return NextResponse.json({ ok: true, ...workflows });
+      } catch (e) {
+        return NextResponse.json({ ok: false, error: String(e instanceof Error ? e.message : e) }, { status: 502 });
+      }
     }
   }
 
@@ -242,9 +316,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!body.workflowName) {
       return NextResponse.json({ ok: false, error: 'workflowName required' }, { status: 400 });
     }
-    // ② 鉴权：push:configure
-    const userId = body.selector?.ids?.[0] || 'unknown';
-    const hasConfigPerm = await checkPushPerm(userId, 'push:configure');
+    // ② 鉴权：push:configure（B3：operator 身份必须来自 body.userId，绝不用 selector.ids 猜）
+    const operatorId = (body as Record<string, unknown>).userId as string || '';
+    if (!operatorId) {
+      return NextResponse.json({ ok: false, error: 'userId required (operator identity)' }, { status: 400 });
+    }
+    const hasConfigPerm = await checkPushPerm(operatorId, 'push:configure');
     if (!hasConfigPerm) {
       return NextResponse.json({ ok: false, error: 'permission_denied', detail: 'push:configure required' }, { status: 403 });
     }
@@ -255,15 +332,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         tags: ['push-admin'],
       });
       return NextResponse.json({ ok: true, workflow });
-    } catch (e) {
-      return NextResponse.json({ ok: false, error: String(e instanceof Error ? e.message : e) }, { status: 502 });
-    }
-  }
-
-  if (body.action === 'list_workflows') {
-    try {
-      const workflows = await listNovuWorkflows({ tag: 'push-admin' });
-      return NextResponse.json({ ok: true, ...workflows });
     } catch (e) {
       return NextResponse.json({ ok: false, error: String(e instanceof Error ? e.message : e) }, { status: 502 });
     }
@@ -364,6 +432,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const url = new URL(req.url);
   const action = url.searchParams.get('action') || 'list_workflows';
+
+  // B4：GET 子路由同样按人员身份鉴权（?userId= 必填 + push:configure）
+  const operatorId = url.searchParams.get('userId') || '';
+  if (!operatorId) {
+    return NextResponse.json({ ok: false, error: 'userId required (operator identity)' }, { status: 400 });
+  }
+  const hasConfigPerm = await checkPushPerm(operatorId, 'push:configure');
+  if (!hasConfigPerm) {
+    return NextResponse.json({ ok: false, error: 'permission_denied', detail: 'push:configure required' }, { status: 403 });
+  }
 
   try {
     if (action === 'list_variables') {
