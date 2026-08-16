@@ -1,0 +1,21 @@
+{
+  "name": "openclaw-plugin-push-admin",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Push admin plugin — create/list Novu workflows, schedule recurring pushes, and trigger one-time pushes via structured selector. Three-layer auth (service JWT + user perms + engine guard).",
+  "files": [
+    "dist",
+    "skills",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "openclaw": ">=2026.5.17"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}

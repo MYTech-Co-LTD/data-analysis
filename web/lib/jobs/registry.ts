@@ -10,6 +10,8 @@ import { dimCustomerManifest } from './dim-customer/manifest';
 import { monitorManifests } from './monitor/manifest';
 import { qaFullManifest } from './qa/manifest';
 import { dailyReconcileManifest, sourceReconcileManifest } from './reconcile/manifest';
+import { permShadowManifest } from './perm-shadow/manifest';
+import { pushContractManifest } from './push-contract/manifest';
 import { targetCloseManifest } from './target-close/manifest';
 import { thinSyncManifest } from './thin-sync/manifest';
 import { driftReportManifest } from './thin-sync/drift-manifest';
@@ -24,6 +26,8 @@ export const JOBS: JobManifest[] = [
   sourceReconcileManifest,
   targetCloseManifest,
   qaFullManifest,
+  permShadowManifest,
+  pushContractManifest,
   thinSyncManifest,
   driftReportManifest,
   ...monitorManifests,

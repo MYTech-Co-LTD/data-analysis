@@ -48,12 +48,22 @@ module.exports = async function (req) {
     if (!accessToken) return json({ error: "failed_to_get_casdoor_token", detail: tokenData }, 502);
 
     // 2. userinfo → sub(wecom_id;依赖 provider 配了 Use id as name)
+    //    Casdoor userinfo 可能含 roles（string[]）：用户在 Casdoor 中分配的角色码。
     const userRes = await fetch(`${issuer}/api/userinfo`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const userData = await userRes.json();
     const wecomUserId = userData.sub;
     if (!wecomUserId) return json({ error: "failed_to_get_wecom_id", detail: userData }, 401);
+
+    // 2b. 提取 roles claim（Casdoor JWT userinfo 可能含 roles 字段）
+    //     兼容 string[] / string / 缺失三种情况，统一为 string[]
+    let casdoorRoles = [];
+    if (Array.isArray(userData.roles)) {
+      casdoorRoles = userData.roles.filter((r) => typeof r === "string" && r.length > 0);
+    } else if (typeof userData.roles === "string" && userData.roles.length > 0) {
+      casdoorRoles = [userData.roles];
+    }
 
     // 3. 查 org_users 拿部门/姓名(只读,不 upsert)。
     //    org_users 由企微通讯录同步(App B 回调 + 每日全量)独占维护,登录不写,避免双写不一致。
@@ -67,6 +77,17 @@ module.exports = async function (req) {
       .eq("wecom_id", wecomUserId).single();
     const departmentIds = user?.department_ids || [];
     const userName = user?.name || wecomUserId;
+
+    // 3b. 登录写穿镜像：Casdoor roles → org_users.role_codes（Task 13 M-1 镜像列）
+    //     casdoor_writer='auto' 时由登录写穿；'manual' 时跳过（防手工配置橡皮擦，169 设计语义）
+    if (casdoorRoles.length > 0) {
+      try {
+        await client.database.from("org_users").update({
+          role_codes: casdoorRoles,
+          casdoor_synced_at: new Date().toISOString(),
+        }).eq("wecom_id", wecomUserId).eq("casdoor_writer", "auto");
+      } catch (e) { console.error("role_codes mirror write failed", e); }
+    }
 
     // 4. get_user_perms(复用 wecom-oauth 同款直连 postgrest)
     //    直连 postgrest（绕过 SDK/网关）：运行时 SDK 无 database.rpc，网关无 /rest/v1 路由(404)。
@@ -88,6 +109,15 @@ module.exports = async function (req) {
     //    claim 八字段从 perms 读，缺字段兜底保证旧用户/新用户都能登录：
     //      role_code=null（前端再走默认）、四维默认全权 ['*']、
     //      can_see_cost=false（敏感默认拒绝）、UI 默认值最小可用。
+    //    Task 13 新增两键（additive，不破坏旧逻辑）：
+    //      roles: Casdoor 角色码数组（前端可用作条件渲染）
+    //      permissions: get_user_perms 返回的四维 key 列表（pgrst_pre_request 平铺后 RLS 可读）
+    const permKeys = [];
+    if (perms.branch_nums) permKeys.push("branch_nums");
+    if (perms.brands) permKeys.push("brands");
+    if (perms.categories) permKeys.push("categories");
+    if (perms.can_see_cost) permKeys.push("can_see_cost");
+
     const now = Math.floor(Date.now() / 1000);
     const jwt = await signJwt({
       sub: wecomUserId,
@@ -101,6 +131,8 @@ module.exports = async function (req) {
       default_landing: perms.default_landing || "/",
       default_metric: perms.default_metric || "sale",
       visible_panels: perms.visible_panels || [],
+      roles: casdoorRoles,             // Task 13: Casdoor 角色码（string[]）
+      permissions: permKeys,           // Task 13: 已授权维度 key 列表（additive）
       iss: "casdoor-oidc",
       iat: now,
       exp: now + 7 * 86400,
