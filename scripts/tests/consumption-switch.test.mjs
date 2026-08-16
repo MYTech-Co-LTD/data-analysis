@@ -11,6 +11,11 @@
 //      输出仅剩被测 SELECT 的单行结果；
 //   ③ dev 库无业务数据（targets/dim_* 全空）→ 事务内 seed 最小 fixture，ROLLBACK 自动清理
 //      （零残留、可重复跑，不依赖环境数据）。
+//   ④ T19 后视图行过滤 = scope_match_v2（185 终版语义）：data_scope 维度段缺失（旧形状令牌）
+//      = deny → 空视图。fixture claims 须为新形状全维令牌（claims.js B1「三维恒存在」）：
+//      brands 用值匹配 '3120' 对齐 fixture 品牌（兼测 value 匹配分支），branch_nums/categories
+//      用通配。缺段修复前第 1/3 例在空视图上空洞通过（count=0 恒真），已加「行过滤放行」
+//      前置断言恢复断言力。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
@@ -37,20 +42,31 @@ INSERT INTO report_daily_delivery(biz_date, system_book_code, branch_num, catego
 const withClaims = (claims, sql) => PSQL(
   `BEGIN; DO $$ BEGIN PERFORM set_config('request.jwt.claims', '${JSON.stringify(claims).replace(/'/g, "''")}', true); END $$; ${FIXTURE} ${sql}; ROLLBACK;`);
 
+// 新形状全维 data_scope（T19/185 后行过滤 scope_match_v2 的放行前提）：brands 值匹配 '3120'
+// = fixture 事实行的 system_book_code；branch_nums/categories 通配。三维缺一 = 旧形状令牌 = deny。
+const SCOPE = { branch_nums: ['*'], brands: ['3120'], categories: ['*'] };
+
 test('红→绿：fields.cost 缺失（无 fields 段）→ 全掩（安全方向不依赖单处 CASE）', () => {
-  const r = withClaims({ sub: 'shanhai/test', data_scope: { branch_nums: ['*'] } },
+  const claims = { sub: 'shanhai/test', data_scope: SCOPE };
+  const total = withClaims(claims, `SELECT count(*) FROM report_item_breakdown_gen`);
+  assert.notEqual(total, '0');   // 前置：行过滤放行 fixture 行（brands 值匹配）——防空视图把掩码断言空洞化
+  const r = withClaims(claims,
     `SELECT count(*) FROM report_item_breakdown_gen WHERE sale_profit IS NOT NULL OR delivery_profit IS NOT NULL OR wholesale_profit IS NOT NULL OR outbound_profit IS NOT NULL`);
   assert.equal(r, '0');   // 四个成本基列全 NULL（fields 段缺失 = 不见成本，新令牌安全方向）
 });
 
 test('红→绿：fields.cost=true → 成本列可见', () => {
-  const r = withClaims({ sub: 'shanhai/test', data_scope: { branch_nums: ['*'] }, fields: { cost: true } },
+  const r = withClaims({ sub: 'shanhai/test', data_scope: SCOPE, fields: { cost: true } },
     `SELECT count(*) FROM report_item_breakdown_gen WHERE sale_profit IS NOT NULL AND outbound_profit IS NOT NULL`);
   assert.notEqual(r, '0');
 });
 
 test('血缘：margin/rate 类衍生列随基列 NULL（非独立产出）', () => {
-  const r = withClaims({ sub: 'shanhai/test', data_scope: { branch_nums: ['*'] } },
+  const claims = { sub: 'shanhai/test', data_scope: SCOPE };
+  const flowed = withClaims(claims,
+    `SELECT count(*) FROM report_brand_metric_gen WHERE delivery_amount > 0 AND delivery_profit IS NULL AND delivery_margin IS NULL`);
+  assert.notEqual(flowed, '0');  // 前置：fixture 配送行穿过行过滤（delivery_amount>0）且成本列被掩——空视图/行过滤误拒在此爆红
+  const r = withClaims(claims,
     `SELECT count(*) FROM report_brand_metric_gen WHERE delivery_profit IS NULL AND delivery_margin IS NOT NULL`);
   assert.equal(r, '0');   // cost 被掩则 margin 必 NULL——inner CTE 漏掩在此爆红
 });
