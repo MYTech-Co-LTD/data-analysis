@@ -15,7 +15,7 @@
 > |---|---|---|
 > | 非目标 #3 | 行级数据权限留在本地 `data_permissions`，永不进 IdP | **三分流上收**：静态枚举（品牌/品类/字段）→ Casdoor resource + Group；`data_permissions` sunset（§5.2） |
 > | 架构③ 座位层 | 企微通讯录 → `org_departments` → `org_users.department_ids` | **Casdoor Group tree 中心化**，本地表降级只读投影（§5.3） |
-> | 非目标 | claims 八字段 / `pgrst_pre_request` 执行点零改动 | **claims 增加** `groups/data_scope/fields/catalog_v`（§5.4）；执行点 PGRST 行过滤/列掩码机制不变，仅消费新 claim 段；**四维旧 key additive 双氧，W6 前不删**（B6） |
+> | 非目标 | claims 八字段 / `pgrst_pre_request` 执行点零改动 | **claims 增加** `groups/data_scope/fields/catalog_v`（§5.4）；执行点 PGRST 行过滤/列掩码机制不变，仅消费新 claim 段；**四维旧 key additive 双氧，W6 前不删**（B6）；**列掩码消费位收口 = 非生成器运行时层**（"生成器零改动"改述为"生成器只接受 catalog 驱动输入"，H7，见 §5.7） |
 > | **新增第 4 条** | 功能授权真相源 | **功能能力点真相源 = catalog 驱动（代码）+ casbin Permission(resource) + 同步 adapter**；Casdoor UI 手配仅限 catalog ∪ `*` 内，非 catalog key 被校验器 fail-close（08-15 的「Casdoor UI 自由配置」面收窄为 catalog 驱动，契约 F7） |
 
 ---
@@ -41,7 +41,7 @@
 
 ## 全局约束
 
-继承 08-15 全部（门店键铁律、部署规则、时区、C1-C9、WIP=1、语义层零改动）。新增六条：
+继承 08-15 全部（门店键铁律、部署规则、时区、C1-C9、WIP=1、语义层零改动——后者在 §5.7 列掩码处按 H7 改述为"生成器只接受 catalog 驱动输入"，消费位收口在非生成器运行时层）。新增六条：
 
 1. **Group 同步器是唯一自写组件**：Casdoor 原生 wecom syncer 同步用户（源码验证）；`GetOriginalGroups/GetOriginalUserGroups` 返回空带 TODO（`object/syncer_wecom.go`）→ 组织/群组上收必须自写一个组同步器（范围仅此一处，不 fork）。
 2. **resource 注册走 Casdoor 原生 API**：`POST /api/add-resource` / `GET /api/get-all-objects`（casbin_api.go 已源码验证）；data-analysis 只写同步 adapter 调之，不 fork 不 hack 存储。
@@ -49,6 +49,11 @@
 4. **授权组（view-group）是派生对象**：`data-analysis:view-group:<name>` 展开为成员 `view:*` 判定，映射定义在 data-analysis（catalog 内），不复制进 Casdoor policy（Casdoor 只看到组名 resource）。
 5. **catalog 单真相纪律（H12，与生成器铁律同级，须写入 CLAUDE.md）**：`capabilityCatalog` 只存在于 `web/lib/capability-catalog.ts` 单副本；function（claims 构建器）**只消费不内嵌复制** catalog 子集——function-only 部署（SSH 直调，CLAUDE.md 部署规则）会绕过 catalog scan 制造漂移副本，属违规。新增视图/路由只改 web/lib；claims 构建器永远从 web 侧契约快照/实查读 catalog 判定。
 6. **空集 = deny 铁律（B1）**：claims 含 `data_scope`/`groups` 段但值为空 = 授权确定为 ∅ = deny，**不收敛 `["*"]`**。08-15「空数组 → `["*"]` 数据维兜底全放行」仅限 legacy（无新 claim 段的旧 claims 双氧期）——W4 消费侧切走后必须移除；任何挂组缺失（JIT 建户未挂组/组同步器失败/唯一组被删/组接口超时）→ 该用户门店范围为空集，**不进全放**，这与「门店未登记 → 单门店 fail-close 不可见」互补覆盖「用户无组」侧。
+  - **★enforce 机制（redteam-lite M1 补封，上轮 BLOCKER C1 的机制复发点）**：`claim_match_or_star`（072 L161-177）**空数组/NULL 即放行**、现有 RLS 全经它读顶层旧 key、114 只扁平顶层 → 空集 deny 不能靠这两者执行。两处闭口联合钉死：
+    ① **RLS 策略分支（推荐）**：新 RLS 判定函数先看 `request.jwt.claims.data_scope` 形状——存在（非 NULL；114 会按顶层对象扁平 data_scope，RLS 可 `::jsonb ->>'branch_nums'` 定位、以 IS NOT NULL 区分新旧 claims）→ 读 data_scope 各维（**空段 = deny**）；缺失 → 回退 legacy 顶层 key（走 claim_match_or_star）。分支本身即新旧 claims 的**形状鉴别器**，与 072 语义天然隔离；W4 切走只需删回退支。
+    ② 备选哨兵方案：新 claims 顶层旧 key 写非空非 `"*"` 哨兵 `["__none__"]`（072 对非 `"*"` 非空数组返回 false = deny）——但 W4 后需清哨兵值，不如策略分支干净。
+    **两案实施时二选一钉死（推荐 ①，终审勾确认）；W3 前置必改，否则「W3 切换后零组/挂组失败用户 → 新 claims 空 data_scope 但旧路径 072 全放 → 读全部门店」路径可被遵循文本实现出来。**
+  - **豁免窗口（redteam-lite S4）**：legacy 空数组→全放仅限无 data_scope 段的旧形状令牌；W3 起新签发带 data_scope 的令牌一律走空集 deny。W3 后仍在途的旧形状令牌给显式短 TTL（≤48h，随 catalog_v 版本戳刷新会话）压缩宽松窗口。
 
 ## 架构（全景）
 
@@ -133,6 +138,13 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
 ② 自动发现脚本 → catalog 草案（即使忘了手工登记也会被捕获）
      ★删除方向（H14）：此闭环只增不减，下架不自动撤销——删除走「人工确认的废弃清单」
        → 校验器对该 key fail-close + 告警；辅助页展示废弃态；审计「授权对象仍引用废弃 key」项
+       ▲废弃清单生命周期（redteam-lite M2）：载体 = catalog 内 deprecated 集合（app 侧唯一真相，
+         不入 Casdoor）；owner = 平台管理员；deprecated → removed 驱逐判据 = 清单发布 ≥30 天 ∧
+         审计确认无「具名 + 通配」引用 ∧ cron 对账红区清零，由平台管理员执行并留痕。
+       ▲通配残余（M2）：持 `view:*`/`brand:*`/`category:*` 的角色对已下架 key **保留能力直至改
+         permission**——解析期校验（§5.4 catalog_v 判定）只挡具体点名 key，`view:*` 本身 ∈
+         catalog ∪ "*" 合法通过。此残余显式声明为已知接受；审计「仍引用废弃 key」排查项必须含
+         **通配持有者列表**（引用的是 `*` 非具名 key，普通按 key 审计显示不出）。
 ③ 部署钩子（GHA step）+ cron 对账（15min）双通道 → add-resource 差集同步
      → Casdoor resource 表 / getAll-objects 出现新条目（原生机制）
      ★adapter 幂等与怪癖（H3）：add-resource = 裸 Insert（PK=owner+name，重复即报错；
@@ -169,7 +181,11 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
 
 - **不 resource 化门店的理由**（钉死）：policy 行数 = 门店数 × 授权组合数，每开新店要 add-resource + 重挂权限——resource 表达的是"能力点"，门店是"过滤值"，两者语义不同（08-15 已论证 casbin 无 policy→SQL）。
 - **例外表语义**：`temporary_grants(user_id, dim, value, expires_at, note)`——IAM 无到期语义（Casdoor 角色无过期），这是 app 侧唯一授权数据；授权中心 UI 维护。
-  - **不走 JWT 折叠（B5，废除 rev1 的「折叠进 claims exp min(7d, grant)」）**：例外是风险最高通道且行数极少，middleware/实查段 **RT 查 temporary_grants**（裁决-1「临时授权类 5min 实查 + fail-close + 24h stale」保留）——撤销即刻生效，贴合「例外在 app 侧」定位。备选（若 RT 查不可行）：例外单独短 TTL(≤24h) 折叠 claims + 镜像列 `revoked_at` + 批量 enforce 通道清理；至少显式声明并接受「解除 ≤7 天生效」。**选型：RT 查（默认），实施时以裁决-1 实查机制复用为准。**
+  - **不走 JWT 折叠（B5，废除 rev1 的「折叠进 claims exp min(7d, grant)」）**：例外是风险最高通道且行数极少，实查段做 **5min 缓存实查 temporary_grants**（命名钉死 = TTL 缓存，非每请求 DB 查询）——撤销 ≤5min 生效（健康态），贴合「例外在 app 侧」定位。
+    - **三处粒度统一（redteam-lite M3）**：正文「即刻生效」/ 测试「≤5min」/ 降级「24h stale」口径冲突 → 统一为「**健康态撤销 ≤5min 生效；降级态（Casdoor 不可达）沿用裁决-1 24h stale 上限**」。temporary_grants 是**本地表**，裁决-1 的「24h stale」是为远端实查设计的——**本地查的降级 = DB 不可达 → fail-close（等同无例外，见错误处理表），不产生 24h 窗口**。
+    - **缓存主动失效（M3）**：授权中心 UI 撤销/删除例外时**同步清该 sub 的例外 RT 缓存**（TTL 立即作废），不靠 TTL 兜底；H16 的 token_blacklist 是数据面 JWT 黑名单，**不是例子缓存失效通道**，两者分开。
+    - **RT→RLS 通道（M3，防实现倒退回折叠=重开 B5）**：例外门店集经 `pgrst_pre_request` **每请求并集进 request.jwt.claims**（新增专用 claim 段），天然覆盖 PostgREST 全通道（含直连 SQL/联邦查询）；middleware 快判同源。**禁止登录时折叠进 data_scope / 旧四维 key**——那会重现 7 天撤销窗口（B5 原样回归）。
+    - 备选（若实查不可行）：例外单独短 TTL(≤24h) 折叠 claims + 镜像列 `revoked_at` + 批量 enforce 通道清理；至少显式声明并接受「解除 ≤7 天生效」。**选型：RT 查（默认），实施时以裁决-1 实查机制复用为准。**
   - **例外授予面门禁（M4）**：授/撤例外需 `data-analysis:grant`-类 capability + 全量进 permission-audit + 单次授额上限（一店/维度到期天数上限）+ 双人复核可选配置；防「app 侧自授读店」通道。
 - **data_permissions sunset**：迁移窗口内表保留（回滚保险）；**DB 级写入口关闭**（H9）：迁移级 `REVOKE`（refresh RPC、/api/admin/permissions 等全部写者）或 `BEFORE INSERT/UPDATE` 触发器禁写 + **直写注入测试（红转绿才放行）**——管理页只读仅是 UX 层表现，不等于单写者；U2 后按 sun set 删除（含 167 的 role/dept 行读路径删除）。**保留迁移 167 可回滚**。
 
@@ -192,7 +208,7 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
   - 部门树：企微 webhook / 03:17 全量 → upsert（企微通讯录部门）。
   - **门店树：由 diff(dim_branch vs maps_branch_group vs Group 树) 驱动，不挂在企微 webhook**——门店在企微未必有部门，企微通知到不了新店/改名；改名 = 新名 upsert + 旧名摘挂/标 deprecated。两通道命名空间分离防互串。
   - 建树强制**先父后子**（H1）：`ParentId` 存父 Name，父子链任一断裂（重命名/中断/先子后父）会触发原生 `GetUserFullGroupPath` return error → **该组内所有用户 JWT 签发失败、登录崩**。→ 每日父链完整性校验 + 组树完整性指标（辅助页亮灯，fail 告警）。
-  - 删除限于"同步器建的组"（原生 Group 有子组/挂用户即拒删；门店停用 = isEnabled=false + 摘挂 + Properties 打标，非真删）；用户挂组：企微 dept→auto 挂组 + Casdoor 人工补挂（manual）。单写者语义对齐 08-15 §4.5。
+  - 删除限于"同步器建的组"（原生 Group 有子组/挂用户即拒删；门店停用 = isEnabled=false + 摘挂 + Properties 打标，非真删——**这两条原生行为列入 V2 源码验证**）；用户挂组：企微 dept→auto 挂组 + Casdoor 人工补挂（manual）。单写者语义对齐 08-15 §4.5。
   - **审计归因（H15）**：同步器写操作带「自动化」标记，与 Casdoor UI 人工勾挂区分；admin 自挂/挂改 store 叶子组 = 高风险事件 → 接入告警 + 审计快照。
 - **groups 投影 schema（F9）**：写穿镜像给 `org_users.groups`（或等价投影列/表），供无会话路径（run_push 逐人 perms、agent-query/preview）算门店行；对账/排障读它。
 - **org_departments 双源切换（L3）**：只读切换期内，152/refresh 与权限页 dept tab 读路径若仍读旧列 → 双源显示不一致——W 轴切前列该等消费点清单（087 先例），统一指向投影。
@@ -224,6 +240,12 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
                                                     //   再示例相对时长——照抄会签发已过期 token，L1）
   // 双氧期（B6）：branch_nums/brands/categories/can_see_cost 顶层旧 key 【保留】，data_scope/fields 仅新增
   //   消费；W6 sunset 前不删旧 key——否则 114 顶层扁平化下旧 key 变 NULL → 既有 RLS 静默全放（回归修复前）
+  //   ★值判据（redteam-lite M1，W3 前置必改）：新 claims 顶层旧四维 key 的值 = 全维非空镜像（与
+  //   data_scope 一致的收敛值）；RLS 以 data_scope 段存在性为形状鉴别器优先读 data_scope（空=deny）、
+  //   缺失回退 legacy（全局约束 6 策略分支）。禁止在新 claims 里把顶层旧 key 写空数组/省略——
+  //   072 空数组/NULL→true 全放（策略分支方案下旧 key 值仅剩兼容展示/审计用，判定不读它）
+  // 契约演进（contract 复验）：08-15 §5.2a 四维 scope 签名 schema（canonical JSON）随 data_scope/fields
+  //   变形的演进形态 = 本块新结构；旧签名消费点（perm.ts scope-signature）同 W3 迁移清单（见 H5 保留、H7 清单）
 }
 ```
 
@@ -234,6 +256,8 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
   - 例外表 **RT 查，不折叠进 claims**（B5）。
 - **不改变执行点**：PostgREST 行过滤仍读 claim（pgrst_pre_request 扁平化，迁移 114 机制复用）；新增 groups 过滤 + fields 掩码照 `perm.ts` 模板写法扩展。**双氧期内旧顶层 key 继续被 114 扁平，新旧 claim 段并存消费**（B6）。
 - **catalog_v 校验（钉死）**：`catalog_v` = 代码/部署版本戳（部署/迁移时递增，非运行时自增计数）：只做「该具体 key 在 claims 内、但当前 catalog 已移除」的 **key 级按需 fail-close**（高下能力下架 + 旧 claims 引用该 key → 拒绝 + 提示重新登录）；**不做全局版本拒绝**（任一次 catalog 变更全员被锁 = 可用性事故）。判定方向 = `claim.catalog_v == server.catalog_v` **且** `每 key ∈ catalog ∪ deprecated` 双校验（回滚场景：代码回滚 → 版本戳降 → 高版本 claims 靠 key 存在性双校验兜底，不做序比较）。实查段以活查为准，`catalog_v` 仅离线快判/审计（判定序 = 与实查成 AND，禁止实现成 OR 绕过实查，F10）。
+  - **快/慢路径防误读（redteam-lite M3.5）**：`==` **恒定真 → 跳过逐 key 校验（快路径）；否则逐 key ∈ catalog ∪ deprecated（慢路径）**——`==` 失败**不是拒绝条件**，只是降级到慢路径；实现把 `==` 当硬前置 = 任一 catalog 变更即全员锁死（可用性事故）。
+  - **解析期校验（redteam-lite M2）**：请求具体 view K 时，claims 内通配（`view:*` 等）展开匹配后的**具体 key 仍须 ∈ catalog ∪ deprecated**，否则 fail-close——key 级 fail-close 从「claim 条目粒度」降为「解析结果粒度」，堵住「K 已被驱逐但持通配者照常可用」；这同时覆盖通配对下架能力的残余（见 §5.1 通配残余）。
 
 ### 5.5 授权组 view-group（易用层，细粒度的副作用治理）
 
@@ -276,17 +300,6 @@ viewGroups: {
 | 临时例外 | **temporary_grants RT 实查**（裁决-1 5min） | 授权中心 |
 
 > **H7 列掩码消费位（redteam H4+H5）**：掩码禁止落在生成器模板内写死（现状 tier1.ts `maskCost`、hierarchy.ts 505-528 读 `request.jwt.claims.can_see_cost` 属技术债——基线做好准备、此处收口）：新增敏感字段 = catalog 加 `field:<slug>` + 掩码由**非生成器运行时层**（视图外包装/查询改写）消费，或把「生成器不动」改写为「生成器只接受 catalog 驱动输入」。`can_see_cost → fields.cost` 迁移时列消费点清单（生成模板 4 处 + push scope-signature + render），同一 PR 迁移 + 契约快照断言「无 fields 段 → 全掩」（安全方向不得依赖单处 CASE 不漏）。QA 断言扩为**衍生列血缘断言**（margin/rate 类全部随基列 NULL 传播，防 inner CTE 单独产出再外层投影漏掩）。
-
-### 5.7 执行端消费（盘点收口，禁散落判断）
-
-| 面 | 判定 | 数据源 |
-|---|---|---|
-| 页面可见（middleware） | `data-analysis:view:*` claims/catalog 校验 | 快判（软门禁） |
-| admin 管理台 | `data-analysis:admin`（08-15） | requireAdmin + 实查兜底（裁决-1） |
-| 报表行过滤 | `groups`+`data_scope.branch_nums` → RLS | PostgREST 行策略（复用） |
-| 列掩码 | `fields.cost` → 整列 NULL | 视图模板（perm.ts） |
-| push 广播/配置 | `push:broadcast`/`push:configure`（08-15） | 引擎闸 + 实查 |
-| 临时例外 | `temporary_grants` 折叠进 claims | 授权中心 |
 
 ### 5.8 对账与回滚
 
@@ -364,7 +377,7 @@ Casdoor OIDC → callback → 拉 roles(get-user) + 组读取(原生 token group
 
 ## 测试
 
-（分层按 docs/testing-handbook.md §2；渗透清单 T1-T15 继承，新增组目录类。**每条标 W 归属 + 首部红/绿**——测试先行纪律可审计，S5。）
+（分层按 docs/testing-handbook.md §2；渗透清单 T1-T11 继承（08-15 至 T11，勘误），新增组目录类。**每条标 W 归属 + 首部红/绿**——测试先行纪律可审计，S5。）
 
 - **[W1·红→绿]** catalog 校验器：合法 key / `*` / 未知 key 拒绝（单测红绿）
 - **[W1·红]** 废弃 key（人工废弃清单）→ fail-close + 告警（H14）
@@ -373,12 +386,13 @@ Casdoor OIDC → callback → 拉 roles(get-user) + 组读取(原生 token group
 - **[W1·绿]** add-resource 同步器：幂等（重跑 no-op）；diff 空（对账 exit 0）；**name `/` 前缀归一前后一致性**（H3）
 - **[W1·绿]** add-resource 并发/重复插入 → retry + 吞 duplicate（红→绿，双通道不撞 PK）
 - **[W2·绿]** 组类型三态展开：门店叶子直映 / 区域组子孙叶子并集 / 部门组不展开 + 未知组类型 fail-close（H13）
+- **[W2·绿]** 独立期望源「人→门店」成员级差异对账：注入错挂（门店映射到另一区域）→ 分级告警（H10，W2 退出判据配套）
 - **[W2·红]** 父链断裂 → 完整性指标 fail + JWT 签发拒绝（H1）
 - **[W2·绿]** Group 挂 Role 继承行为契约测试（冻结 R10，条目格式与 user.Groups 完全一致）
 - **[W2·绿]** groups 投影（org_users.groups）写穿 → run_push/agent-query 无会话路径可读门店行（F9）
 - **[W3·红]** claims 契约快照：新增 groups/data_scope/fields/catalog_v + **保留 08-15 八字段 + role_code/visible_panels（H5）+ push 裸 key（H4）**（V2 升级）
 - **[W3·红]** permissions claim 迁移：四维维度 key → `data-analysis:*` 资源串（B2）后 admin 判定不再依赖 BREAKGLASS
-- **[W3·红]** 双氧期：新 claims 含 data_scope 空段但保留顶层旧 key → RLS 不静默全放（B6/B1）
+- **[W3·红]** 双氧期：新 claims 含 data_scope 空段但保留顶层旧 key → RLS 不静默全放（B6/B1）；机制断言 = 策略分支红转绿：data_scope 存在（空段=deny）优先 / 缺失回退 legacy；顶层旧 key 写空数组/省略形态在 072 空数组→true 路径上的注入测试必须红转绿（M1）
 - **[W3·红]** 空集 deny：data_scope 空数组 → 门店 0 行（不收敛 `["*"]`）（B1）
 - **[W3·红]** 半可达降级：groups 拉取超时 → 登录不产门店范围（deny）或整体失败，非空数组进 claims（C2）
 - **[W4·红]** 门店行过滤：挂组用户可见该门店行；未挂不可见；映射缺失 → 不可见+告警（伪造 claims 参数化，本地）
@@ -386,7 +400,7 @@ Casdoor OIDC → callback → 拉 roles(get-user) + 组读取(原生 token group
 - **[W4·红]** catalog_v：新 version 下持旧 version claims → key 级判定（有下线 key 拒、其余照常）；回滚场景 `==` + key∈catalog∪deprecated 双校验（H6）
 - **[W4·红]** 存量授权回填：逐用户「claims 派生 scope vs 冻结快照」diff=0（白名单 + 非预期差异双清零）（B4/M1）
 - **[W4·绿]** shadow 对账基线：**U2 冻结 legacy data_permissions 快照**、切换瞬间增量 diff=0（M2/B3）
-- **[W4·绿]** 例外 RT 实查：撤销后立即生效（≤5min 实查粒度，B5）；到期不生效
+- **[W4·绿]** 例外 5min 缓存实查：撤销后 ≤5min 生效（健康态；降级态 24h stale 上限仅限远端实查场景，B5/M3）+ 授权中心撤销同步清 sub 缓存 + RT→RLS 经 pgrst_pre_request 并集 claim（直连 SQL 通道同断言，M3）；到期不生效
 - **[W4·红]** 例外交互 cap：无 `data-analysis:grant` → 403；超授额上限 → 拒绝（M4）
 - **[W4·红]** view-group：环引用拒绝（红，S1）；成员变更按声明粒度生效（S1/S2 提前 observe 放量装 shadow 比对）
 - **[W5·红]** DB 级写关闭：data_permissions 直写注入 → 拒绝（红转绿才放行；管理页只读只是 UX，H9/M4）
@@ -408,16 +422,22 @@ W1  catalog + resource 同步 + 校验器（只登记不强制，默认 observe�
     前置：org admin 级同步服务账号 + token 轮换就绪（F7，/api 每请求过 RBAC）
     退出：assert(scan 新增/删除两断言绿) ∧ sync 幂等 ∧ permission.resources-vs-catalog diff 已上线(无红)
 W2  Group 同步器 + maps_branch_group + groups claim（先只写不读，影子对账）
-    退出：影子对账 7 天白名单外 diff=0（人工挂组进白名单）∧ 父链完整性指标 7 天 0 告警
-          ∧ 独立期望源「人→门店」成员级对账上线（H10 出口判据）
+    退出：影子对账 7 天白名单外 diff=0（人工挂组进白名单；白名单条目 = 人工审批 + 审计留痕）∧
+          父链完整性指标 7 天 0 告警 ∧ 独立期望源「人→门店」成员级对账**收敛**——白名单外
+          diff=0 连续 ≥7 天才算通过（H10/M4：只上线不算数；映射就绪态须与 072 语义核对后方可切）
+          ∧ 分级红黄依据挂 08-15 C/E/M 定义（W1「无红」同引用）
 W3  claims 契约扩展（data_scope/fields/catalog_v + permissions 资源串迁移 B2 + 双氧保留）+ catalog_v 版本戳
     ——与 U2 登录切换同一发布窗（避免双次登录链路改版）
-    退出：契约快照测试全绿（含保留字段 H5、空集 deny B1、半可达 deny C2）；batch-enforce 重建不触空集
+    退出：契约快照测试全绿（含保留字段 H5、空集 deny B1、半可达 deny C2）；batch-enforce 重建**前后
+          逐用户 claims 派生 scope diff=0**（授权 ∅ 用户除外；检测器 = 任一维缺失即报红，M4）；
+          空集 deny 机制（RLS 策略分支）[W3·红]测试 红转绿（M1）∧ 旧形状令牌短 TTL ≤48h 生效
 W4  存量授权回填 + 静态枚举 resource 化 + 消费侧切 + shadow 对账
     回填（B4/M1）：品牌/品类按角色或用户勾 Casdoor resource；门店集合批量挂组（批量推导 + 门店独立核对）；
       cost 例外进例外表（RT 实查）
     退出：回填后逐用户「claims 派生 scope vs 冻结快照」diff=0（白名单+非预期差异双清零）∧
           切行过滤影子对账基线 = U2 冻结 legacy 快照（M2/B3）、切换瞬间增量 diff=0（RT-6：快照到执行变动即作废重走）
+          冻结机制（M4）= 不可变快照表（U2 时点 COPY）+ 冻结哨兵（表级标记防错基线）；W5 写关闭前
+          残留写路径（refresh RPC 等，H9）对 live 表的写**仅告警、不入基线**——对账基线钉死用快照表
 W5  例外表上线 + data_permissions DB 级写关闭（REVOKE/触发器 + 直写注入测试红转绿） + 管理页只读引导；
     授权组 view-group 转正放量（observe 期已在 W4 完成 shadow 比对，S2）
     退出：DB 禁写 + 直写注入拒绝测试绿 ∧ 7 天零缺口报告 ∧ 前置 = PERMS_INPUT=casdoor ≥24h 且 diff=0（F8）
