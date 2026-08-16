@@ -238,7 +238,9 @@ END; $$;
 --    forbid_dp_write=触发器随表删、184 守卫已跳过重建。
 DROP FUNCTION IF EXISTS get_user_perms_legacy(character varying);
 DROP FUNCTION IF EXISTS get_user_perms_casdoor(character varying);
-DROP FUNCTION IF EXISTS claim_match_or_star(jsonb, text);
+-- CASCADE：生产首跑时旧版 report_*_gen 视图仍引用本函数（generated 在迁移之后才重建），
+-- 无 CASCADE 会被依赖挡住使 migrate 中断；视图随后由 database/generated/*.sql 重建为新版（scope_match_v2）。
+DROP FUNCTION IF EXISTS claim_match_or_star(jsonb, text) CASCADE;
 DROP TABLE IF EXISTS data_permissions;
 
 -- ⑤ 输入开关钉死 + sunset 旗标（表不在才执行——演练/回滚窗口表在时不强制；

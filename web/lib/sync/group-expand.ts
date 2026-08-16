@@ -23,7 +23,6 @@ export async function expandGroupsToBranches(groups: readonly string[]): Promise
   });
   const maps = ((mapsResp as { data?: { group_id: string; group_type: string; branch_number: string | null }[] }).data ?? []);
   const byId = new Map(maps.map((m) => [m.group_id, m]));
-  const unknown = groups.filter((g) => !byId.has(g) && !maps.some((m) => m.group_id.startsWith(g + '-') || g.startsWith(m.group_id.split('-').slice(0, 2).join('-') + '-')));
   // 严格判定：组名要么精确命中 maps.group_id，要么作为前缀拥有子孙
   const results = new Set<string>();
   for (const g of groups) {
