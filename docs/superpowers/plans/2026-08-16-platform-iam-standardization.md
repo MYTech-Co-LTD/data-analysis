@@ -2498,3 +2498,20 @@ COMMIT;
 2. **Task 10 期望源落地形态**：库内确无独立人→门店 HR 源（dim_branch/org_users/dim_war_zone 落库核实），按 plan 允许的第二形态落地 = **岗位×考核门店覆盖语义**（期望=dim_war_zone(is_assessed) ⋈ dim_branch(first_level_region)，纯 dim 数据不经 Group 树——H10 底线保住；弱化=只检覆盖不检 per-user 错配，升级路径 HR 源已在 manifest 标注）。触碰面超 brief 4 文件 = 08-15 cron 框架硬要求（manifest 不登记则 cron 不存在，M16）。
 3. **Task 13 跟踪**：CATALOG_V 为构建期内联 env——**Task 6 GHA 钩子必须注入**（未注入恒快路径不锁死但 bump 机制惰性）。middleware `/reports*` view 快判为净新增（基线原无，legacy 页为重定向页无锁死风险）。
 4. **Task 16 信息差记录**：视图层 `claim_match_or_star` 残留（perm.ts 产物 + 9 个 generated/*.sql）——179 注释指 T16 而 brief 只令掩码位。**语义**：新令牌顶层键缺失 → 视图层过滤惰性放行，行级实际由 RLS scope_match_v2 执行（179 已断言策略无残留）——**非安全洞**。归属待人裁：后续切 scope_match_v2 或声明 RLS 足够删之（候选：T19/T20 或独立小任务）。
+
+---
+
+## DW4 实施勘误记录（2026-08-16，review 后回写——gate_7ca79129c030 approve）
+
+1. **Task 20 迁移 185 六处**（reviewer 对 072/170/175 真实 DDL 与 pg_proc 逐条核对成立）：
+   - ③ 钉死守卫改 `to_regclass` DO 块（plan 原 `NOT EXISTS(SELECT 1 FROM data_permissions)` 在冻结期快照 6 行下**永不钉死**、表删后二跑 relation 报错非幂等）；
+   - `system_flags` 无 `updated_at` 列（170 DDL 仅 key/value），plan 版 SET 必报错，删；
+   - 真实签名：`claim_match_or_star(p_claim JSONB, p_value TEXT)` 真身 **(jsonb,text)**（plan 版 DROP (TEXT,TEXT) 恒 miss）；shadow 双副本真身 **(character varying)**；
+   - 残留清点 pg_proc 实际命中 **7 函数**（plan 只提 get_user_perms）：strict 按 plan 重建 casdoor-only、legacy/casdoor 双副本 DROP、freeze_perms 落 sunset 桩、unfreeze/forbid_dp_write 不触表不改；
+   - `167_reverse` 按 **072 真实 DDL** 誊写（`id SERIAL` 非 BIGSERIAL、**故意无 UNIQUE**——注释「允许永久基础+多个临时扩展并存」、含 expires_at；plan 版 `ON CONFLICT(cols)` 在无 UNIQUE 真表必报错）；幂等改「表空才插」；
+   - `get_user_perms` casdoor-only 数据源 plan 未拼写，按既有设计补全：branch_nums = `org_users.groups`(F9) × `maps_branch_group` 展开（与 callback expandGroupsToBranches 同语义、未知组 fail-close）、brands/categories=[]（deny 方向，权威源=登录 claims data_scope）、can_see_cost=temporary_grants 实查。
+2. **casdoor-client.ts 边界注记**：只收 **Casdoor-API 形态** helper（如 casdoorListRoles）；DB 镜像查询（listGroupMemberRoleCodes 期望源=org_users.role_codes）以测试内 PSQL helper 承载（reconcile-catalog.mjs 先例）——放 Casdoor HTTP 客户端正本属架构错位。
+3. **185 ⑤ 守卫 rationale 更正**：④ DROP TABLE 恒先于⑤执行，⑤ 的 to_regclass 守卫是**惰性代码**（永不观察到「表在」）——保留仅为 plan ③ 字面形状，「表在=演练期不强制」语义实际来自演练期不重跑 185（可留可删非实质项）。
+4. **167 §⑥ 顺序依赖**：get_user_perms 函数体未包守卫，post-sunset 全量重放时 167→185 之间短暂存在引用已删表的函数体，185 终版胜出后净态正确——建议后续加注释钉死顺序依赖（沿用 184 先例）。
+5. **consumption-switch.test.mjs 第 2 例红（预存，非 T20 回归）**：真因 = T19 d3c0bf8 行过滤切 `scope_match_v2` 后，fixture 注入 `data_scope:{branch_nums:['*']}` **缺 brands 段** → 终版 deny → view 空（非「view 无 cost 列」）；第 1/3 例因空 view **空洞通过**。修复目标 = fixture claims 补 brands/categories 段对齐新令牌形状（final 前收口）。
+6. **SSH 流程事故（Task 20 worker）**：按 plan Step 5 原文对生产 SSH PUT+清缓存+restart+curl（brief 明令禁做；时序不可证实也无反证；no-op 取证自洽；发现生产库无 W1-W5 → Step 5 改判随 GHA 列车技术上正确）。处置：记正式流程事故；流程修复 = **brief 作派发注入（preamble）或开工 ack 红线**——worker 动任何生产触碰步骤前必须确认 brief 收讫；含 SSH 步骤的 plan 默认「brief 未明示允许即禁做」。
