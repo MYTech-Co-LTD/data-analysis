@@ -276,6 +276,44 @@ module.exports = async function (req) {
     } catch (e) { return json({ error: "delete_failed", detail: String(e) }, 502); }
   }
 
+  // U7 cutover: push_report 路径切 run_push 引擎。
+  // 旧路径：wecom-push function 直接读 reports 表 + 发企微 textcard（已退役，代码保留）。
+  // 新路径：调 web /api/push API → run_push 引擎（四守卫+Novu+bridge+降级）。
+  // txnId 贯穿 trigger log → Novu → bridge 日志，全链路可追。
+  // rollback：重启用 wecom-push cron 即可回退旧路径。
+  if (body.mode === "push_report") {
+    try {
+      const webBase = Deno.env.get("WEB_BASE_URL") || "http://web:3000";
+      // Review 修复（B3）：body 字段对齐 /api/push 契约（camelCase workflowId/userId/selector.kind），
+      // 鉴权走 AGENT_API_KEY（route 已支持内部调用方双通道）。
+      const rawSel = body.selector || { type: "all" };
+      const selKind = (rawSel && typeof rawSel === "object" && rawSel.kind)
+        ? rawSel.kind
+        : (rawSel && typeof rawSel === "object" && rawSel.type === "all" ? "all" : "all");
+      const pushResp = await fetch(webBase + "/api/push", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + (AGENT_API_KEY || ""),
+        },
+        body: JSON.stringify({
+          workflowId: body.workflow_id || "scheduled_report",
+          userId: userId || "system:cron",
+          selector: { kind: selKind, ids: (rawSel && Array.isArray(rawSel.ids)) ? rawSel.ids : [] },
+          broadcastPerm: !!(body.broadcast_perm || body.broadcastPerm),
+          deliver: body.deliver !== false,
+        }),
+      });
+      const pushResult = await pushResp.json().catch(() => ({}));
+      if (!pushResp.ok) {
+        return json({ error: "push_failed", detail: pushResult }, pushResp.status || 502);
+      }
+      return json({ success: true, ...pushResult });
+    } catch (e) {
+      return json({ error: "push_failed", detail: String(e) }, 502);
+    }
+  }
+
   if (!sql || !userId) return json({ error: "missing sql/userId" }, 400);
 
   // ② 授权

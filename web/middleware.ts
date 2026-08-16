@@ -1,7 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { isWecomClient, isMobileDevice } from "@/lib/device";
 import { checkFeaturePerm, decodePermissionsClaim } from "@/lib/feature-perm";
-import { buildCasdoorAuthUrl } from "@/lib/wecom";
 
 export async function middleware(req: NextRequest) {
   const ua = req.headers.get("user-agent")?.toLowerCase() || "";
@@ -45,42 +44,16 @@ export async function middleware(req: NextRequest) {
   return response;
 }
 
-// redirectToCasdoor: 未登录用户统一改跳 Casdoor /login/oauth/authorize。
+// redirectToCasdoor: 未登录用户统一改跳 /auth/start（B1 CSRF 修复，单一入口）。
 //
-// - redirect_uri 与 web/app/auth/callback/route.ts 保持一致（env 优先，回退 origin）。
-// - state = URL 编码的目标路径，callback 回跳用它回到原页。
-// - provider 按 UA 路由：企微内 wxwork → wecom_silent（Silent snsapi）；
-//   PC → wecom_scan（Normal 扫码，需 Task 6 在 Casdoor 配该 provider）。
-// - Casdoor env 未配置（buildCasdoorAuthUrl 返回 ""）→ 回退到旧 /login?next 行为，
-//   保底不让用户卡死。
+// - /auth/start 生成 state nonce + 绑定 httpOnly cookie，再 307 到 Casdoor authorize；
+//   middleware 只负责指路，不重复协商 provider / redirect_uri（防两处漂移）。
+// - targetPath（pathname+search）由 NextRequest.searchParams 编码，不会破坏查询串。
 function redirectToCasdoor(req: NextRequest, targetPath: string): NextResponse {
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-  const origin = `${proto}://${host}`;
-  // 与 auth/callback 一致：env 优先，回退当前 origin。
-  const redirectUri =
-    process.env.NEXT_PUBLIC_CASDOOR_REDIRECT_URI || `${origin}/auth/callback`;
-
-  const ua = req.headers.get("user-agent")?.toLowerCase() || "";
-  // wxwork = 企微客户端内置 UA。wecom_scan 在 Task 6 配置 Casdoor provider 前是占位串，
-  // 那之前 PC 走的 Casdoor 会用其默认登录页（QR/账号），Task 6 后才精确路由到企微扫码。
-  const provider = ua.includes("wxwork") ? "wecom_silent" : "wecom_scan";
-
-  const authUrl = buildCasdoorAuthUrl(
-    redirectUri,
-    encodeURIComponent(targetPath),
-    provider
-  );
-
-  if (!authUrl) {
-    // Casdoor 未配置 → 回退到 /login 兜底页（旧路径）。
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", targetPath);
-    return NextResponse.redirect(url);
-  }
-
-  return NextResponse.redirect(authUrl, 307);
+  const url = req.nextUrl.clone();
+  url.pathname = "/auth/start";
+  url.searchParams.set("next", targetPath);
+  return NextResponse.redirect(url);
 }
 
 async function handleWecomClient(req: NextRequest) {

@@ -74,68 +74,28 @@ describe('GET /users — 列表聚合', () => {
   });
 });
 
-describe('PUT /users — 角色指派', () => {
-  it('role_id=null 恢复 auto，PATCH 成功后落 assign_role 审计（F4）', async () => {
-    fetchMock
-      .mockResolvedValueOnce({ json: async () => [{ role_id: 5, role_source: 'manual' }] })  // 读旧
-      .mockResolvedValueOnce({ ok: true });                                                    // PATCH org_users
+describe('PUT /users — 角色指派（Task 12: role 字段已冻结）', () => {
+  it('role_id 字段冻结 → 409 + 引导文案（spec §4.5a）', async () => {
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: null }));
-    expect((await res.json()).ok).toBe(true);
-    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(url).toContain('org_users');
-    expect(init.method).toBe('PATCH');
-    expect(JSON.parse(init.body as string)).toMatchObject({ role_id: null, role_source: 'auto' });
-    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      action: 'assign_role', subjectType: 'user', subjectId: 'ZhangDuo',
-      before: expect.objectContaining({ role_id: 5, role_source: 'manual' }),
-      after: expect.objectContaining({ wecom_id: 'ZhangDuo', role_id: null, role_source: 'auto' }),
-    }));
-  });
-
-  it('角色指派 role_id 非 null → 校验角色存在后 PATCH（review #3）', async () => {
-    fetchMock
-      .mockResolvedValueOnce({ json: async () => [{ role_id: 5, role_source: 'manual' }] })  // 读旧 org_users
-      .mockResolvedValueOnce({ json: async () => [{ id: 2 }] })                               // 校验 roles 存在
-      .mockResolvedValueOnce({ ok: true });                                                   // PATCH org_users
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 2 }));
-    expect((await res.json()).ok).toBe(true);
-    const [, init] = fetchMock.mock.calls[2] as [string, RequestInit];
-    expect(init.method).toBe('PATCH');
-    expect(JSON.parse(init.body as string)).toMatchObject({ role_id: 2, role_source: 'manual' });
-    expect(writeAuditMock).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ action: 'assign_role' }));
-  });
-
-  it('用户不存在 → 404（防 0 行 PATCH 静默 ok）（review #3）', async () => {
-    fetchMock.mockResolvedValueOnce({ json: async () => [] });   // org_users 无此人
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'Ghost', role_id: null }));
-    expect(res.status).toBe(404);
-    expect((await res.json()).error).toBe('用户不存在，请先同步通讯录');
-    expect(fetchMock.mock.calls.every(([, init]) => !init || init.method === undefined)).toBe(true); // 无任何写
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe('role_frozen');
+    expect(body.message).toContain('Casdoor');
+    expect(body.casdoor_url).toBeDefined();
     expect(writeAuditMock).not.toHaveBeenCalled();
   });
 
-  it('role_id 非真实角色 → 400（review #3）', async () => {
-    fetchMock
-      .mockResolvedValueOnce({ json: async () => [{ role_id: 5, role_source: 'manual' }] })  // 用户存在
-      .mockResolvedValueOnce({ json: async () => [] });                                       // roles 无此行
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 999 }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe('角色不存在或已停用');
-  });
-
-  it('role_id 类型混淆 → 400（review #3）', async () => {
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 'boss' }));
-    expect(res.status).toBe(400);
-  });
-
-  it('PATCH 失败 → 502 且不落审计', async () => {
-    fetchMock
-      .mockResolvedValueOnce({ json: async () => [{ role_id: 5, role_source: 'manual' }] })  // 读旧 org_users
-      .mockResolvedValueOnce({ json: async () => [{ id: 2 }] })                               // 校验 roles 存在
-      .mockResolvedValueOnce({ ok: false, text: async () => 'boom' });                        // PATCH 失败
+  it('role_id=number 也冻结 → 409', async () => {
     const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 2 }));
-    expect(res.status).toBe(502);
-    expect(writeAuditMock).not.toHaveBeenCalled();
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('role_frozen');
+  });
+
+  it('无 role_id 字段 → 200 ok（无变更）', async () => {
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled(); // 无任何 fetch 调用
   });
 
   it('缺 wecom_id → 400', async () => {

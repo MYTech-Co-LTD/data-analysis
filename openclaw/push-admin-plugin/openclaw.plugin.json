@@ -1,0 +1,25 @@
+{
+  "id": "push-admin",
+  "name": "Push Admin",
+  "description": "推送管理插件。通过中文对话自助配置 Novu 推送模板、定时计划和即时推送。三层鉴权（服务 JWT + 人员权限 + 引擎闸），收件人只接受组织维 selector。",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_push_variables",
+      "create_push_workflow",
+      "create_push_schedule",
+      "push_now"
+    ]
+  },
+  "skills": [
+    "./skills"
+  ]
+}
