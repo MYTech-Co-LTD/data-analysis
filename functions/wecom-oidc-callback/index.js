@@ -281,8 +281,8 @@ module.exports = async function (req) {
     } catch (e) { console.error("groups projection mirror write failed", e); }
 
     // 5c. 签 PostgREST JWT：payload = buildClaims 产物（permissions=资源串 B2；groups/data_scope/fields/
-    //     catalog_v 新四段；顶层旧四维 key=全维非空镜像 B6）+ 注册项（sub/role/iss/iat/exp）。
-    //     iss 区分来源；RLS 新路径以 data_scope 段存在性鉴别（迁移 179），旧面由镜像兼容（S4 双氧期）。
+    //     catalog_v 新四段；顶层旧四维 key 镜像已摘——W6/Task 20，双氧期结束）+ 注册项（sub/role/iss/iat/exp）。
+    //     iss 区分来源；RLS 以 data_scope 段存在性鉴别（迁移 179；旧形状令牌 deny，185 终版）。
     const now = Math.floor(Date.now() / 1000);
     const jwt = await signJwt({
       sub: wecomUserId,

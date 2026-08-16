@@ -7,9 +7,9 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
-// functions/_shared/jwt.ts
+// ../_shared/jwt.ts
 var require_jwt = __commonJS({
-  "functions/_shared/jwt.ts"(exports2, module2) {
+  "../_shared/jwt.ts"(exports2, module2) {
     function b64url(bytes) {
       let s = "";
       for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b);
@@ -34,9 +34,9 @@ var require_jwt = __commonJS({
   }
 });
 
-// functions/_shared/cors.ts
+// ../_shared/cors.ts
 var require_cors = __commonJS({
-  "functions/_shared/cors.ts"(exports2, module2) {
+  "../_shared/cors.ts"(exports2, module2) {
     var corsHeaders2 = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -52,9 +52,9 @@ var require_cors = __commonJS({
   }
 });
 
-// functions/wecom-oidc-callback/claims.js
+// claims.js
 var require_claims = __commonJS({
-  "functions/wecom-oidc-callback/claims.js"(exports2, module2) {
+  "claims.js"(exports2, module2) {
     function buildClaims2(ctx) {
       const oidcGroups = ctx.oidcToken?.groups ?? null;
       if (!Array.isArray(oidcGroups) || oidcGroups.length === 0) return null;
@@ -66,11 +66,6 @@ var require_claims = __commonJS({
       const categories = permissions.filter((k) => k.startsWith("data-analysis:category:")).map((k) => k.slice("data-analysis:category:".length));
       const data_scope = { brands, categories, branch_nums: [...expanded.branch_nums ?? []] };
       const fields = { cost: permissions.includes("data-analysis:field:cost") };
-      const mirror = {};
-      if (data_scope.branch_nums.length) mirror.branch_nums = data_scope.branch_nums;
-      if (brands.length) mirror.brands = brands;
-      if (categories.length) mirror.categories = categories;
-      if (fields.cost) mirror.can_see_cost = true;
       return {
         ...ctx.legacy,
         // H5：08-15 保留字段（role_code 等）全量透传
@@ -81,16 +76,14 @@ var require_claims = __commonJS({
         data_scope,
         // B1：空段 = deny 语义载体
         fields,
-        catalog_v: ctx.catalogV,
-        ...mirror
-        // B6：双氧期顶层旧 key（全维非空镜像，禁空数组）
+        catalog_v: ctx.catalogV
       };
     }
     module2.exports = { buildClaims: buildClaims2 };
   }
 });
 
-// functions/wecom-oidc-callback/index.js
+// index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
 var { buildClaims } = require_claims();
