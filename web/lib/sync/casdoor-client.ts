@@ -44,7 +44,8 @@ async function getAccessToken(): Promise<string | null> {
   }
 }
 
-async function casdoorFetch(
+// Task 8 起导出：group-sync（组同步器）复用同一 client_credentials 通道
+export async function casdoorFetch(
   path: string,
   opts: RequestInit = {},
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
