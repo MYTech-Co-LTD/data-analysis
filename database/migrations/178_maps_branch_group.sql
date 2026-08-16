@@ -28,3 +28,19 @@ ALTER TABLE maps_branch_group ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFA
 
 GRANT SELECT ON maps_branch_group TO anon, authenticated;
 GRANT SELECT, UPDATE(groups) ON org_users TO authenticated;
+
+-- ---- Task 10：影子对账 7 天门禁历史表（H10/M4，W2 退出判据）----
+-- 每日 03:37 cron（web/app/api/admin/cron/reconcile-groups）UPSERT 当日行；
+-- gate7days 查最近 7 行：whitelist_outside_diff=0 且 red_count=0 连续 7 天才放行 W3。
+-- detail 留 per-user diff 全量（red/minor/whitelistHits）+ 白名单审批快照（人工审批=编辑 detail.whitelist，审计留痕）。
+CREATE TABLE IF NOT EXISTS group_reconcile_history (
+  date                   DATE PRIMARY KEY,                -- 北京时区自然日（cron 侧格式化）
+  whitelist_outside_diff INT  NOT NULL,                   -- 白名单外 diff 条数（Σ missing+extra 未被白名单吸收）
+  red_count              INT  NOT NULL,                   -- E 级红用户数
+  detail                 JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_group_reconcile_history_date ON group_reconcile_history(date);
+
+GRANT SELECT ON group_reconcile_history TO anon, authenticated;

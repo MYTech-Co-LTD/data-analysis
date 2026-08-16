@@ -21,6 +21,7 @@ describe('组同步器（spec §5.3，H1/H2）', () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   it('建树先父后子：父组请求先于子组（H1——后序会触发 GetUserFullGroupPath error 整组登录崩）', async () => {
@@ -50,11 +51,12 @@ describe('组同步器（spec §5.3，H1/H2）', () => {
   });
   it('门店树 diff 驱动：dim_branch 新店 → 建 store 组 + 写 maps_branch_group；旧店改名 → 新名 upsert + 旧映射 is_active=false（H2）', async () => {
     // dim_branch 返回 3120-999 新店；maps 空；group 树空
+    // T8 死传输修复后 dim_branch 走 PostgREST 绝对 URL（path 含 /dim_branch），mock 分支同步适配
     const fetchOrder: any[] = [];
     mockFetch.mockImplementation(async (path: string, init?: RequestInit) => {
       fetchOrder.push({ path, body: init?.body });
-      if (path.includes('get-branches')) return { data: [{ branch_number: '3120-999', branch_name: '新店' }] };
-      if (path.includes('get-groups')) return groupList([]);
+      if (String(path).includes('dim_branch')) return { ok: true, data: [{ branch_number: '3120-999', branch_name: '新店', system_book_code: '3120' }] };
+      if (String(path).includes('get-groups')) return groupList([]);
       return { data: { id: 'new-g' } };
     });
     // PostgREST（maps_branch_group）走全局 fetch，非 casdoorFetch——须单独 stub
@@ -71,6 +73,30 @@ describe('组同步器（spec §5.3，H1/H2）', () => {
     expect(mapsPost).toBeDefined();
     expect(mapsPost?.body).toContain('"branch_number":"3120-999"');
     expect(mapsPost?.body).toContain('"source":"auto"');
+  });
+  it('T8 死传输修复（DW1 review 跟踪#1）：dim_branch 走 PostgREST 绝对 URL 直传（禁 Casdoor /api/get-branches），裸数组解析', async () => {
+    // 原实现 casdoorFetch('/api/get-branches?select=...') 把 PostgREST 语法打 Casdoor 域名——生产必 404，
+    // 门店树永不建（绿测试因 mock 掩盖）。修复后：${INSFORGE_URL}/dim_branch?... 绝对 URL 经 casdoorFetch 直传。
+    vi.stubEnv('INSFORGE_URL', 'http://postgrest:3000');
+    const casdoorCalls: string[] = [];
+    mockFetch.mockImplementation(async (path: string) => {
+      casdoorCalls.push(String(path));
+      if (String(path).includes('/dim_branch')) return { ok: true, data: [{ branch_number: '3120-777', branch_name: '七号店', system_book_code: '3120' }] };  // PostgREST 裸数组
+      if (String(path).includes('get-groups')) return groupList([]);
+      return { data: {} };
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [] })));
+    const r = await syncStoreTree();
+    // 端点形态：dim_branch 必须是绝对 URL（PostgREST 域）且带 PostgREST select 参数
+    const dimCall = casdoorCalls.find((c) => c.includes('/dim_branch'));
+    expect(dimCall).toBeDefined();
+    expect(/^https?:\/\//.test(dimCall!)).toBe(true);
+    expect(dimCall).toContain('select=branch_number');
+    expect(dimCall).toContain('is_active=eq.true');
+    // Casdoor 域的 /api/get-branches（死传输）不得再出现
+    expect(casdoorCalls.some((c) => c.includes('/api/get-branches'))).toBe(false);
+    // 裸数组解析：PostgREST 返回裸数组（非 Casdoor {data:[...]} 包装），新店照常建组
+    expect(r.created).toEqual([{ branch_number: '3120-777', group_name: expect.stringContaining('3120-777') }]);
   });
   it('父链断裂检出（H1）：parentId 指向不存在组 → broken 非空', () => {
     const broken = verifyParentChain([
