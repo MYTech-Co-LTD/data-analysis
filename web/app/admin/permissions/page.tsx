@@ -498,28 +498,12 @@ function UsersTab({ users, roles, departments, onChanged }: {
   onChanged: () => void;
 }) {
   const [search, setSearch] = useState('');
-  const [saving, setSaving] = useState<string | null>(null);
   const [overrideUser, setOverrideUser] = useState<User | null>(null);
   const [preview, setPreview] = useState<{ id: string; data: Preview } | null>(null);
   const [err, setErr] = useState('');
 
   const deptMap = useMemo(() => new Map(departments.map(d => [d.id, d.name])), [departments]);
   const deptName = (ids: string[]) => ids.map(i => deptMap.get(i) ?? i).join('、') || '-';
-
-  async function assign(u: User, roleId: number | null) {
-    setSaving(u.wecom_id); setErr('');
-    try {
-      const r = await fetch('/api/admin/permissions/users', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wecom_id: u.wecom_id, role_id: roleId }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
-      toast.success(roleId ? '已指派角色，用户重新登录后生效' : '已恢复自动角色');
-      onChanged();
-    } catch { setErr('保存失败，请重试'); }
-    finally { setSaving(null); }
-  }
 
   async function showPreview(wecomId: string) {
     setErr('');
@@ -546,6 +530,12 @@ function UsersTab({ users, roles, departments, onChanged }: {
           />
         </div>
         <span className="text-xs text-slate-400 tabular-nums">共 {filtered.length} 人</span>
+        <span className="text-xs text-slate-400 ml-auto">
+          职位角色由统一身份平台维护 ✎{' '}
+          <a href="https://sso.shanhaiyiguo.com" target="_blank" rel="noreferrer"
+             className="text-blue-700 hover:underline">Casdoor 管理端</a>
+          （此处只读；同步更新后自动生效）
+        </span>
       </div>
 
       <div className="overflow-x-auto">
@@ -555,7 +545,6 @@ function UsersTab({ users, roles, departments, onChanged }: {
               <th className="py-2 pr-4">姓名</th>
               <th className="py-2 pr-4">部门</th>
               <th className="py-2 pr-4">角色</th>
-              <th className="py-2 pr-4">来源</th>
               <th className="py-2 pr-4">单独授权</th>
               <th className="py-2">操作</th>
             </tr>
@@ -566,21 +555,11 @@ function UsersTab({ users, roles, departments, onChanged }: {
                 <td className="py-2 pr-4 text-slate-800">{u.name ?? u.wecom_id}</td>
                 <td className="py-2 pr-4 text-slate-600">{deptName(u.department_ids)}</td>
                 <td className="py-2 pr-4">
-                  <select
-                    value={u.role_source === 'manual' ? (u.role_id ?? '') : ''}
-                    disabled={saving === u.wecom_id}
-                    onChange={e => assign(u, e.target.value ? Number(e.target.value) : null)}
-                    className="rounded border border-slate-300 px-2 py-1 text-sm"
-                  >
-                    <option value="">自动{u.role_source === 'auto' && u.role_id
-                      ? `（${roles.find(r => r.id === u.role_id)?.name ?? u.role_id}）` : ''}</option>
-                    {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                  </select>
-                </td>
-                <td className="py-2 pr-4">
-                  <span className={u.role_source === 'manual' ? 'text-blue-700' : 'text-slate-400'}>
-                    {u.role_source === 'manual' ? '手动' : '自动'}
-                  </span>
+                  {u.role_source === 'manual' && u.role_id
+                    ? <Badge tone="ok">{roles.find(r => r.id === u.role_id)?.name ?? `角色#${u.role_id}`}（手动）</Badge>
+                    : u.role_id
+                      ? <Badge tone="off">{roles.find(r => r.id === u.role_id)?.name ?? `角色#${u.role_id}`}（自动）</Badge>
+                      : <Badge tone="off">未指派</Badge>}
                 </td>
                 <td className="py-2 pr-4">
                   <Btn variant="ghost" onClick={() => setOverrideUser(u)}>
@@ -858,6 +837,8 @@ function RolesTab({ roles, onChanged }: { roles: RoleRow[]; onChanged: () => voi
       {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
       <p className="text-xs text-slate-400 mb-3">
         角色层 = UI 参数（落地页/默认指标/可见面板/启用）+ 默认范围四维（作为所有该角色用户的基底，个人/部门层可覆盖）。
+        职位档案与授职在统一身份平台（<a href="https://sso.shanhaiyiguo.com" target="_blank" rel="noreferrer"
+          className="text-blue-700 hover:underline">Casdoor 管理端</a>）维护——此处仅编辑本系统侧的角色默认数据范围 / UI 参数。
       </p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse tabular-nums">
