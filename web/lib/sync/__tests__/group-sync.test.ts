@@ -52,7 +52,7 @@ describe('组同步器（spec §5.3，H1/H2）', () => {
   it('门店树 diff 驱动：dim_branch 新店 → 建 store 组 + 写 maps_branch_group；旧店改名 → 新名 upsert + 旧映射 is_active=false（H2）', async () => {
     // dim_branch 返回 3120-999 新店；maps 空；group 树空
     // T8 死传输修复后 dim_branch 走 PostgREST 绝对 URL（path 含 /dim_branch），mock 分支同步适配
-    const fetchOrder: any[] = [];
+    const fetchOrder: { path: string; body?: RequestInit['body'] }[] = [];
     mockFetch.mockImplementation(async (path: string, init?: RequestInit) => {
       fetchOrder.push({ path, body: init?.body });
       if (String(path).includes('dim_branch')) return { ok: true, data: [{ branch_number: '3120-999', branch_name: '新店', system_book_code: '3120' }] };
