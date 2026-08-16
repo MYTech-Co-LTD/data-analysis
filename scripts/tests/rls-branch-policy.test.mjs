@@ -1,6 +1,7 @@
 // scripts/tests/rls-branch-policy.test.mjs
 // 迁移 179 的红→绿注入测试（M1 封口）：迁移前空 data_scope 声称 deny 的用户在新 RLS 下 0 行；
-// 迁移前（红态断言）旧 RLS 对「顶层空数组」全放——本测试在 179 应用后跑，验证绿态 + 钉死旧语义只对 legacy 形状生效。
+// 迁移前（红态断言）旧 RLS 对「顶层空数组」全放——本测试验证绿态。
+// W6（Task 20 / 185）：legacy 回退支已摘——旧形状（无 data_scope 段）两例翻为 deny 断言（B1 全量生效）。
 //
 // 断言经 scope_match_v2 直判（不依赖具体表）；claims 经 set_config('request.jwt.claims', ...)
 // 事务内注入（testing-handbook §2 本地参数化 claim 模式）。
@@ -49,13 +50,13 @@ test('绿：新形状具体门店列表 → 精确命中放行', () => {
   assert.equal(no, 'f');
 });
 
-test('绿：legacy 形状（无 data_scope 段）→ 回退 claim_match_or_star 旧语义（含空数组全放——仅限旧形状，S4 豁免窗口）', () => {
+test('绿：legacy 形状（无 data_scope 段）→ deny（185 终版摘回退支——旧形状令牌不再回退 072，S4 豁免窗口已关）', () => {
   const okNull = withClaims({ sub: 'shanhai/test' },
-    `SELECT scope_match_v2('branch_nums', 'branch_number')`);          // 顶层无 key → 072 NULL→true
-  assert.equal(okNull, 't');
+    `SELECT scope_match_v2('branch_nums', 'branch_number')`);          // 顶层无 key → deny（旧 072 NULL→true 支已删）
+  assert.equal(okNull, 'f');
   const okEmpty = withClaims({ sub: 'shanhai/test', branch_nums: [] },
-    `SELECT scope_match_v2('branch_nums', 'branch_number')`);          // 顶层空数组 → 072 空→true（legacy 宽松支，钉死现状）
-  assert.equal(okEmpty, 't');
+    `SELECT scope_match_v2('branch_nums', 'branch_number')`);          // 顶层空数组 → deny（旧 072 空→true 宽松支已删）
+  assert.equal(okEmpty, 'f');
 });
 
 test('绿：顶层旧 key 空数组 + data_scope 并存 → 走 data_scope 分支不受 072 污染（M1 核心攻击路径封口）', () => {

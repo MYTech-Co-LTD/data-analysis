@@ -36,10 +36,18 @@ eq(buildClaims(okCtx).role_code, 'store_manager', '08-15 保留字段不丢（H5
 const denied = buildClaims(failCtx);
 eq(denied, null, '三段任一失败（展开 ok:false）→ 返回 null = 登录整体失败，禁空数组进 claims（C2）');
 
-// B6/M1 值判据：顶层旧 key = 全维非空镜像（brands 有值时镜像；branch_nums 无授权时——不存在「空数组镜像」）
+// B6 终态（W6 / Task 20）：顶层旧四维 key 镜像摘除——授权有值也不再写（双氧期结束）
+const c = buildClaims(okCtx);
+eq(c.branch_nums, undefined, '顶层旧 key branch_nums 不存在（有授权也不镜像——镜像已摘，B6 终态）');
+eq(c.brands, undefined, '顶层旧 key brands 不存在');
+eq(c.categories, undefined, '顶层旧 key categories 不存在');
+eq(c.can_see_cost, undefined, '顶层旧 key can_see_cost 不存在（fields.cost=true 也不再镜像）');
+eq(c.fields.cost, true, '新段 fields.cost 仍是唯一判定源（终版 can_cost_visible 只读此段）');
+
+// 空集形态（B1 deny 载体）与摘除后旧 key 缺位的一致性
 const zeroScopeCtx = { ...okCtx, expandResult: { branch_nums: [], ok: true }, reachable: [] };
 const z = buildClaims(zeroScopeCtx);
 eq(z.data_scope.branch_nums, [], '空集段 = authorized ∅（deny 语义载体，B1）');
-eq(z.branch_nums, undefined, '顶层旧 key 无非空镜像值时不写（禁空数组——072 空数组→true 全放，M1）');
+eq(z.branch_nums, undefined, '顶层旧 key 无授权时同样不存在（不存在「空数组镜像」形态）');
 
 console.log('claims.test.js: all assertions passed');

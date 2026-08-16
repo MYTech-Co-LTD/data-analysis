@@ -7,8 +7,9 @@
 //      迁移前旧值是四维维度 key（branch_nums/brands/categories/can_see_cost）——本函数不再产出。
 //  B1  data_scope 空段 = authorized ∅（deny）——原样写空数组，禁收敛 ["*"]。
 //      data_scope 三维恒存在（无授权=空数组，不是缺段）——brands 缺段会令品牌粒度表 legacy 回退放宽（S4）。
-//  B6/M1 顶层旧四维 key 只在「有非空镜像值」时写；禁空数组/省略形态漂进 072 的空数组→true 全放路径。
-//       （判定不读顶层旧 key——RLS 策略分支以 data_scope 段存在性为准，迁移 179；旧 key 仅兼容展示/审计。）
+//  B6  顶层旧四维 key 镜像已摘（W6 / Task 20，双氧期结束）：新令牌只携带新四段
+//      （permissions/groups/data_scope/fields/catalog_v）+ H5 保留字段；072 legacy 消费面随
+//      scope_match_v2 终版（185 摘回退支）一并退役——旧形状令牌 = deny，不再需要镜像兼容。
 //  C2  三段任一失败（展开 ok:false / groups 段缺失 / 可达对象拉取失败）→ 返回 null = 登录整体失败。
 //  H5  08-15 保留字段（role_code/visible_panels/default_landing/default_metric/departments）全量透传。
 function buildClaims(ctx) {
@@ -31,13 +32,8 @@ function buildClaims(ctx) {
   // --- fields（列掩码开关）---
   const fields = { cost: permissions.includes('data-analysis:field:cost') };
 
-  // --- 顶层旧 key 全维非空镜像（B6/M1 值判据：只在非空时写）---
-  const mirror = {};
-  if (data_scope.branch_nums.length) mirror.branch_nums = data_scope.branch_nums;
-  if (brands.length)                 mirror.brands = brands;
-  if (categories.length)             mirror.categories = categories;
-  if (fields.cost)                   mirror.can_see_cost = true;
-
+  // B6 终态（W6 / Task 20）：顶层旧四维 key 镜像不再产出（双氧期结束；旧 key 消费面已随
+  // scope_match_v2 终版/can_cost_visible 终版统一读新段）。旧令牌自然过期即完成全量切换。
   return {
     ...ctx.legacy,                       // H5：08-15 保留字段（role_code 等）全量透传
     permissions,                         // B2 资源串
@@ -45,7 +41,6 @@ function buildClaims(ctx) {
     data_scope,                          // B1：空段 = deny 语义载体
     fields,
     catalog_v: ctx.catalogV,
-    ...mirror,                           // B6：双氧期顶层旧 key（全维非空镜像，禁空数组）
   };
 }
 

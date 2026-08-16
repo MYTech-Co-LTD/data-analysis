@@ -85,10 +85,19 @@ COMMENT ON TABLE permission_audit IS '权限变更审计（仅经管理 API 写�
 --    F1 修复（安全终检 review）：002 GRANT 被 003 REVOKE、072 DROP+重建 data_permissions 带回授权丢失，
 --    167 此前仅 GRANT get_user_perms EXECUTE——读路径 403 静默空、permission_audit 全套零权限（审计死）。
 --    幂等：GRANT 语句天然幂等，重跑无副作用。
-GRANT SELECT, INSERT, UPDATE, DELETE ON data_permissions TO anon, authenticated;
+--    DW3 review 跟踪项①（Task 20 补）：data_permissions 相关 GRANT 包「表存在 ∧ 无 trg_dp_write_close」
+--    守卫（§②/§③ 同款 DO 块/IF 条件）——W5 写关闭后单独重放 167 不得意外复授写通道；
+--    W6 删表后跳过（对象不存在）。permission_audit 相关 GRANT 不动（audit 表不 sunset）。
 GRANT SELECT, INSERT, UPDATE, DELETE ON permission_audit TO anon, authenticated;
 GRANT USAGE, SELECT ON SEQUENCE permission_audit_id_seq TO anon, authenticated;
-GRANT USAGE, SELECT ON SEQUENCE data_permissions_id_seq TO anon, authenticated;
+DO $g$
+BEGIN
+  IF to_regclass('public.data_permissions') IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_dp_write_close') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON data_permissions TO anon, authenticated;
+    GRANT USAGE, SELECT ON SEQUENCE data_permissions_id_seq TO anon, authenticated;
+  END IF;
+END $g$;
 
 -- ⑥ get_user_perms 逐维合成重写（签名/返回结构/兜底语义均不变）
 DROP FUNCTION IF EXISTS get_user_perms(TEXT);
