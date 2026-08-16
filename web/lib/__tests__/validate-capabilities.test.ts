@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { validateKey, validateWildcardRisk, detectViewGroupCycle } from '../validate-capabilities';
 import { CATALOG_KEYS, VIEW_GROUPS } from '../capability-catalog';
+import { validateViewGroupMembers } from '../view-groups';
 
 describe('catalog 校验器（spec §5.1 ⑤，fail-close）', () => {
   it('合法 key 放行（catalog 内任取 + 全局 *）', () => {
@@ -26,5 +27,9 @@ describe('catalog 校验器（spec §5.1 ⑤，fail-close）', () => {
     const cyclic = { 'data-analysis:view-group:a': { label: 'a', members: ['data-analysis:view-group:b'] as const },
                      'data-analysis:view-group:b': { label: 'b', members: ['data-analysis:view-group:a'] as const } };
     expect(detectViewGroupCycle(cyclic as unknown as typeof VIEW_GROUPS).length).toBeGreaterThan(0);
+  });
+  it('view-group 成员合规自证（Task 19 接线）：catalog 真值禁通配/自引用，offenders 为空', () => {
+    // catalog 变更（误加 view:* 通配或自引用进组员）时本例 CI 红
+    expect(validateViewGroupMembers().offenders).toEqual([]);
   });
 });
