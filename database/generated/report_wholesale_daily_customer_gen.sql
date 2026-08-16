@@ -14,7 +14,7 @@ cte0 AS (
     MAX(s.client_name) AS client_name
   FROM report_daily_wholesale_customer s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.latest_day
-  WHERE s.system_book_code = '3120' AND claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, s.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, s.branch_num::text)
+  WHERE s.system_book_code = '3120' AND scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num))
   GROUP BY tgt.target_id, s.client_code, s.biz_date
 )
 SELECT cte0.target_id AS target_id,

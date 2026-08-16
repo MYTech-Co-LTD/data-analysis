@@ -5,6 +5,7 @@
 // P0a 判定链：token claims 命中 → true；BREAKGLASS_ADMINS env 命中 → true（记审计）；
 // 两者皆无 → false（fail-close）。BREAKGLASS 默认空 = 兜底关闭。
 import { CATALOG_KEYS, DEPRECATED_KEYS } from './capability-catalog';
+import { expandViewGroups } from './view-groups';
 
 export async function checkFeaturePerm(
   userId: string,
@@ -76,10 +77,13 @@ export function catalogVCheck(claim: { catalog_v?: string; permissions?: readonl
 }
 
 // 解析期校验（M2）：通配展开后的具体 key 仍须 ∈ catalog ∪ deprecated
+// Task 19：pool 先经 expandViewGroups（view-group 组键递归展开为成员 view:* 键），
+// 组持有者 = 成员视图持有者；named / wildcard 判定逻辑不变，只是查询池换掉。
 export function resolveViewKey(perms: readonly string[], view: string): { ok: boolean; key?: string; reason?: 'unknown' | 'deprecated' } {
   const key = `data-analysis:view:${view}`;
-  const named = perms.includes(key);
-  const wildcard = perms.includes('data-analysis:view:*') || perms.includes('*');
+  const pool = new Set(expandViewGroups(perms));
+  const named = pool.has(key);
+  const wildcard = pool.has('data-analysis:view:*') || pool.has('*');
   if (!named && !wildcard) return { ok: false, reason: 'unknown' };           // 无命中
   // 命中（具名或通配）→ 校验解析结果粒度
   if (DEPRECATED_KEYS.has(key)) return { ok: false, reason: 'deprecated' };
