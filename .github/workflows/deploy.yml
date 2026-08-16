@@ -12,10 +12,12 @@
 #     → SSH 起后端栈 + 数据库迁移 + 刷 postgrest 缓存；失败阻断全部（数据库必须）
 #   → functions job（needs migrate，continue-on-error: true）: rsync(functions/scripts/deploy)
 #     → SSH 部署 edge functions + secrets；失败不阻断 build-web（function 可用 MCP 单独更新）
+#     · W1 Task6：checkout 内算 CATALOG_V（catalog 内容 hash）注入 deploy-functions.sh set_secret
 #   → catalog job（needs [migrate, functions]，continue-on-error: true，与 build-web 并行）:
 #     scan 校验 + SSH 在 web 镜像内跑 catalog 对账（W1 Task6，红仅告警）
 #   → build-web job（needs [migrate, functions]）: rsync(web/services/scripts/deploy)
 #     → SSH 构建前端镜像 + 推天翼云 + compose up（web/nginx/duckdb）
+#     · W1 Task6：同公式算 CATALOG_V 注入 deploy.sh → web 构建 build-arg（middleware 内联）
 #
 # 三个部署 job 共用同一份 scripts/deploy.sh，用 DEPLOY_PHASE=migrate|functions|web 跑对应阶段；
 # 手动完整部署仍 `bash scripts/deploy.sh`（DEPLOY_PHASE 缺省 all，行为不变）。
@@ -156,15 +158,30 @@ jobs:
             ./functions ./scripts ./deploy \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
 
+      # W1 Task6 fix：本 job 不 rsync web/，服务器侧 deploy-functions.sh 只能从上一轮
+      # rsync 残留的旧 catalog 树算 hash → 与 build-web 侧（新树）漂移，claims catalog_v
+      # 快路径比对恒不等。改为 GHA checkout（= 本次 commit 精确内容）内计算后经 SSH 注入，
+      # 与 build-web job 同公式同值（fix-round-1，DW2 跟踪#3）。
+      - name: 计算 CATALOG_V（catalog 内容 hash，注入 function secrets）
+        run: |
+          CATALOG_V="$(cat web/lib/capability-catalog.ts web/lib/capability-catalog.generated.ts \
+            | sha256sum | cut -c1-8)"
+          echo "CATALOG_V=$CATALOG_V" >> "$GITHUB_ENV"
+          echo "  · CATALOG_V=$CATALOG_V（catalog 内容 hash，wecom-oidc-callback claims catalog_v 基准）"
+
       - name: SSH 部署 edge functions + secrets
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          CATALOG_V: ${{ env.CATALOG_V }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
+          envs: CATALOG_V
           script_stop: true
           command_timeout: 30m
           script: |
+            export CATALOG_V
             cd ${{ secrets.DEPLOY_PATH }}
             DEPLOY_PHASE=functions bash scripts/deploy.sh
 
@@ -246,20 +263,30 @@ jobs:
             ./web ./services ./scripts ./deploy \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
 
+      # W1 Task6 fix：与 functions job 同公式从 checkout 计算，注入 deploy.sh（middleware
+      # 构建期内联 process.env.CATALOG_V → build-arg）——两侧同 commit 同值，fix-round-1。
+      - name: 计算 CATALOG_V（catalog 内容 hash，注入 web 构建 build-arg）
+        run: |
+          CATALOG_V="$(cat web/lib/capability-catalog.ts web/lib/capability-catalog.generated.ts \
+            | sha256sum | cut -c1-8)"
+          echo "CATALOG_V=$CATALOG_V" >> "$GITHUB_ENV"
+          echo "  · CATALOG_V=$CATALOG_V（catalog 内容 hash，middleware catalog_v 比对基准）"
+
       - name: SSH 构建前端镜像 → 推天翼云 → 起网关
         uses: appleboy/ssh-action@v1.2.0
         env:
           CTYUN_USERNAME: ${{ secrets.CTYUN_USERNAME }}
           CTYUN_PASSWORD: ${{ secrets.CTYUN_PASSWORD }}
+          CATALOG_V: ${{ env.CATALOG_V }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
-          envs: CTYUN_USERNAME,CTYUN_PASSWORD
+          envs: CTYUN_USERNAME,CTYUN_PASSWORD,CATALOG_V
           script_stop: true
           command_timeout: 30m
           script: |
-            export CTYUN_USERNAME CTYUN_PASSWORD
+            export CTYUN_USERNAME CTYUN_PASSWORD CATALOG_V
             cd ${{ secrets.DEPLOY_PATH }}
             DEPLOY_PHASE=web bash scripts/deploy.sh
 

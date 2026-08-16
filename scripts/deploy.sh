@@ -87,8 +87,12 @@ if phase_enabled web; then
   # W1 Task6（DW2 跟踪#3）：CATALOG_V = catalog 单真相内容 hash（Task 13 catalog_v 快/慢路径比对基准）。
   # middleware 是构建期内联读取（process.env.CATALOG_V）→ 必须走 build-arg；function 侧由
   # deploy-functions.sh 对同一代码树算同值 set_secret——两侧同值，令牌 catalog_v 才能与 server 相等走快路径。
-  CATALOG_V="$(cat "$ROOT/web/lib/capability-catalog.ts" "$ROOT/web/lib/capability-catalog.generated.ts" \
-    | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-8)"
+  # fix-round-1：GHA build-web job 预注入（checkout 内计算，跨 job 与 function 侧同 commit 同值）；
+  # 手动部署未注入时回退从本代码树计算（与 deploy-functions.sh 同公式）。
+  if [ -z "${CATALOG_V:-}" ]; then
+    CATALOG_V="$(cat "$ROOT/web/lib/capability-catalog.ts" "$ROOT/web/lib/capability-catalog.generated.ts" \
+      | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-8)"
+  fi
   export CATALOG_V
   echo "  · CATALOG_V=$CATALOG_V（catalog 内容 hash → web 构建期内联；function 侧同值）"
 

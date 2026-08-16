@@ -170,10 +170,14 @@ set_secret "CASDOOR_ISSUER" "${CASDOOR_ISSUER:-}"
 set_secret "CASDOOR_CLIENT_ID" "${CASDOOR_CLIENT_ID:-}"
 set_secret "CASDOOR_CLIENT_SECRET" "${CASDOOR_CLIENT_SECRET:-}"
 # W1 Task6（DW2 跟踪#3）：CATALOG_V = catalog 内容 hash——wecom-oidc-callback 签 claims catalog_v
-# 版本戳（Task 13 快/慢路径比对基准）。与 scripts/deploy.sh（web 构建侧 build-arg）对同一
-# rsync 代码树计算同值；令牌 catalog_v === server 端值 → 快路径，catalog 变更自动 bump 触发慢路径。
-CATALOG_V="$(cat "$ROOT/web/lib/capability-catalog.ts" "$ROOT/web/lib/capability-catalog.generated.ts" \
-  | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-8)"
+# 版本戳（Task 13 快/慢路径比对基准）。与 scripts/deploy.sh（web 构建侧 build-arg）同公式；
+# 令牌 catalog_v === server 端值 → 快路径，catalog 变更自动 bump 触发慢路径。
+# fix-round-1：GHA functions job 预注入（该 job 不 rsync web/，服务器侧算会拿到上轮残留的旧
+# catalog 树 → 与 build-web 侧漂移）；未注入时回退从本代码树计算（与 deploy.sh 同公式）。
+if [ -z "${CATALOG_V:-}" ]; then
+  CATALOG_V="$(cat "$ROOT/web/lib/capability-catalog.ts" "$ROOT/web/lib/capability-catalog.generated.ts" \
+    | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-8)"
+fi
 set_secret "CATALOG_V" "$CATALOG_V"
 echo "  · CATALOG_V=$CATALOG_V（catalog 内容 hash，与 web 构建侧同树同值）"
 
