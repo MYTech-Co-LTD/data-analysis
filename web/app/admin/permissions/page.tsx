@@ -532,7 +532,7 @@ function UsersTab({ users, roles, departments, onChanged }: {
         <span className="text-xs text-slate-400 tabular-nums">共 {filtered.length} 人</span>
         <span className="text-xs text-slate-400 ml-auto">
           职位角色由统一身份平台维护 ✎{' '}
-          <a href="https://sso.shanhaiyiguo.com" target="_blank" rel="noreferrer"
+          <a href="https://sso.shanhaiyiguo.com/login/shanhai" target="_blank" rel="noreferrer"
              className="text-blue-700 hover:underline">Casdoor 管理端</a>
           （此处只读；同步更新后自动生效）
         </span>
@@ -837,7 +837,7 @@ function RolesTab({ roles, onChanged }: { roles: RoleRow[]; onChanged: () => voi
       {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
       <p className="text-xs text-slate-400 mb-3">
         角色层 = UI 参数（落地页/默认指标/可见面板/启用）+ 默认范围四维（作为所有该角色用户的基底，个人/部门层可覆盖）。
-        职位档案与授职在统一身份平台（<a href="https://sso.shanhaiyiguo.com" target="_blank" rel="noreferrer"
+        职位档案与授职在统一身份平台（<a href="https://sso.shanhaiyiguo.com/login/shanhai" target="_blank" rel="noreferrer"
           className="text-blue-700 hover:underline">Casdoor 管理端</a>）维护——此处仅编辑本系统侧的角色默认数据范围 / UI 参数。
       </p>
       <div className="overflow-x-auto">

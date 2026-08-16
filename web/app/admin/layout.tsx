@@ -62,7 +62,7 @@ export default async function AdminLayout({
             </div>
             <div className="pt-4 border-t">
               <NavItem href="/admin/permissions" icon={<ShieldCheck size={16} />}>权限管理</NavItem>
-              <a href="https://sso.shanhaiyiguo.com" target="_blank" rel="noreferrer"
+              <a href="https://sso.shanhaiyiguo.com/login/shanhai" target="_blank" rel="noreferrer"
                  className="flex items-center gap-2 px-3 py-2 rounded text-sm text-slate-600 hover:bg-slate-100">
                 <Users size={16} /> 用户管理（Casdoor）
                 <ExternalLink size={12} className="text-slate-400" />

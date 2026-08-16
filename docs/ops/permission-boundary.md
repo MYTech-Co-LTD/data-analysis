@@ -33,6 +33,7 @@ Casdoor 职位 → org_users.role_id
 
 | 动作 | 去哪个系统 | 具体步骤 |
 |---|---|---|
+| **组织管理员登录 Casdoor** | **Casdoor** | 组织管理员（如 shanhai 的张铎）用 **`https://sso.shanhaiyiguo.com/login/shanhai`** 入口（URL 已 pin 组织，data-analysis 管理端外链就是此地址）；默认 `/login` 是 built-in 全局管理员登录页，组织管理员在那是登不进的。详见「组织管理员登录」一节 |
 | 新员工入职 / 加企微账号 | 企微后台 | 加通讯录用户；本系统 `wecom-sync-contacts` 同步后出现在 `/admin/permissions` 用户 tab |
 | 给某用户担任职位（如转店长） | **Casdoor** | Casdoor 管理端改该用户角色归属；薄同步后本地角色 badge 变「自动（店长）」 |
 | 想让某人只有查看权给部门配范围 | 本系统 `/admin/permissions` 部门 tab | 选部门 → 配门店范围/成本可见 → 保存 |
@@ -47,6 +48,14 @@ Casdoor 职位 → org_users.role_id
 - **改该职位的默认数据范围** → 本系统角色 tab（「这个职位能看什么」）。两者绑定顺序：先有职位，角色行默认范围才生效。
 - **admin 门禁 ≠ 数据权限**：manager 也能被授 admin（能进管理台），但数据范围由三级合成决定。
 - **页面体验**：用户/角色/部门 tab 的职位列均为只读（U1 起冻结），带「Casdoor 管理端」外链；本系统不写 `role_id`（PUT /users 对 role 字段返回 409）。
+
+## 组织管理员登录（2026-08-16 定案）
+
+- **问题**：张铎（组织管理员）点管理端「用户管理（Casdoor）」外链落在默认登录页（built-in 组织），永远登不进。
+- **根因**：默认 `/login` pin built-in；组织管理员属 shanhai 组织，需 `/login/<org>` 入口；登录表单不支持 `org/username` 斜杠语法（会被当整体 username 去查）。
+- **解决**：data-analysis 管理端外链统一指向 **`https://sso.shanhaiyiguo.com/login/shanhai`**（URL 路由 owner 参数 pin 组织）。全局管理员（built-in/admin）仍可走 `/login`。
+- **后端确认**：`shanhai/ZhangDuo` 已授 `is_admin=true`（组织管理员，非全局），密码 123456（**待首次登录后改强密码**）；`POST /api/login`（JSON）验证通过，`get-account` 返回 `isAdmin:true`，可读 shanhai 组织 5 用户。
+- **给新组织管理员开权限**：`UPDATE "user" SET is_admin=true WHERE owner='<org>' AND name='<wecom_name>'` + 设密码（bcrypt），登录入口 `<org>` 对应 `/login/<org>`。
 
 ## 相关文档
 
