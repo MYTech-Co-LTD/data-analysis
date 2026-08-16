@@ -221,3 +221,26 @@ export async function getUserRoles(wecomId: string): Promise<{
   );
   return { ok: true, roles };
 }
+
+/**
+ * 拉取组织全量 role name（契约①替代 H11/W6：Casdoor roles ⊆ 期望源差分的 Casdoor 侧输入；
+ * scripts/tests/roles-contract-sunset.test.mjs live 段与发布窗对账 cron 消费）。
+ */
+export async function casdoorListRoles(): Promise<{
+  ok: boolean;
+  roles?: string[];
+  error?: string;
+}> {
+  const result = await casdoorFetch(
+    `/api/get-roles?owner=${encodeURIComponent(CASDOOR_ORG)}`,
+  );
+  if (!result.ok || !result.data) {
+    return { ok: false, error: result.error ?? 'roles_fetch_failed' };
+  }
+  const data = result.data as { data?: unknown };
+  const rows = Array.isArray(data?.data) ? data.data : [];
+  const roles = rows
+    .map((r: unknown) => String((r as Record<string, unknown>)?.name ?? ''))
+    .filter((n: string) => n.length > 0);
+  return { ok: true, roles };
+}
