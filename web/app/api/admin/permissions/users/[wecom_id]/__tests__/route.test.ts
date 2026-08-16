@@ -206,3 +206,33 @@ describe('DELETE /users/:wecom_id', () => {
     expect(res.status).toBe(403);
   });
 });
+
+// W5 写关闭（Task 18 / 迁移 184）：data_permissions DB 级禁写——两层拒绝的错误体都须收敛为
+// 409 { error:'frozen', guidance }（REVOKE 层 42501 / 触发器层 P0001），且不写审计。
+describe('W5 写关闭 → 409 frozen 契约', () => {
+  const OLD_ROW = { json: async () => [{ id: 7, branch_nums: ['1'], brands: null, categories: null, can_see_cost: false, expires_at: null, note: null }] };
+
+  it('REVOKE 层错误体（42501 permission denied）→ 409 frozen + 引导，不写审计', async () => {
+    fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)
+      .mockResolvedValueOnce(OLD_ROW)
+      .mockResolvedValueOnce({ ok: false, text: async () => '{"code":"42501","message":"permission denied for table data_permissions"}' });  // PATCH 被 REVOKE
+    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { branch_nums: ['9'] }), CTX);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe('frozen');
+    expect(body.guidance).toContain('例外');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  it('触发器层错误体（P0001 frozen）→ 409 frozen（DELETE 路径）', async () => {
+    fetchMock
+      .mockResolvedValueOnce(USER_EXISTS)
+      .mockResolvedValueOnce(OLD_ROW)
+      .mockResolvedValueOnce({ ok: false, text: async () => '{"code":"P0001","message":"data_permissions frozen (W5 写关闭, spec 2026-08-16 §5.2): ..."}' });
+    const res = await DELETE(mkReq('DELETE', ADMIN_COOKIE), CTX);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('frozen');
+    expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+});

@@ -99,24 +99,33 @@ ON CONFLICT (code) DO UPDATE SET
 -- ============================================================
 -- ⑥ 角色级 data_permissions 种子（subject_type='role', subject_id=role_id::text）
 --   幂等策略：先 DELETE 角色级条目，再 INSERT——允许参数随设计迭代更新
+--   W5 守卫（Task 18 / 迁移 184，plan 外实况适配——072 也会写 data_permissions）：
+--   184 写关闭（trg_dp_write_close 触发器）存在或 W6 删表后，本段跳过——
+--   角色默认范围随授权语义上收 Casdoor，不再由种子重放刷新。
 --   默认范围：
 --     boss/zone_manager/finance: 全店/全品牌/全品类 + 可见成本
 --     manager(店长):              全店/全品牌/全品类 + 不可见成本（店级范围由 get_user_perms 部门补充层覆盖）
 --     buyer(采购):                全店/全品牌 + 限品类（默认水果；多品类采购由 admin 加行覆盖）
 -- ============================================================
-DELETE FROM data_permissions WHERE subject_type='role';
+DO $$
+BEGIN
+  IF to_regclass('public.data_permissions') IS NOT NULL
+     AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_dp_write_close') THEN
+    DELETE FROM data_permissions WHERE subject_type='role';
 
-INSERT INTO data_permissions (subject_type, subject_id, branch_nums, brands, categories, can_see_cost, note)
-SELECT
-  'role',
-  r.id::text,
-  '["*"]'::jsonb,
-  '["*"]'::jsonb,
-  CASE r.code WHEN 'buyer' THEN '["水果"]'::jsonb ELSE '["*"]'::jsonb END,
-  CASE WHEN r.code IN ('boss','zone_manager','finance') THEN true ELSE false END,
-  '角色级默认范围（' || r.code || '）'
-FROM roles r
-WHERE r.code IN ('boss','zone_manager','manager','buyer','finance');
+    INSERT INTO data_permissions (subject_type, subject_id, branch_nums, brands, categories, can_see_cost, note)
+    SELECT
+      'role',
+      r.id::text,
+      '["*"]'::jsonb,
+      '["*"]'::jsonb,
+      CASE r.code WHEN 'buyer' THEN '["水果"]'::jsonb ELSE '["*"]'::jsonb END,
+      CASE WHEN r.code IN ('boss','zone_manager','finance') THEN true ELSE false END,
+      '角色级默认范围（' || r.code || '）'
+    FROM roles r
+    WHERE r.code IN ('boss','zone_manager','manager','buyer','finance');
+  END IF;
+END $$;
 
 -- ============================================================
 -- ⑦ dept_role_mapping 规则种子：按 org_departments.name 推断

@@ -9,6 +9,9 @@
 //   DELETE /users/:wecom_id → 删 override 恢复继承
 //   GET  /depts            → { departments: DeptRow[] }
 //   PUT  /depts            → { id, branch_nums?, can_see_cost? }
+//   ⚠️ W5 写关闭（Task 18 / 迁移 184）：data_permissions DB 级禁写（REVOKE+触发器），
+//      四维 override 编辑器改只读；上述写路径命中禁写时返回 409 { error:'frozen', guidance }，
+//      临时例外唯一通道 = 「例外」tab（temporary_grants，迁移 183）。
 //   GET  /roles            → { roles: RoleRow[] }
 //   PUT  /roles/:id        → 参数 + 默认范围四维
 //   GET  /audit?limit=20   → { items: AuditItem[] }
@@ -519,9 +522,8 @@ function StorePicker({ value, onChange }: { value: string[] | null; onChange: (v
 
 // ================= 用户 tab =================
 
-function UsersTab({ users, roles, departments, onChanged }: {
+function UsersTab({ users, roles, departments }: {
   users: User[]; roles: RoleBrief[]; departments: DeptBrief[];
-  onChanged: () => void;
 }) {
   const [search, setSearch] = useState('');
   const [overrideUser, setOverrideUser] = useState<User | null>(null);
@@ -602,7 +604,7 @@ function UsersTab({ users, roles, departments, onChanged }: {
       </div>
 
       {overrideUser && (
-        <OverrideEditor user={overrideUser} onClose={() => setOverrideUser(null)} onChanged={() => { setOverrideUser(null); onChanged(); }} />
+        <OverrideEditor user={overrideUser} onClose={() => setOverrideUser(null)} />
       )}
       {preview && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => setPreview(null)}>
@@ -617,13 +619,12 @@ function UsersTab({ users, roles, departments, onChanged }: {
   );
 }
 
-// 个人 override 编辑器：四维 + expires_at + note；维留空=继承（PUT null）；删除=恢复继承
-function OverrideEditor({ user, onClose, onChanged }: {
-  user: User; onClose: () => void; onChanged: () => void;
+// 个人 override 查看器（W5 写关闭后只读，Task 18 / 迁移 184）：
+// 四维 + expires_at + note 仅展示现状；写入通道已 DB 级冻结——引导 Casdoor / 「例外」tab。
+function OverrideEditor({ user, onClose }: {
+  user: User; onClose: () => void;
 }) {
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [hasOverride, setHasOverride] = useState(false);
   const [err, setErr] = useState('');
   const brands = useBrands();
   const [form, setForm] = useState({
@@ -643,7 +644,6 @@ function OverrideEditor({ user, onClose, onChanged }: {
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;
         const ov = (j.override ?? null) as OverrideRow | null;
-        setHasOverride(!!ov);
         setForm({
           branchNums: ov?.branch_nums ?? null,
           brands: ov?.brands ?? null,
@@ -658,96 +658,60 @@ function OverrideEditor({ user, onClose, onChanged }: {
     return () => { cancelled = true; };
   }, [user.wecom_id]);
 
-  async function save() {
-    setSaving(true); setErr('');
-    const body = {
-      branch_nums: form.branchNums && form.branchNums.length ? form.branchNums : null,
-      brands: form.brands && form.brands.length ? form.brands : null,
-      categories: form.categories && form.categories.length ? form.categories : null,
-      can_see_cost: form.canSeeCost,
-      expires_at: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
-      note: form.note.trim() || null,
-    };
-    const allNull = (body.branch_nums ?? null) === null && (body.brands ?? null) === null
-      && (body.categories ?? null) === null && (body.can_see_cost ?? null) === null;
-    try {
-      const r = await fetch(`/api/admin/permissions/users/${encodeURIComponent(user.wecom_id)}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
-      toast.success(allNull ? '已恢复继承，用户重新登录后生效' : '已保存单独授权，用户重新登录后生效');
-      onChanged();
-    } catch { setErr('保存失败，请重试'); }
-    finally { setSaving(false); }
-  }
-
-  async function remove() {
-    if (!confirm(`删除 ${user.name ?? user.wecom_id} 的单独授权并恢复继承？`)) return;
-    setSaving(true); setErr('');
-    try {
-      const r = await fetch(`/api/admin/permissions/users/${encodeURIComponent(user.wecom_id)}`, { method: 'DELETE' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `删除失败 ${r.status}`); return; }
-      toast.success('已删除 override，用户重新登录后恢复继承');
-      onChanged();
-    } catch { setErr('删除失败，请重试'); }
-    finally { setSaving(false); }
-  }
-
   return (
-    <Modal title={`单独授权 - ${user.name ?? user.wecom_id}`} onClose={onClose} wide>
+    <Modal title={`单独授权（只读） - ${user.name ?? user.wecom_id}`} onClose={onClose} wide>
       {loading ? <div className="py-6 text-sm text-slate-400">加载中…</div> : (
         <div>
           {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
-          <Field label="品牌范围" hint="留空=继承（不覆盖角色∪部门基底）">
-            <DimCheckboxes
-              options={brands.map(b => ({ value: b.system_book_code, label: `${b.system_book_code} ${b.brand_name}` }))}
-              value={form.brands}
-              onChange={v => setForm(f => ({ ...f, brands: v }))}
-            />
-          </Field>
-          <Field label="品类范围" hint="留空=继承">
-            <DimCheckboxes
-              options={CATEGORY_OPTIONS.map(c => ({ value: c, label: c }))}
-              value={form.categories}
-              onChange={v => setForm(f => ({ ...f, categories: v }))}
-            />
-          </Field>
-          <Field label="门店范围" hint="留空=继承；全部门(*) = 放行全部门店">
-            <StorePicker value={form.branchNums} onChange={v => setForm(f => ({ ...f, branchNums: v }))} />
-          </Field>
-          <Field label="成本可见" hint={form.canSeeCost === null ? '继承 = 不覆盖基底' : form.canSeeCost ? '覆盖为：可见成本' : '覆盖为：隐藏成本'}>
-            <CostTriState value={form.canSeeCost} onChange={v => setForm(f => ({ ...f, canSeeCost: v }))} />
-          </Field>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="到期时间（留空=永久）" hint="到期后该 override 自动失效（继承恢复）">
-              <input
-                type="datetime-local"
-                value={form.expiresAt}
-                onChange={e => setForm(f => ({ ...f, expiresAt: e.target.value }))}
-                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              />
-            </Field>
-            <Field label="备注">
-              <input
-                value={form.note}
-                onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                placeholder="如：临时授权 - 华东大促"
-                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              />
-            </Field>
+          {/* W5 写关闭引导（同页顶部横幅样式） */}
+          <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+            <span>四维授权已冻结（W5 写关闭）：本弹窗仅查看现状，不提供编辑。长期调整请在 Casdoor 配置；临时例外用「例外」tab。</span>
           </div>
-          <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-3">
-            {hasOverride ? (
-              <Btn danger disabled={saving} onClick={remove}>
-                <Trash2 size={14} /> 删除恢复继承
-              </Btn>
-            ) : <span />}
-            <div className="flex gap-2">
-              <Btn variant="ghost" onClick={onClose}>取消</Btn>
-              <Btn disabled={saving} onClick={save}>{saving ? '保存中…' : '保存'}</Btn>
+          {/* fieldset disabled：原生禁用内层全部表单控件（四维 + 到期 + 备注）——只读 */}
+          <fieldset disabled className="contents">
+            <Field label="品牌范围" hint="留空=继承（不覆盖角色∪部门基底）">
+              <DimCheckboxes
+                options={brands.map(b => ({ value: b.system_book_code, label: `${b.system_book_code} ${b.brand_name}` }))}
+                value={form.brands}
+                onChange={v => setForm(f => ({ ...f, brands: v }))}
+              />
+            </Field>
+            <Field label="品类范围" hint="留空=继承">
+              <DimCheckboxes
+                options={CATEGORY_OPTIONS.map(c => ({ value: c, label: c }))}
+                value={form.categories}
+                onChange={v => setForm(f => ({ ...f, categories: v }))}
+              />
+            </Field>
+            <Field label="门店范围" hint="留空=继承；全部门(*) = 放行全部门店">
+              <StorePicker value={form.branchNums} onChange={v => setForm(f => ({ ...f, branchNums: v }))} />
+            </Field>
+            <Field label="成本可见" hint={form.canSeeCost === null ? '继承 = 不覆盖基底' : form.canSeeCost ? '覆盖为：可见成本' : '覆盖为：隐藏成本'}>
+              <CostTriState value={form.canSeeCost} onChange={v => setForm(f => ({ ...f, canSeeCost: v }))} />
+            </Field>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="到期时间（留空=永久）" hint="到期后该 override 自动失效（继承恢复）">
+                <input
+                  type="datetime-local"
+                  value={form.expiresAt}
+                  onChange={e => setForm(f => ({ ...f, expiresAt: e.target.value }))}
+                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="备注">
+                <input
+                  value={form.note}
+                  onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+                  placeholder="如：临时授权 - 华东大促"
+                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
             </div>
+          </fieldset>
+          <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-3">
+            <span className="text-xs text-slate-400">四维已冻结（W5）：例外走「例外」tab，调整走 Casdoor</span>
+            <Btn variant="ghost" onClick={onClose}>关闭</Btn>
           </div>
         </div>
       )}
@@ -829,7 +793,7 @@ function DeptEditor({ dept, onClose, onChanged, setErr }: {
         }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
+      if (!r.ok) { setErr(j.guidance || j.error || `保存失败 ${r.status}`); return; }   // guidance：W5 写关闭 409 引导文案
       toast.success(`已保存部门「${dept.name}」权限，用户重新登录后生效`);
       onChanged();
     } catch { setErr('保存失败，请重试'); }
@@ -956,7 +920,7 @@ function RoleEditor({ role, onClose, onChanged, setErr }: {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
+      if (!r.ok) { setErr(j.guidance || j.error || `保存失败 ${r.status}`); return; }   // guidance：W5 写关闭 409 引导文案
       toast.success(`已保存角色「${role.name}」，用户重新登录后生效`);
       onChanged();
     } catch { setErr('保存失败，请重试'); }
@@ -1447,6 +1411,16 @@ export default function PermissionsPage() {
         <AlertTriangle size={15} className="shrink-0 mt-0.5" />
         <span>权限改动后，用户下次登录（重新签发 JWT）生效。</span>
       </div>
+      {/* W5 写关闭引导横幅（Task 18 / 迁移 184）：四维授权上收 Casdoor，本页 override 只读，例外走「例外」tab */}
+      <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+        <span>
+          四维数据授权（品牌 / 品类 / 门店 / 成本）已上收统一身份平台并 DB 级冻结（W5 写关闭）——请在
+          <a href="https://sso.shanhaiyiguo.com/login/shanhai" target="_blank" rel="noreferrer" className="mx-1 font-medium underline hover:text-amber-900">Casdoor 管理端</a>
+          配置；临时例外（≤90 天自动失效）走
+          <button type="button" onClick={() => setTab('grants')} className="mx-1 font-medium underline hover:text-amber-900">「例外」tab</button>。
+        </span>
+      </div>
       {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
 
       {initialLoading ? (
@@ -1465,7 +1439,7 @@ export default function PermissionsPage() {
               </button>
             ))}
           </div>
-          {tab === 'users' && <UsersTab users={users} roles={roleBriefs} departments={userDepts} onChanged={reloadAll} />}
+          {tab === 'users' && <UsersTab users={users} roles={roleBriefs} departments={userDepts} />}
           {tab === 'depts' && <DeptsTab departments={departments} onChanged={reloadAll} />}
           {tab === 'roles' && <RolesTab roles={roles} onChanged={reloadAll} />}
           {tab === 'grants' && <GrantsTab users={users} onChanged={reloadAll} />}
