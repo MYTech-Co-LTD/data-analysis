@@ -366,10 +366,11 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
    └─ 执行 → 返回（权限硬编码进视图，绕不过）
 ```
 
-**行级权限（底座 = branch_nums 门店，四维之一，§6.2）：**
+**行级权限（底座 = branch_nums 门店，§6.2）：**
 - DuckDB：权限视图 `WHERE branch_num IN ('54','127',...)`（branch_num 是 VARCHAR，已实测）
 - PostgreSQL：汇总表 RLS 用 `request.jwt.claims.branch_nums`（claim 由网关代签短时 JWT 注入，复用 wecom-oauth 的 signJwt + JWT_SECRET）
 - brands/categories 维在语义层/视图侧过滤；数据源已收编 `data_permissions` 单表（167），网关只消费 `get_user_perms` 结果
+- **演进（2026-08-16 IAM 标准化，W 轴）**：门店范围目标态由 Casdoor **Group tree 挂组**派生（claims `groups` → `data_scope.branch_nums`，§6.2/§6.5）；`data_permissions` 双氧期保留，W5 DB 级写关闭、W6 sunset。消费点（get_user_perms / RLS）机制不变，输入源切换（PERMS_INPUT 同模式）
 
 **列级脱敏（成本/毛利成组，防反算）：**
 - 敏感组：`item_cost_price` / `order_detail_cost` / `cost` / `profit` / `sale_profit_rate`；汇总侧 `total_profit`
@@ -439,6 +440,7 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
 ```
 - **全局**：插件 `activation.onStartup` + 装入即进 `plugins.allow` → 所有企微用户开箱可用，无需逐人配。
 - **按人鉴权**：userId 由 OpenClaw 从企微可信注入，用户端零配置；改权限=走 `/admin/permissions` 页面（写库 + 落 `permission_audit`），不动 OpenClaw。**授权数据源 = `data_permissions` 单表（role/dept/user 三 subject）**：167 已把部门权限列 + 老按人表收编进本表（`org_departments` 权限列、`retail_query_user_perms` 已退役），`get_user_perms` 逐维合成（基底 = 角色∪部门并集 → 个人 user 行按字段覆盖，详见 §6.2）。个人授权用于不在任何已同步部门里的用户（如 YangWei——bot 企微应用通讯录可见范围只到总经办，同步拉不到他；且给他部门设权限会波及同事，不是"单独开"）。安全模型（2026-08-13 修订，对齐迁移 167 F1）：`data_permissions`/`permission_audit` 已 GRANT anon/authenticated 全 CRUD，管理 API 经 PostgREST 直写。**信任边界 = PostgREST 仅内网可达（无宿主机端口映射）+ 管理 API 层 `requireAdmin` 验签强鉴权（access_token HS256 验签 + sub==wecom_userid）+ 读路径 `get_user_perms` RPC 透视**。 **运维约束：SQL 直改不落 `permission_audit` 审计，权限变更一律走管理页面 `/admin/permissions`。**
+- **信任边界演进（2026-08-16 IAM 标准化，spec `docs/superpowers/specs/2026-08-16-platform-iam-standardization-design.md`）**：授权语义上收 Casdoor——**组织架构中心化 = Casdoor Group tree**（部门树 + 区域-门店树；本地 `org_departments`/`org_users` 降级**只读投影**，不再承担真相，§6.1/§7.1.2）；`data_permissions` 进入双氧期（W5 DB 级写关闭 → W6 sunset，§6.2）。信任边界新增两组件，均以 org admin 级服务账号调 Casdoor 原生 HTTP API（不 fork）：① **组同步器（唯一自写组件）**——Casdoor 原生 wecom syncer 只同步用户（`GetOriginalGroups` 返回空带 TODO，源码验证），组织/门店组上收必须自写；两通道分离（部门树=企微驱动 / 门店树=diff 驱动）、先父后子 + 每日父链完整性校验（父链断裂 → 原生 `GetUserFullGroupPath` error → 整组登录崩）。② **resource 同步 adapter**——catalog（`web/lib/capability-catalog.ts` 单真相，§6.4）→ Casdoor `add-resource`（`/` 前缀归一、差集只插、撞 PK retry；只增不删，删除走人工废弃清单）**resource 注册走 Casdoor 原生 API**。Casdoor UI 手配仅限 catalog ∪ `*` 内，非 catalog key 被校验器 fail-close 拒绝。以上两条与既有「PostgREST 内网 + requireAdmin 验签 + RPC 透视」边界叠加，不替代。
 - **不千人千面**：权限数据在 DB，OpenClaw 侧零用户态；`AGENT_API_KEY` 留 openclaw 容器 env（`openclaw/.env`，compose `env_file` 注入），用户/LLM 均不可见。
 
 **🆕 OpenClaw 统一身份链路（2026-08-15 spec；push-admin 插件先行，agent-query 随 U8 切换）：**
@@ -560,23 +562,44 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 ## 六、鉴权系统
 
-### 6.1 登录流程（帽子×座位×口径分层，2026-08-15 平台级权限改造）
+### 6.0 真相源总表（2026-08-16 IAM 标准化：Casdoor 主导三分流）
 
-> spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md`（§6.2 数据范围合成 / §6.4 casbin 功能授权层 配套）。
+> spec：`docs/superpowers/specs/2026-08-16-platform-iam-standardization-design.md`（revision-2 终稿；对 08-15 spec「真相源划分」的升级替换——凡与本表冲突处以本表为准，08-15 未提级条款全部继承）。
+> **关键变化一句话**：08-15 的「数据范围留在本地 `data_permissions`」演进为「**Casdoor 主导三分流**」；「人→部门：企微通讯录」演进为「**Casdoor Group tree 中心化**」。其余全部继承。
+
+| 数据 | Source of Truth | 合法写入口 | 对 08-15 的变化 |
+|---|---|---|---|
+| 人是谁 | Casdoor | 企微 provider / JIT / 薄同步建户 | 不变 |
+| 组织架构（部门/区域/门店组） | **Casdoor Group tree** | Casdoor UI + 组同步器（auto） | **★ 中心化：原「企微通讯录→org_departments」**；本地表降级只读投影 |
+| 职位（Role） | Casdoor | Casdoor UI（manual）+ 薄同步（auto） | 不变；闭环经 Group 挂 Role |
+| 能力点（功能资源） | Casdoor Permission + resource 表 | Casdoor UI / **catalog 同步 adapter**（§6.4） | **★ 新增 catalog 动态发现** |
+| 数据范围-静态枚举（品牌/品类/字段） | **Casdoor resource** | catalog 同步 adapter | **★ 原 `data_permissions` 各维内** |
+| 数据范围-动态门店 | **Casdoor Group 归属**（挂组） | 组同步器 / Casdoor UI | **★ 原 `data_permissions.branch_nums` 内** |
+| 数据范围-临时例外 | app `temporary_grants`（RT 实查，§6.5） | 授权中心 UI | 新建（原表内 `expires_at` 语义） |
+| 人→角色（本地视图） | 持久投影 `role_codes`（非真相源） | 只被写穿 | 不变（sunset 时点继承） |
+| 本地 `org_departments`/`org_users` | **缓存投影（非真相源）** | 只读消费 | **★ 降级：不再被写**（W2/W4 切换） |
+
+### 6.1 登录流程（帽子×座位×口径分层，2026-08-15 平台级权限改造；座位/口径层 2026-08-16 IAM 标准化演进）
+
+> spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md`（§6.2 数据范围合成 / §6.4 casbin 功能授权层 配套）；**演进：`docs/superpowers/specs/2026-08-16-platform-iam-standardization-design.md`（revision-2——座位层 Group tree 中心化 / 口径层三分流 / 能力点 catalog，§6.0/§6.4/§6.5）**。
 >
 > **核心原则——四层模型：帽子 × 座位 × 口径**：
 > ```
 > ① 身份层（不动）      Casdoor OIDC（企微 provider）→ wecom_id（JIT 建户）
 > ② 帽子层（改造）      Casdoor：人→角色（UI 人工 + 薄同步 auto，单写者原则）
 >                       角色×功能资源：data-analysis:<模块>:<动作>（casbin Permission，§6.4）
-> ③ 座位层（不动）      企微通讯录 → org_departments → org_users.department_ids
-> ④ 口径层（输入源切换）data_permissions（role/dept/user 三类 subject，四维合成，§6.2）
+> ③ 座位层（W2 上收）   Casdoor Group tree 中心化（部门树 + 区域-门店树，组同步器，§7.1.2）
+>                       org_departments / org_users 降级只读投影（不再被写）
+> ④ 口径层（三分流）    品牌/品类/字段 → Casdoor resource；门店 → Group 挂组（groups claim 派生）
+>                       临时例外 → temporary_grants RT 实查（§6.5）
+>                       data_permissions 双氧期 → W5 写关闭 → W6 sunset（§6.2）
 >                       → get_user_perms（PERMS_INPUT 感知读 role_codes 镜像或 role_id 折 code）
->                       → claims → RLS/视图过滤（执行点零改动）
+>                       → claims（W3 扩 groups/data_scope/fields/catalog_v）→ RLS/视图过滤
 > ```
 >
 > - **身份+帽子层（Casdoor 统一）**：Casdoor（`sso.shanhaiyiguo.com`，控制面独立部署）持有企微 WeCom provider，负责"这人是谁（`wecom_id`）+ SSO 会话 + 人→角色（帽子）+ 角色×功能授权（casbin Permission）"。后续每接一个系统只需在 Casdoor 注册一个 OIDC client，不重复对接企微 API。
-> - **口径层（data-analysis 本地）**：数据范围四维（门店/品牌/品类/成本）留在 `data_permissions` 单表逐维合成——casbin 是单次判定引擎、无 policy→SQL，行级数据过滤永不进 IdP（源码验证）。`get_user_perms` 按 `PERMS_INPUT=casdoor|legacy` 感知输入源（casdoor 模式读 `org_users.role_codes` 镜像；legacy 模式按 `role_id` 折 code），结果**自签 PostgREST JWT**（`JWT_SECRET` / RLS 策略 / claims 八字段结构 / pgrst_pre_request 执行点全部零改动）。
+> - **座位层（2026-08-16 中心化）**：组织架构单一真相源 = **Casdoor Group tree**（部门树 + 区域-门店树，§7.1.2 组同步器两通道）；本地 `org_departments`/`org_users` 降级**只读缓存投影**。门店挂组三态展开（门店叶子直映 / 区域组=子孙叶子并集 / 部门组不参与 branch 展开），`groups` claim 带完整路径精确数组（禁中文 label 进判定）。
+> - **口径层（2026-08-16 三分流）**：静态枚举（品牌/品类/字段）→ Casdoor resource；动态门店（~250）→ Group tree 挂组表达（**不 resource 化门店**：门店是"过滤值"非"能力点"，policy 行数=门店数×授权组合数）；临时例外 → app `temporary_grants`（RT 实查，不折叠进 claims，§6.5）。`data_permissions` 目标 **sunset**（W5 DB 级写关闭、W6 删表；双氧期保留作回滚保险）。`get_user_perms` 按 `PERMS_INPUT=casdoor|legacy` 感知输入源（casdoor 模式读 `org_users.role_codes` 镜像；legacy 模式按 `role_id` 折 code），结果**自签 PostgREST JWT**（`JWT_SECRET` / RLS 策略 / pgrst_pre_request 执行点不变；claims 结构 W3 扩 `groups`/`data_scope`/`fields`/`catalog_v` 新段 + 顶层旧 key 双氧保留至 W6，§6.2）。
 > - **Casdoor 单点口径（裁决-2，SLO 化）**：Casdoor 故障时**存量会话零影响**（数据面/引擎不依赖 Casdoor）+ **新登录恢复 <2-4h**（SLO 化而非热备）+ **page 告警**；break-glass 凭证 best-effort 并行验证，通过后升冷备。
 
 ```
@@ -611,6 +634,8 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
+**claims 契约扩展（W3，2026-08-16 IAM 标准化；与 U2 登录切换同一发布窗）**：claims 构建 function（`functions/wecom-oidc-callback`）在既有字段（sub/org/roles/permissions + role_code/visible_panels/default_landing/default_metric/departments，08-15 八字段全保留）之上**新增四段**——`groups`（用户挂组完整路径精确数组；Casdoor 原生 `useGroupPathInToken` 后 token 自带，或 get-account 读 `user.Groups`；「get-user-groups」路由不存在禁止调用）、`data_scope`（brands/categories/branch_nums，由 resource 判定 + groups 叶子展开派生；**段存在但空 = authorized ∅ = deny，不收敛 `["*"]`**）、`fields`（掩码开关，如 `{cost:true}`）、`catalog_v`（代码/部署版本戳，只做 key 级按需 fail-close，不做全局版本拒绝）。**顶层旧 key 双氧保留至 W6 不删**（072/114 扁平化下旧 key 变 NULL 会致既有 RLS 静默全放）；新 claims 顶层旧 key 值 = 全维非空镜像。`permissions` 值从四维维度 key 迁移为 `data-analysis:*` 资源串 + `push:` 裸 key（B2/H4）。例外门店**不折叠进 claims**（`temporary_grants` RT 实查，§6.5）。
+
 **WeCom provider 双模式**（Casdoor provider 级 `method` 是单值，故配两个 provider 都指向 App A）：
 - `wecom_silent`（Silent）：企微内静默（`snsapi_base`）。App A 登录凭证（`WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET`）已挪入 Casdoor 此 provider，`functions/wecom-oauth` 的登录职责由 `functions/wecom-oidc-callback` 取代。
 - `wecom_scan`（Normal）：PC 外部扫码。
@@ -640,27 +665,31 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 ### 6.2 数据权限合成与 PostgreSQL RLS 鉴权（2026-08-15 改写：subject_id=code + role_codes 持久投影 + 多角色 UNION）
 
 ```
-企微通讯录同步 → 座位（org_users.department_ids）
+组织架构：Casdoor Group tree（W2 影子同步 → W4 消费侧切；本地 org_departments/org_users = 只读投影）
      ↓
-登录时自签 JWT 携带 departments + 四维 claims + roles/permissions（§6.1）
+登录时自签 JWT 携带 departments + 数据范围 claims（双氧期：顶层旧 key + W3 起 data_scope/groups/fields 新段）+ roles/permissions（§6.1）
      ↓
 PostgREST 请求带 Authorization: Bearer <JWT>
      ↓
-PostgreSQL RLS 策略（执行点零改动）
+PostgreSQL RLS 策略（执行点机制不变；W3 起新增策略分支，见下）
      ↓
 数据库层强制隔离
 ```
 
 > RLS 策略族沿用现状零改动：部门成员策略 `WHERE departments ?| current_setting('request.jwt.claims.departments')` 与四维 claims 策略（`branch_nums` / `can_see_cost` 等，§6.3/§4.2）都消费自签 JWT claims，claims 结构不变故策略不动。
+>
+> **策略分支（W3，迁移 179——空集=deny 的 enforce 层）**：新 RLS 判定先看 `request.jwt.claims.data_scope` 形状——**段存在（非 NULL；114 顶层扁平化下可 `::jsonb ->>'branch_nums'` 定位、以 IS NOT NULL 区分新旧 claims）→ 读 data_scope 各维，空段 = deny；缺失 → 回退 legacy 顶层 key（走 `claim_match_or_star`）**。分支本身即新旧 claims 的形状鉴别器，与 072 语义天然隔离；W4 切走后删回退支。**严禁对 data_scope 空段用 `claim_match_or_star`**（其空数组/NULL→true 全放——空集 deny 不能靠它执行）。legacy「空数组→`["*"]` 兜底」仅限无 data_scope 段的旧形状令牌（双氧期），W3 后在途旧形状令牌 ≤48h 短 TTL 压缩宽松窗口，W4 切走后移除。
 
 **权限表**（`data_permissions` 单表授权 + 角色码契约）：
+
+> ⚠️ **迁移态（2026-08-16 IAM 标准化）**：`data_permissions` 进入**双氧期**——目标态 = 数据范围三分流（§6.0 真相源总表 / §6.5 例外表），本表 **W5 DB 级写关闭**（迁移 184：REVOKE/触发器禁写 + 直写注入测试红转绿；管理页只读仅是 UX 层，不等于单写者）、**W6 删表 sunset**（迁移 185；契约测试①同步替代为 roles ⊆ Group tree + role_codes 差分期望集，167 回滚脚本保留）。下文为双氧期 legacy 语义，消费侧 W4 起切 `data_scope`（§6.2 策略分支）。
 - `data_permissions`：**唯一授权表**。`subject_type` ∈ `role`/`dept`/`user`；**role 行 `subject_id` = 角色 `code`**（P0a M-1 迁移统一，改前全员 perms 快照作 diff=0 门禁、显式反向迁移脚本回滚；`roles.code` 加 UNIQUE NOT NULL + 命名空间约束 `CHECK (code !~ '^[0-9]+$')`，防 code 与其它角色 `role_id::text` 错映射）；四维 `branch_nums`/`brands`/`categories`/`can_see_cost`，**NULL = 该维未配置**（不参与合成）、`["*"]` = 全放行；`expires_at` 临时授权（NULL=永久）。行贡献：role 行四维全可配；dept 行只配 `branch_nums`+`can_see_cost` 两维；user 行按需只配要覆盖的维。契约测试：`Casdoor roles ⊆ data_permissions role subject_id ∪ {admin}` 双向 diff 空。
 - **`org_users.role_codes TEXT[]` = 持久投影（非过渡产物）**：Casdoor「人→角色」真相源在本地库的物理载体——无会话路径（agent-query / run_push 推送引擎 / 权限页 preview）与「Casdoor 宕机数据面不受影响」都靠它；只被写穿（登录 / 薄同步 / drift 对账回写），不经业务 API 直写。`role_id` 旧单值列才是过渡列（U2 验收后两版本内删，sunset 发 issue；P0a 后 role 行按 code 匹配、用户角色经 roles join 折 code 一处实现，U2 后才读 role_codes 数组，中间无第三态）。
 - **多角色 cardinality（冻结进契约测试）**：数据范围合成 = **UNION**（167「角色∪部门」的自然推广，内核零改动）；`can_see_cost` 任一 true 则 true、user 行显式 false 整体替换；UI 字段 = priority 最高角色（平级字母序）；**claims 单值 `role_code` = priority 最高角色 code**；selector 命中 = 任一角色命中；`get_user_perms` 签名冻结单入参、roles 解析内移。
 - `permission_audit`：**数据范围面**审计（操作者/动作/主体 + payload_before/after）；仅经管理 API 写（页面操作自动落审计），SQL 直改绕不过审计。**角色面审计缺口（显式声明）**：人→角色（帽子）变更不落本地 `permission_audit`——其审计指向 **Casdoor 操作日志**；权限页用户 tab 角列为只读（role_codes + casdoor_synced_at + Casdoor 编辑深链），不提供本地角色写入。
 - `roles`：角色 UI 档案（`default_landing`/`default_metric`/`visible_panels`/`is_active`）+ 具名授权包（`data_permissions` role 行）。
 - `org_departments`：部门基础信息（企微同步）；权限列已随 167 收编进 `data_permissions`（dept 行）。
-- **合成规则**（`get_user_perms`，登录时写入 claims）：基底 = 角色 ∪ 部门各维 UNION（忽略 NULL，过滤过期条目）→ 个人 override 某维非 NULL 则**按字段覆盖**；`can_see_cost` = 个人 user 行配了该维即**整体替换基底**（配 `false` 可显式收回）；兜底不变（claim 缺失 / 含 `"*"` → 放行，空数组兜底 `["*"]`）。引擎侧 strict wrapper 语义见 §7.4（未知用户 NULL fail-close，空集 ≠ NULL）。
+- **合成规则**（`get_user_perms`，登录时写入 claims）：基底 = 角色 ∪ 部门各维 UNION（忽略 NULL，过滤过期条目）→ 个人 override 某维非 NULL 则**按字段覆盖**；`can_see_cost` = 个人 user 行配了该维即**整体替换基底**（配 `false` 可显式收回）；兜底不变（claim 缺失 / 含 `"*"` → 放行，空数组兜底 `["*"]`——**该兜底仅限无 data_scope 段的旧形状令牌（双氧期）；W3 起新签发 claims 带 data_scope 段，段存在但空 = authorized ∅ = deny，不收敛 `["*"]`**，enforce 走上节策略分支，铁律见 CLAUDE.md「catalog 单真相纪律」）。引擎侧 strict wrapper 语义见 §7.4（未知用户 NULL fail-close，空集 ≠ NULL）。
 - 智能问数 perms（`get_user_perms` 返回）= `{ branch_nums, brands, categories, can_see_cost }` + 角色 UI 字段：详见 §4.2
 
 **身份视图一致性总表（哪个消费端读哪份身份快照、多旧、怎么失效）：**
@@ -680,14 +709,40 @@ PostgreSQL RLS 策略（执行点零改动）
 
 核心：网关按身份建**临时权限视图**（行 `branch_nums` + 列成本组脱敏），硬编码进视图定义；LLM 生成的 SQL 在视图上执行，引擎层强制、不可绕过。`/query` 改每请求独立连接实现视图隔离；PostgreSQL 侧走真 RLS（`request.jwt.claims.branch_nums`，网关代签短时 JWT 注入）。
 
-### 6.4 casbin 功能授权层（2026-08-15 新增）
+### 6.4 casbin 功能授权层与能力点 catalog 与动态发现（2026-08-15 新增；2026-08-16 IAM 标准化扩展）
 
-**功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1），数据范围留 `data_permissions`（§6.2）——casbin 是单次判定引擎、无 policy→SQL，行级数据过滤永不进 IdP（源码验证）。
+**功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1）。数据授权目标态 = **三分流**（静态枚举→resource / 门店→Group 挂组 / 例外→temporary_grants，§6.0/§6.5）；`data_permissions` 双氧期保留、W6 sunset（§6.2）——casbin 是单次判定引擎、无 policy→SQL，**门店（过滤值）不 resource 化**（policy 行数=门店数×授权组合数，每开新店要 add-resource + 重挂权限）。
 
 - **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual）+ 薄同步 auto（§6.1 单写者）。
 - **checkFeaturePerm 单模块**：`web/lib/feature-perm.ts` 单函数收口所有功能门禁（禁散落 `userid === '...'` 硬编码）——P0a 读 claims + BREAKGLASS；U2 后读 claims + casbin 实查。切 casbin 是 1 处切换，非 N 处 hunt-and-replace。
 - **BREAKGLASS env**：`ADMIN_USERIDS` 常驻白名单 P0a 即收敛为 `BREAKGLASS_ADMINS` env（默认空；启用走兜底并写审计）——常驻白名单 = 永久 Casdoor 旁路，撤权不收口。
 - **高危实查（裁决-1 已裁：启用，随 U2 生效）**：admin / `push:broadcast` / 临时授权类服务端实查（5min 缓存 + fail-close + 24h stale 宽限+告警）——这是 `JWT_SECRET` 自签 admin 的真兜底（RT-7）；低危（菜单/只读）维持 7 天随自签 JWT。
+
+**能力点 catalog 与动态发现（2026-08-16 新增，spec §5.1）——功能能力点真相源 = catalog（代码）+ casbin Permission(resource) + 同步 adapter**：
+
+- **catalog 单真相（H12，纪律同级铁律，已写入 CLAUDE.md）**：`capabilityCatalog` 只存在于 `web/lib/capability-catalog.ts`（+ scan 产出的 `capability-catalog.generated.ts` 输入）单副本；组成 = generated（scan 自动发现）+ overrides（人工只改展示属性/敏感标记，不增删 key）+ manual（门禁/品牌/品类等 scan 覆盖不到的）。**function（claims 构建器）只消费不内嵌复制 catalog 子集**——function-only 部署（SSH 直调，不触发 catalog scan）会制造漂移副本，属违规。新增视图/路由 = 改 view-configs / app 路由，catalog 由 scan 自动发现。
+- **命名空间**：`data-analysis:view:<name>`（逐看板细粒度）/ `view-group:<name>`（授权组，§6.5）/ `field:<slug>`（敏感字段列掩码，现 cost）/ `brand:3120|64188` / `category:水果|标品|耗材`（数据范围静态枚举）/ `data-analysis:admin`（管理台门禁）。**`push:*` 是引擎裸 key 保持无前缀**（引擎字面量校验，加前缀将致恒 403；不入 catalog）。
+- **动态发现闭环**：① 加路由/视图 → ② scan（`scripts/scan-capabilities.mjs`）→ catalog 草案（**只增不减**）→ ③ 部署钩子（GHA step）+ cron 对账双通道 → resource 同步 adapter → Casdoor `add-resource`（原生 API）→ ④ 管理员勾角色（或能力目录辅助页 `/admin/capabilities` 复制 key）→ ⑤ claims 重建 → 校验器放行 + `catalog_v` 更新 → 生效。
+- **add-resource adapter 怪癖（H3）**：add-resource = 裸 Insert（PK=owner+name，重复即报错；GetResource 查表恒加 `/` 前缀）→ adapter 统一 `/` 前缀归一化写入、幂等 = 先查差集只插缺口、并发撞 PK → retry + 吞 duplicate；**只增改不删**（原生 delete 挂 Storage provider 无 Storage 不可用，与废弃清单回滚语义自洽）。含中文/冒号的 resource name 字符集行为列入 V2 源码验证；**同步失败不得静默跳过**——逐 key 显式反馈（成功/失败/重试），失败进对账红区。
+- **废弃清单生命周期（H14/M2）**：闭环只增不减，下架不自动撤销。删除走 catalog 内 `deprecated` 集合（app 侧唯一载体，不入 Casdoor；owner=平台管理员）；校验器对废弃 key fail-close + 告警。驱逐判据（deprecated → removed）= 清单发布 ≥30 天 ∧ 审计确认无「具名 + 通配」引用 ∧ cron 对账红区清零，由平台管理员执行留痕。
+- **通配残余（已知接受）**：持 `view:*`/`brand:*`/`category:*` 的角色对已下架 key **保留能力直至改 permission**——解析期校验（§6.1 catalog_v）只挡具体点名 key，通配本身 ∈ catalog ∪ `*` 合法通过。通配授权列入高风险清单（单独审计 + 24h 新资源 diff 观察）；审计「仍引用废弃 key」排查项必须含**通配持有者列表**（引用的是 `*` 非具名 key，按 key 审计显示不出）。
+- **校验器（fail-close）**：只认 catalog ∪ `*`；未注册 key → 拒绝 + 告警（反向发现：配置了不存在的能力立刻报错）。请求具体 view K 时，claims 内通配展开匹配后的**具体 key 仍须 ∈ catalog ∪ deprecated**（解析结果粒度，堵「K 已驱逐但持通配者照常可用」）。
+
+### 6.5 授权组 view-group 与例外表 temporary_grants（2026-08-16 IAM 标准化新增）
+
+**授权组 view-group（易用层，细粒度的副作用治理）**——细粒度逐看板授权的管理员勾选成本高，授权组 = 一组 view 的 union 判定：
+
+- **映射定义在 catalog（app 侧），不复制进 Casdoor policy**——Casdoor 只见组名 resource（勾选简单）；data-analysis 消费侧命中组名后展开成员判定（视图可见）。支持嵌套组 + `*` 兜底（继承 casbin Matcher）。
+- **成员禁含通配**：`view-group:*` 兜底下新增能力自动扩权不可控；成员只允许具名 `view:*` key，且必须 ∈ catalog（校验器保证）。
+- **环引用检测**：嵌套组 A→B→A 展开死循环 = 登录链路卡死；catalog 校验含环引用检测（红/绿测试）。
+- **成员变更生效粒度**：显式声明（batch-enforce 重建挂 webhook 事件，或显式时效），测试覆盖「成员变更 → 声明粒度内生效」。
+
+**例外表 temporary_grants（数据范围三分流的第三流；app 侧唯一授权数据）**——IAM 无到期语义（Casdoor 角色无过期），带到期的临时授权是 app 侧例外机制：
+
+- **形态**：`temporary_grants(user_id, dim, value, expires_at, note)`；授权中心 UI（`/admin/permissions` 例外 tab）维护。**例外不折叠进 claims（B5 铁律）**——登录时折叠 = 撤销窗口拉到 token 寿命（7 天），禁止。
+- **RT 实查（5min 缓存 TTL，命名钉死）**：实查段做 5min 缓存实查 temporary_grants——**健康态撤销 ≤5min 生效**；授权中心撤销/删除时**同步清该 sub 的例外 RT 缓存**（TTL 立即作废，不靠 TTL 兜底）。本地表降级 = DB 不可达 → fail-close（等同无例外），不产生 24h 窗口（裁决-1 的 24h stale 仅限远端实查场景）。
+- **RT→RLS 通道（防实现倒退回折叠）**：例外门店集经 `pgrst_pre_request` **每请求并集进 request.jwt.claims 专用 claim 段**——天然覆盖 PostgREST 全通道（含直连 SQL/联邦查询）；middleware 快判同源。**禁止登录时折叠进 data_scope / 旧 key**。
+- **授予面门禁**：授/撤例外需 `data-analysis:grant` 类 capability + 全量进 permission-audit + 单次授额上限（一店/维度到期天数上限）+ 双人复核可选配置——防「app 侧自授读店」通道。
 
 ---
 
@@ -777,6 +832,15 @@ functions/wecom-sync-contacts（兜底全量；JSON 调用，不受 body 限制�
 **🆕 Casdoor 薄同步三动作 + 离职四 sink（2026-08-15 spec，U1 起，详见 §6.1 薄同步链）：**
 - 同步链扩展为**薄同步**：在 upsert 本地表之外，按 `casdoor_writer`（auto|manual）单写者原则向 Casdoor 写三动作——① **provisioning**（JIT 建户，角色人工配，有需求再自动化）；② **auto 角色写入**（dept_role_mapping 推导；先「对账告警+人工确认」两周再自动写）；③ **离职 disable**（Casdoor 新登录即时拦截）。写 Casdoor 失败入 `sync_outbox`（幂等键 wecom_id+action+day）重放，>48h 页级告警；每日 drift 三向对账。
 - **离职四 sink（收权分层，诚实口径）**：① web API 面——middleware `is_active` 软校验 + `token_blacklist` 按 sub 拉黑（**即时**）；② 推送面——run_push 存在性守卫 + 订阅 owner 再校验（**即时**）+ **Novu subscriber delete**（消除残留投递，§7.4）；③ Casdoor 新登录 disable（**即时**）；④ 数据面（PostgREST/RLS）——旧 7 天 JWT 继续有效，**最长 7 天窗口（裁决-4 已裁：接受，与现状等价非新债）**；即时化真执行点为 pgrst_pre_request 扩展，留作未来选项。
+
+**🆕 组同步双轨：用户同步（原生）+ 组同步器（自写）（2026-08-16 IAM 标准化，W2 起，spec §5.3）：**
+- **用户同步走 Casdoor 原生 wecom syncer**（源码验证）；Casdoor 原生 `GetOriginalGroups/GetOriginalUserGroups` 返回空带 TODO（`object/syncer_wecom.go`）→ **组织/门店 Group 上收必须自写组同步器（唯一自写组件，范围仅此一处，不 fork）**。
+- **两通道显式分离（H2）**：① 部门树——企微 webhook / 03:17 全量 → upsert 部门组；② **门店树——由 diff(`dim_branch` vs `maps_branch_group` vs Group 树) 驱动，不挂企微 webhook**（门店在企微未必有部门，企微通知到不了新店/改名；改名 = 新名 upsert + 旧名摘挂/标 deprecated）。两通道命名空间分离防互串。
+- **建树先父后子（H1，硬约束）**：`ParentId` 存父 Name，父子链断裂（重命名/中断/先子后父）触发原生 `GetUserFullGroupPath` return error → **该组所有用户 JWT 签发失败、登录崩**——每日父链完整性校验 + 组树完整性指标（辅助页亮灯，fail 告警）。
+- **门店自省映射 `maps_branch_group`**（迁移 178）：`(branch_number, group_id) UNIQUE`——`dim_branch` 与 Casdoor Group 双向可查；登记新店 = dim_branch 建档 + 同步器建 Group + 映射行（3 处一致，对账盯）。**门店键一律用 `branch_number`**（复合键铁律，CLAUDE.md）。映射只校验「门店→组」存在；「谁该挂哪组」靠独立期望源「人→门店」成员级对账（期望源≠org_departments 自投影，防循环自证）。
+- **组类型三态（H13）**：门店叶子组 → 直映 branch_number；区域组 → 子孙门店叶子并集；部门/职能组 → 不参与 branch 展开。空集 = 空 scope 非 NULL（消费侧可区分）；未知组类型 → fail-close + 告警。
+- **删除与审计**：删除限于同步器建的组（原生 Group 有子组/挂用户即拒删；门店停用 = isEnabled=false + 摘挂 + 打标，非真删）；同步器写操作带「自动化」标记与 Casdoor UI 人工勾挂区分，admin 自挂/挂改门店叶子组 = 高风险事件接入告警。
+- **groups 投影（F9）**：写穿镜像 `org_users.groups`，供无会话路径（run_push 逐人 perms、agent-query）算门店行；消费侧 SQL 用 `jsonb @>`/`?` 精确匹配（禁前缀/LIKE），登记校验禁组名含分隔符。
 
 ### 7.2 乐檬数据源
 
@@ -951,6 +1015,22 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | permissions 生效时效（D9，裁决-1 细化） | 低危（菜单/只读）随自签 JWT 7 天；**高危实查已裁启用**——admin/push:broadcast/临时授权类服务端实查（5min 缓存 + fail-close + 24h stale 宽限），随 U2 生效（§6.4）；BREAKGLASS_ADMINS env 替代常驻白名单（默认空） | 2026-08-15 |
 | Casdoor 单点口径（裁决-2） | SLO 化：存量会话零影响 + 新登录恢复 <2-4h + page 告警；break-glass 凭证 best-effort 并行验证，通过后升冷备（§6.1） | 2026-08-15 |
 | 数据面离职窗口（裁决-4） | 接受 7 天 JWT 窗口（与现状等价非新债）；web API/推送/Casdoor 三面即时收权（离职四 sink，§7.1.2）；即时化执行点（pgrst_pre_request 扩展）留作未来选项 | 2026-08-15 |
+
+> 以下为 **2026-08-16 IAM 标准化 spec**（`docs/superpowers/specs/2026-08-16-platform-iam-standardization-design.md`，revision-2）已确认决策——D1-D8 编号**与上表 08-15 spec 的 D1-D9 是两套编号，勿混淆**；前三行为无编号原则确认（用户 2026-08-16 原则批准，spec 已确认决策节全量誊写）。实施 W 轴 W1-W6（§6.0/§6.4/§6.5）。
+
+| 决策项 | 确认结果 | 确认日期 |
+|--------|---------|---------|
+| 看板分级细粒度（原则确认） | 逐看板 `view:*` 独立授权，不做组级大揽权；授权组（view-group）作为易用层可配可省（§6.5） | 2026-08-16 |
+| 列级脱敏留扩展空间（原则确认） | `field:*` 统一命名 + 两步扩展法（catalog + 掩码配置），生成器不动（改述：生成器只接受 catalog 驱动输入，掩码消费位 = 非生成器运行时层，H7） | 2026-08-16 |
+| catalog 动态发现机制（原则确认） | catalog 自动发现（代码派生）+ 部署钩子 + cron 对账 + 校验器（认 catalog∪`*`，未知 key 拒绝）双向通道（§6.4） | 2026-08-16 |
+| 门店上收 Group tree（D1） | 每门店一组、人挂组；组织架构中心化 = Casdoor Group tree，本地 org 表降级只读投影（§6.0/§7.1.2 组同步器） | 2026-08-16 |
+| data_permissions 全撤（D2） | 数据范围三分流后目标 sunset：W5 DB 级写关闭 → W6 删表（§6.2 迁移态）；只留例外表；回滚路径 = 例外表扩容，**不反向恢复四维表** | 2026-08-16 |
+| 品牌/品类独立 resource 化（D3） | 静态枚举（品牌/品类/字段）→ Casdoor resource，不并入 `view:*` 判定（§6.4 命名空间） | 2026-08-16 |
+| 授权组 view-group（D4） | 要（易用层）：catalog 内映射、Casdoor 只见组名 resource、成员禁通配 + 环引用检测（§6.5） | 2026-08-16 |
+| 部署钩子 + cron 对账双通道同步（D5） | resource 同步双通道：GHA 部署钩子（scan→validate→sync）+ cron 对账兜底（§6.4 动态发现闭环） | 2026-08-16 |
+| 变更传播 webhook 事件（D6） | Casdoor webhook 事件驱动（非轮询）；payload 只当「失效信号」，数据一律以 re-pull/对账为准；组变更 → 数据面 JWT 即时失效（token_blacklist by sub） | 2026-08-16 |
+| 例外表放 app（D7） | IAM 无到期语义，temporary_grants 留 app 侧；RT 实查（5min 缓存）不折叠进 claims（§6.5，B5） | 2026-08-16 |
+| casbin 实查默认开（D8） | 裁决-1 继承：高危实查（admin/push:broadcast/临时授权类）默认启用，shadow 一周 ±0 后转正，E2E 冒烟 | 2026-08-16 |
 
 ---
 
