@@ -22,6 +22,6 @@ SELECT cte0.target_id AS target_id,
   cte0.biz_date AS biz_date,
   cte0.client_name AS client_name,
   cte0.wholesale_ext_customer_amount AS wholesale_ext_customer_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN cte0.wholesale_ext_customer_profit END AS wholesale_ext_customer_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((COALESCE(cte0.wholesale_ext_customer_profit, 0) / NULLIF(COALESCE(cte0.wholesale_ext_customer_amount, 0), 0)), 4) END AS wholesale_ext_customer_margin
+  CASE WHEN can_cost_visible() THEN cte0.wholesale_ext_customer_profit END AS wholesale_ext_customer_profit,
+  CASE WHEN can_cost_visible() THEN round((COALESCE(cte0.wholesale_ext_customer_profit, 0) / NULLIF(COALESCE(cte0.wholesale_ext_customer_amount, 0), 0)), 4) END AS wholesale_ext_customer_margin
 FROM cte0;

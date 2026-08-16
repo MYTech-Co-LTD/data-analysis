@@ -2,7 +2,7 @@
 // 供应链出库（配送）三级层级下钻数据获取
 // 视图 report_supply_chain_outbound_gen：region(战区) -> sub_region(二级区域) -> store(门店) 三级层级
 // 口径源自语义层生成器（仅考核战区 is_assessed_war_zone 门店，branch_num<>'99' 配送中心）
-// 脱敏：profit/margin 受 request.jwt.claims.can_see_cost 控制，无成本权限时视图返 NULL（非 0，前端自行处理）
+// 脱敏：profit/margin 受 can_cost_visible()（claims.fields.cost，182 形状鉴别）控制，无成本权限时视图返 NULL（非 0，前端自行处理）
 // margin 为 round(x,4) 即 0-1 小数（0.1234 = 12.34%），amount=0 时 NULLIF 致 margin NULL
 //
 // F1.1（前端数据准确性守护 P0）：返 GetterResult<SupplyChainOutboundRow>，吞错改 status='error'。

@@ -22,7 +22,13 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     // branch_nums 缺省 '*' 表示全权（不限门店）
     branch_nums: claims.branch_nums ?? '*',
-    // can_see_cost 严格布尔（缺省/非 true 一律 false）
-    can_see_cost: claims.can_see_cost === true,
+    // 列掩码（Task 16 消费侧切）：与迁移 182 can_cost_visible() 同款形状鉴别——
+    // claims.fields 段存在 → 读 fields.cost（缺 key=false 全掩，新令牌契约）；
+    // 缺失 → 回退 legacy 顶层 can_see_cost（旧令牌 B6 双氧，Task 20 sunset 删）。
+    // 响应字段名 can_see_cost 保持不变：这是 /api/me → 前端 hook 的内部布尔契约，
+    // 语义切换发生在 claims 读取边界（此处），下游 useCanSeeCost/MaskedBadge 不感知。
+    can_see_cost: claims.fields
+      ? claims.fields.cost === true
+      : claims.can_see_cost === true,
   });
 }

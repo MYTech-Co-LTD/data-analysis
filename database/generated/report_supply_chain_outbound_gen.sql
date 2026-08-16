@@ -95,11 +95,11 @@ SELECT
   NULL::text AS war_zone,
   NULL::text AS region_l2,
   COALESCE((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)), 0) AS delivery_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0)), 0) END AS delivery_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0))) / NULLIF(((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))), 0)), 4) END AS delivery_margin,
+  CASE WHEN can_cost_visible() THEN COALESCE((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0)), 0) END AS delivery_profit,
+  CASE WHEN can_cost_visible() THEN round((((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0))) / NULLIF(((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))), 0)), 4) END AS delivery_margin,
   COALESCE(a.daily_distribution_amount, 0) AS daily_delivery_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(a.daily_distribution_profit, 0) END AS daily_delivery_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((COALESCE(a.daily_distribution_profit, 0) / NULLIF(COALESCE(a.daily_distribution_amount, 0), 0)), 4) END AS daily_delivery_margin
+  CASE WHEN can_cost_visible() THEN COALESCE(a.daily_distribution_profit, 0) END AS daily_delivery_profit,
+  CASE WHEN can_cost_visible() THEN round((COALESCE(a.daily_distribution_profit, 0) / NULLIF(COALESCE(a.daily_distribution_amount, 0), 0)), 4) END AS daily_delivery_margin
 FROM region_act a
 UNION ALL
 SELECT
@@ -115,11 +115,11 @@ SELECT
   NULL::text AS war_zone,
   NULL::text AS region_l2,
   COALESCE((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)), 0) AS delivery_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0)), 0) END AS delivery_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0))) / NULLIF(((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))), 0)), 4) END AS delivery_margin,
+  CASE WHEN can_cost_visible() THEN COALESCE((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0)), 0) END AS delivery_profit,
+  CASE WHEN can_cost_visible() THEN round((((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0))) / NULLIF(((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))), 0)), 4) END AS delivery_margin,
   COALESCE(a.daily_distribution_amount, 0) AS daily_delivery_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(a.daily_distribution_profit, 0) END AS daily_delivery_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((COALESCE(a.daily_distribution_profit, 0) / NULLIF(COALESCE(a.daily_distribution_amount, 0), 0)), 4) END AS daily_delivery_margin
+  CASE WHEN can_cost_visible() THEN COALESCE(a.daily_distribution_profit, 0) END AS daily_delivery_profit,
+  CASE WHEN can_cost_visible() THEN round((COALESCE(a.daily_distribution_profit, 0) / NULLIF(COALESCE(a.daily_distribution_amount, 0), 0)), 4) END AS daily_delivery_margin
 FROM sub_region_act a
 UNION ALL
 SELECT
@@ -135,9 +135,9 @@ SELECT
   a.war_zone AS war_zone,
   a.region_l2 AS region_l2,
   COALESCE((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0)), 0) AS delivery_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0)), 0) END AS delivery_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0))) / NULLIF(((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))), 0)), 4) END AS delivery_margin,
+  CASE WHEN can_cost_visible() THEN COALESCE((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0)), 0) END AS delivery_profit,
+  CASE WHEN can_cost_visible() THEN round((((COALESCE(a.delivery_profit, 0) + COALESCE(a.wholesale_pp_profit, 0))) / NULLIF(((COALESCE(a.delivery_amount, 0) + COALESCE(a.wholesale_pp_amount, 0))), 0)), 4) END AS delivery_margin,
   COALESCE(a.daily_distribution_amount, 0) AS daily_delivery_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(a.daily_distribution_profit, 0) END AS daily_delivery_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((COALESCE(a.daily_distribution_profit, 0) / NULLIF(COALESCE(a.daily_distribution_amount, 0), 0)), 4) END AS daily_delivery_margin
+  CASE WHEN can_cost_visible() THEN COALESCE(a.daily_distribution_profit, 0) END AS daily_delivery_profit,
+  CASE WHEN can_cost_visible() THEN round((COALESCE(a.daily_distribution_profit, 0) / NULLIF(COALESCE(a.daily_distribution_amount, 0), 0)), 4) END AS daily_delivery_margin
 FROM leaf_rows a;
