@@ -44,7 +44,8 @@ async function getAccessToken(): Promise<string | null> {
   }
 }
 
-async function casdoorFetch(
+// 导出（W1 Task4 勘误，2026-08-16）：resource-sync 等 adapter 复用同款 client_credentials 通道
+export async function casdoorFetch(
   path: string,
   opts: RequestInit = {},
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
