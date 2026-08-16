@@ -1488,10 +1488,11 @@ BEGIN
   ON CONFLICT (key) DO NOTHING;                          -- 已冻结 = no-op（防误触重冻覆盖基线）
   INSERT INTO perm_freeze_snapshot(subject_type, subject_id, brands, categories, branch_nums, can_see_cost)
   SELECT subject_type, subject_id,
-         to_jsonb(coalesce(brands, '[]'::text[])), to_jsonb(coalesce(categories, '[]'::text[])),
-         to_jsonb(coalesce(branch_nums, '[]'::text[])), coalesce(can_see_cost, false)
+         coalesce(brands, '[]'::jsonb), coalesce(categories, '[]'::jsonb),
+         coalesce(branch_nums, '[]'::jsonb), coalesce(can_see_cost, false)
   FROM data_permissions
   ON CONFLICT (subject_type, subject_id) DO NOTHING;     -- 重跑只补缺（幂等）
+  -- 勘误（T14 实施取证，2026-08-16）：data_permissions 四维实列类型是 JSONB，原文 '[]'::text[] 非法；直接 coalesce jsonb
   RETURN (SELECT frozen_at FROM perm_freeze_sentinel WHERE key = 'data_permissions_frozen');
 END; $$;
 
@@ -1503,7 +1504,7 @@ BEGIN
     RETURN 0;
   END IF;
   DELETE FROM perm_freeze_sentinel WHERE key = 'data_permissions_frozen';
-  DELETE FROM perm_freeze_snapshot;
+  TRUNCATE perm_freeze_snapshot;   -- 勘误（T14 实施取证）：DELETE 被自家不可变行触发器拦截永败；TRUNCATE 只触发 TRUNCATE 级触发器可清（SECURITY DEFINER 以 owner 执行）
   RETURN 1;
 END; $$;
 
