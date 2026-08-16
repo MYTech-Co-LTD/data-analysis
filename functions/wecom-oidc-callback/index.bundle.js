@@ -263,7 +263,8 @@ module.exports = async function(req) {
       console.error("wecom-oidc-callback: groups claim missing, login denied (C2)");
       return json({ error: "group_claim_missing_login_denied" }, 503);
     }
-    const reachable = await fetchAllObjects(issuer, accessToken, tokenPayload.sub);
+    const casdoorUserId = tokenPayload.owner && tokenPayload.name ? `${tokenPayload.owner}/${tokenPayload.name}` : tokenPayload.sub;
+    const reachable = await fetchAllObjects(issuer, accessToken, casdoorUserId);
     const expandResult = await expandGroupsToBranches(oidcGroups, pgrstUrl);
     const claims = buildClaims({
       oidcToken: { groups: oidcGroups },
