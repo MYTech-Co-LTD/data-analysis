@@ -4,6 +4,8 @@
 // 后续切 casbin 是 1 处切换而非 N 处 hunt-and-replace。
 // P0a 判定链：token claims 命中 → true；BREAKGLASS_ADMINS env 命中 → true（记审计）；
 // 两者皆无 → false（fail-close）。BREAKGLASS 默认空 = 兜底关闭。
+import { CATALOG_KEYS, DEPRECATED_KEYS } from './capability-catalog';
+
 export async function checkFeaturePerm(
   userId: string,
   perm: string,
@@ -32,19 +34,55 @@ export async function checkFeaturePerm(
 // 如 middleware 页面重定向）。真实授权裁决必须走 jwtVerify 后的 claims 或
 // checkFeaturePerm ——middleware 页面挡板 + API 路由内 requireAdmin 双层结构中，
 // 本函数只服务前者；验签缺失时宁可返回 undefined（fail-close）。
-export function decodePermissionsClaim(token: string | undefined): { permissions?: string[] } | undefined {
+// Task 13：附带解出 catalog_v / iat（middleware 的 S4 旧形状 48h TTL 判定用），
+// 缺失字段不出现（typeof 守卫），旧调用方形状不变。
+export interface DecodedClaims {
+  permissions?: string[];
+  catalog_v?: string;
+  iat?: number;
+}
+
+export function decodePermissionsClaim(token: string | undefined): DecodedClaims | undefined {
   if (!token) return undefined;
   try {
     const part = token.split('.')[1];
     if (!part) return undefined;
     const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
     const json = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-    const payload = JSON.parse(json) as { permissions?: unknown };
+    const payload = JSON.parse(json) as { permissions?: unknown; catalog_v?: unknown; iat?: unknown };
+    const out: DecodedClaims = {};
     if (Array.isArray(payload.permissions)) {
-      return { permissions: payload.permissions.filter((p): p is string => typeof p === 'string') };
+      out.permissions = payload.permissions.filter((p): p is string => typeof p === 'string');
     }
-    return {};
+    if (typeof payload.catalog_v === 'string') out.catalog_v = payload.catalog_v;
+    if (typeof payload.iat === 'number') out.iat = payload.iat;
+    return out;
   } catch {
     return undefined;
   }
+}
+
+// catalog_v 校验（H6/M3.5/M2）——判定序与实查成 AND（F10）：本模块是离线快判层，
+// 实查段（requireAdmin/casbin enforce）不因此跳过。
+export interface CatalogVVerdict { fastPath: boolean; rejected: string[]; stale?: boolean }
+
+export function catalogVCheck(claim: { catalog_v?: string; permissions?: readonly string[] }, serverV: string): CatalogVVerdict {
+  const perms = claim.permissions ?? [];
+  if (claim.catalog_v === serverV) return { fastPath: true, rejected: [] };   // 快路径：== 恒定真
+  // 慢路径：逐 key ∈ catalog ∪ deprecated（deprecated 保留在「已知」集——驱逐 = 从两集都消失才拒）
+  const rejected = perms.filter((k) => k !== '*' && !k.endsWith(':*') &&
+    !CATALOG_KEYS.has(k) && !DEPRECATED_KEYS.has(k));
+  return { fastPath: false, rejected, stale: claim.catalog_v === undefined }; // stale：旧形状令牌（S4 ≤48h 由调用方判 iat）
+}
+
+// 解析期校验（M2）：通配展开后的具体 key 仍须 ∈ catalog ∪ deprecated
+export function resolveViewKey(perms: readonly string[], view: string): { ok: boolean; key?: string; reason?: 'unknown' | 'deprecated' } {
+  const key = `data-analysis:view:${view}`;
+  const named = perms.includes(key);
+  const wildcard = perms.includes('data-analysis:view:*') || perms.includes('*');
+  if (!named && !wildcard) return { ok: false, reason: 'unknown' };           // 无命中
+  // 命中（具名或通配）→ 校验解析结果粒度
+  if (DEPRECATED_KEYS.has(key)) return { ok: false, reason: 'deprecated' };
+  if (!CATALOG_KEYS.has(key)) return { ok: false, reason: 'unknown' };        // ★M2：通配持有者对已驱逐 key 在此被挡
+  return { ok: true, key };
 }
