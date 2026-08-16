@@ -276,6 +276,41 @@ module.exports = async function (req) {
     } catch (e) { return json({ error: "delete_failed", detail: String(e) }, 502); }
   }
 
+  // U7 cutover: push_report 路径切 run_push 引擎。
+  // 旧路径：wecom-push function 直接读 reports 表 + 发企微 textcard（已退役，代码保留）。
+  // 新路径：调 web /api/push API → run_push 引擎（四守卫+Novu+bridge+降级）。
+  // txnId 贯穿 trigger log → Novu → bridge 日志，全链路可追。
+  // rollback：重启用 wecom-push cron 即可回退旧路径。
+  if (body.mode === "push_report") {
+    try {
+      const webBase = Deno.env.get("WEB_BASE_URL") || "http://web:3000";
+      const pushResp = await fetch(webBase + "/api/push", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + (AGENT_API_KEY || ""),
+        },
+        body: JSON.stringify({
+          workflow_id: body.workflow_id || "scheduled_report",
+          operator_id: userId || "system:cron",
+          selector: body.selector || { type: "all" },
+          template_key: body.template_key || null,
+          query_intent: body.query_intent || null,
+          broadcastPerm: !!body.broadcast_perm,
+          deliver: body.deliver !== false,
+          cron_job_id: body.cron_job_id || null,
+        }),
+      });
+      const pushResult = await pushResp.json().catch(() => ({}));
+      if (!pushResp.ok) {
+        return json({ error: "push_failed", detail: pushResult }, pushResp.status || 502);
+      }
+      return json({ success: true, ...pushResult });
+    } catch (e) {
+      return json({ error: "push_failed", detail: String(e) }, 502);
+    }
+  }
+
   if (!sql || !userId) return json({ error: "missing sql/userId" }, 400);
 
   // ② 授权
