@@ -31,6 +31,12 @@ server {
     # ---------- 前端 Next.js（默认路由，含所有页面与 /auth/callback）----------
     location / {
         proxy_pass http://web:3000;
+        # 2026-08-17: PR#13 后 JWT claims 膨胀（branch_nums 388 店 → Set-Cookie 实测 8250B），
+        # nginx 默认 proxy buffer（4k/8k）撑不住 /auth/callback 响应头 → 502「upstream sent too big header」。
+        # 16k = 当前 2 倍余量；门店数/授权面再显著增长时需同步调大。
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+        proxy_busy_buffers_size 32k;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
