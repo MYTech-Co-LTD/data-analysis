@@ -57,7 +57,7 @@ export async function fallbackSend(
         } else {
           result.failed.push({
             wecomId,
-            error: sendResult.error || 'send failed',
+            error: sendResult.errmsg || 'send failed',
           });
         }
       } catch (err) {

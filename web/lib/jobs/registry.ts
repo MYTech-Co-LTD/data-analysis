@@ -11,6 +11,8 @@ import { monitorManifests } from './monitor/manifest';
 import { qaFullManifest } from './qa/manifest';
 import { dailyReconcileManifest, sourceReconcileManifest } from './reconcile/manifest';
 import { targetCloseManifest } from './target-close/manifest';
+import { thinSyncManifest } from './thin-sync/manifest';
+import { driftReportManifest } from './thin-sync/drift-manifest';
 
 export { collectManifest };
 
@@ -22,5 +24,7 @@ export const JOBS: JobManifest[] = [
   sourceReconcileManifest,
   targetCloseManifest,
   qaFullManifest,
+  thinSyncManifest,
+  driftReportManifest,
   ...monitorManifests,
 ];

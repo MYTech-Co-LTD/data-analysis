@@ -38,34 +38,24 @@ export async function GET(req: NextRequest) {
 
 // PUT: 指派角色 { wecom_id, role_id }；role_id=null -> 恢复自动（role_source='auto'，下次同步重算）
 // F4：org_users PATCH 成功后才落 assign_role 审计（actor 由 writeAudit 从 cookie 取）。
+//
+// Task 12 写者收编（spec §4.5a）：U1 起 role 字段冻结，页面 role 区只读+引导文案。
+// 四维 override 不受影响（由 /users/[wecom_id] route 处理）。
+// 冻结原因：角色管理已迁移到 Casdoor，本地 role_id 由薄同步 auto 推导，不再接受手动指派。
 export async function PUT(req: NextRequest) {
   const deny = await requireAdmin(req); if (deny) return deny;
   const b = await req.json().catch(() => null);
   if (!b?.wecom_id) return NextResponse.json({ ok: false, error: '缺 wecom_id' }, { status: 400 });
-  if (b.role_id !== null && typeof b.role_id !== 'number')
-    return NextResponse.json({ ok: false, error: 'role_id 须为数字或 null' }, { status: 400 });
-  const roleId = b.role_id ?? null;
-  // 存在性校验（review NIT #3）：用户须存在（404 防静默 PATCH 0 行）；role_id 须为真实角色（400）
-  const [old, roleRows] = await Promise.all([
-    fetch(`${POSTGREST_URL}/org_users?select=role_id,role_source&wecom_id=eq.${encodeURIComponent(b.wecom_id)}`, { headers: H }).then(r => r.json()).catch(() => []),
-    roleId === null
-      ? Promise.resolve([])
-      : fetch(`${POSTGREST_URL}/roles?select=id&id=eq.${roleId}&is_active=eq.true`, { headers: H }).then(r => r.json()).catch(() => []),
-  ]);
-  const oldArr = Array.isArray(old) ? old : [];
-  if (!oldArr.length) return NextResponse.json({ ok: false, error: '用户不存在，请先同步通讯录' }, { status: 404 });
-  if (roleId !== null && !((Array.isArray(roleRows) ? roleRows : []).length))
-    return NextResponse.json({ ok: false, error: '角色不存在或已停用' }, { status: 400 });
-  const before = oldArr[0] ?? null;
-  const r = await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(b.wecom_id)}`, {
-    method: 'PATCH',
-    headers: { ...H, Prefer: 'return=minimal' },
-    body: JSON.stringify({ role_id: roleId, role_source: roleId ? 'manual' : 'auto' }),
-  });
-  if (!r.ok) return NextResponse.json({ ok: false, error: await r.text() }, { status: 502 });
-  await writeAudit(req, {
-    action: 'assign_role', subjectType: 'user', subjectId: b.wecom_id,
-    before, after: { wecom_id: b.wecom_id, role_id: roleId, role_source: roleId ? 'manual' : 'auto' },
-  });
-  return NextResponse.json({ ok: true });
+
+  // Task 12: role 字段冻结——返回 409 + 引导文案
+  if ('role_id' in b) {
+    return NextResponse.json({
+      ok: false,
+      error: 'role_frozen',
+      message: '角色管理已迁移至统一身份平台（Casdoor）。请在 Casdoor 中配置用户角色，系统会通过薄同步自动同步到本地。如需紧急调整，请联系管理员。',
+      casdoor_url: process.env.CASDOOR_DASHBOARD_URL || 'https://sso.shanhaiyiguo.com',
+    }, { status: 409 });
+  }
+
+  return NextResponse.json({ ok: true, message: '无变更（role 字段已冻结，四维 override 请通过 /users/:wecom_id 路由操作）' });
 }

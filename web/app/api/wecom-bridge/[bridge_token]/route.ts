@@ -10,15 +10,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyBridge } from '@/lib/push/bridge-verify';
 import { sendWecomMarkdown } from '@/lib/wecom-send';
-import { createClient } from '@supabase/supabase-js';
 
-// ---- Supabase 客户端（查 push_subscriber_tokens） ----
+// ---- PostgREST 客户端（查 push_subscriber_tokens） ----
 
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('Supabase env not configured');
-  return createClient(url, key);
+function getPostgrestHeaders(): Record<string, string> {
+  const key = process.env.INSFORGE_API_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  return { Authorization: `Bearer ${key}`, apikey: key, 'Content-Type': 'application/json' };
+}
+
+function getPostgrestUrl(): string {
+  return process.env.POSTGREST_URL || 'http://localhost:3000';
 }
 
 // ---- 路由处理 ----
@@ -39,18 +40,16 @@ export async function POST(
   };
 
   // 3. 验签
-  const supabase = getSupabase();
+  const pgUrl = getPostgrestUrl();
+  const pgHeaders = getPostgrestHeaders();
   const result = await verifyBridge({
     bridgeToken,
     rawBody: rawBodyBuffer,
     headers,
     getWecomIdByToken: async (token: string) => {
-      const { data } = await supabase
-        .from('push_subscriber_tokens')
-        .select('wecom_id')
-        .eq('bridge_token', token)
-        .single();
-      return data?.wecom_id || null;
+      const resp = await fetch(`${pgUrl}/push_subscriber_tokens?bridge_token=eq.${encodeURIComponent(token)}&select=wecom_id&limit=1`, { headers: pgHeaders });
+      const rows = await resp.json();
+      return Array.isArray(rows) && rows.length > 0 ? rows[0].wecom_id : null;
     },
   });
 
