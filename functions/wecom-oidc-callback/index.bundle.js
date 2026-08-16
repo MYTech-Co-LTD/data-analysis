@@ -7,9 +7,9 @@ var __commonJS = (cb, mod) => function __require() {
   }
 };
 
-// ../_shared/jwt.ts
+// functions/_shared/jwt.ts
 var require_jwt = __commonJS({
-  "../_shared/jwt.ts"(exports2, module2) {
+  "functions/_shared/jwt.ts"(exports2, module2) {
     function b64url(bytes) {
       let s = "";
       for (const b of new Uint8Array(bytes)) s += String.fromCharCode(b);
@@ -34,9 +34,9 @@ var require_jwt = __commonJS({
   }
 });
 
-// ../_shared/cors.ts
+// functions/_shared/cors.ts
 var require_cors = __commonJS({
-  "../_shared/cors.ts"(exports2, module2) {
+  "functions/_shared/cors.ts"(exports2, module2) {
     var corsHeaders2 = {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -52,9 +52,9 @@ var require_cors = __commonJS({
   }
 });
 
-// claims.js
+// functions/wecom-oidc-callback/claims.js
 var require_claims = __commonJS({
-  "claims.js"(exports2, module2) {
+  "functions/wecom-oidc-callback/claims.js"(exports2, module2) {
     function buildClaims2(ctx) {
       const oidcGroups = ctx.oidcToken?.groups ?? null;
       if (!Array.isArray(oidcGroups) || oidcGroups.length === 0) return null;
@@ -83,7 +83,7 @@ var require_claims = __commonJS({
   }
 });
 
-// index.js
+// functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
 var { buildClaims } = require_claims();
