@@ -860,7 +860,10 @@ export async function upsertGroup(owner: string, name: string, parentName: strin
 
 export async function syncStoreTree(): Promise<{ created: { branch_number: string; group_name: string }[]; renamed: string[] }> {
   // 三源：dim_branch（真源）/ maps_branch_group（映射）/ Group 树（Casdoor）
-  const branches = await casdoorFetch('/api/get-branches?select=branch_number,branch_name,system_book_code&is_active=eq.true', {});
+  // 勘误（DW1 review 跟踪#1，2026-08-16）：原 casdoorFetch('/api/get-branches?...') 是 PostgREST 语法打
+  // Casdoor 域名——生产必 404 → 门店树永不创建（绿测试因 mock 掩盖）。dim_branch 是库内表，改走 PostgREST
+  // 真实端点（T9 同款先例，绝对 URL 经 casdoorFetch 直传）：
+  const branches = await casdoorFetch(`${process.env.INSFORGE_URL ?? 'http://localhost:3000'}/dim_branch?select=branch_number,branch_name,system_book_code&is_active=eq.true`, {});
   const groups = await casdoorFetch('/api/get-groups?owner=shanhai', {});
   const maps = await fetch(`${process.env.INSFORGE_URL}/maps_branch_group?is_active=eq.true`, {
     headers: { apikey: process.env.INSFORGE_ANON_KEY ?? '' },
@@ -981,7 +984,9 @@ export interface ExpandResult {
 
 export async function expandGroupsToBranches(groups: readonly string[]): Promise<ExpandResult> {
   if (groups.length === 0) return { branch_nums: [], ok: true };   // 空集=authorized ∅，由上层 deny（B1）
-  const mapsResp = await casdoorFetch('/api/get-branch-group-maps?is_active=eq.true', {});
+  // 勘误（T9 实施取证 + DW1 review 确认）：原 '/api/get-branch-group-maps' 打 Casdoor 域名生产必 404。
+  // maps_branch_group 是库内表（迁移 178），走 PostgREST 真实端点（permission-audit.ts 同款 env/头模式）：
+  const mapsResp = await casdoorFetch(`${process.env.INSFORGE_URL ?? 'http://localhost:3000'}/maps_branch_group?is_active=eq.true`, {});
   const maps = ((mapsResp as { data?: { group_id: string; group_type: string; branch_number: string | null }[] }).data ?? []);
   const byId = new Map(maps.map((m) => [m.group_id, m]));
   const unknown = groups.filter((g) => !byId.has(g) && !maps.some((m) => m.group_id.startsWith(g + '-') || g.startsWith(m.group_id.split('-').slice(0, 2).join('-') + '-')));
@@ -2473,3 +2478,14 @@ COMMIT;
 - 占位符：无 TBD/TODO；所有代码步骤含实际代码或精确 SQL/路径；两处「worker 执行时清点」为仓内现状 grep 步骤（179 策略清单、185 函数残留清点），非占位。
 - 类型一致：`scope_match_v2(p_dim,p_col)` 179→183→185 三版签名不变；`x_grants` GUC 形状（183 产、Task 17 测试消费）一致；`expandViewGroups`（Task 19）与 `resolveViewKey`（Task 13 改造处）签名一致；`VIEW_GROUPS/detectViewGroupCycle`（Task 1/3 产、19 消费）一致；`getExceptionGrants/invalidateExceptionCache`（Task 17 产、grants route 消费）一致。
 - 迁移重跑一致性：migrate.sh 全量重跑序下，114→183（pre_request 终版胜出）、179→183→185（scope_match_v2 终版胜出）、167/175/184 加 to_regclass/触发器守卫后 W5/W6 状态重跑全绿——「每次部署重跑全部迁移」铁律已消化。
+
+---
+
+## DW1 实施勘误记录（2026-08-16，review 后回写——同 T14/5b8ed00 先例）
+
+1. **Task 8 syncStoreTree 死传输**（跟踪#1，**Task 10 接线前置必办**）：`casdoorFetch('/api/get-branches?...')` PostgREST 语法打 Casdoor 域名 → 生产 404 门店树永不建。已改 PostgREST 端点（见 Task 8 代码块）。**T8 worker 分支内仍是旧版，集成后由 Task 10 worker 或 fix 轮统一收口。**
+2. **Task 2 保护键机制**（跟踪#2）：plan 纯替换基线与 Step 5「catalog 测试仍 PASS」自相矛盾（种子 3 key 源不可再发现）。正解 = `planNext = discovered ∪ (current ∩ protectedKeys) − deprecated`（保护键从 capability-catalog.ts 只读正则抽取；移除走 DEPRECATED H14）。
+3. **Task 15 两处内部不一致**（跟踪#3）：plan 行补 `user_id: row.subject_id`（测试 1 按此过滤）；`setEq` 参数序 `(快照, claims)`——extra=待补授权 / missing=多授予。
+4. **Task 4 契约勘误**（跟踪#4，可选）：casdoorFetch 真实契约「不抛异常、失败 `{ok:false}`」（适配：`res?.ok === false → throw` 归一）；plan 测试 mock 链漏算 retry 重读（worker 已按真实调用序补齐）。
+5. **集成正本指令**：casdoor-client.ts 以 **T9 版为统一正本**（export + 绝对 URL 直传=功能超集）；三分支 export 行冲突秒解；合入后跑 `lib/sync/` 全量回归 + tsc。
+6. **Task 11 断言数**：plan 写 9 实为 10（测试块实数）；atob latin-1 mojibake 真 bug 已由 worker 以 TextDecoder 修复（CJK 组名 503 根因）。
