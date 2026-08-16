@@ -154,6 +154,9 @@ const OVERRIDES: Partial<Record<string, Partial<CatalogEntry>>> = {
 const MANUAL: CatalogEntry[] = [
   { key: 'data-analysis:admin', group: '门禁', label: '管理台', source: 'manual' },
   { key: 'data-analysis:field:cost', group: '字段', label: '成本可见', sensitive: true, source: 'manual' },
+  // 勘误（T1 实施+review 实证，2026-08-16）：组名 key 须在册——plan 测试「VIEW_GROUPS 成员 ∈ CATALOG_KEYS」
+  // 断言组名自身也是 resource（spec §5.5 Casdoor 勾选组名），原实现清单漏录致逐字照抄必 1/5 红
+  { key: 'data-analysis:view-group:reports-all', group: '看板', label: '报表看板全组', source: 'manual' },
   { key: 'data-analysis:brand:3120', group: '品牌', label: '熊喵鲜生', source: 'manual' },
   { key: 'data-analysis:brand:64188', group: '品牌', label: '品品甜', source: 'manual' },
   { key: 'data-analysis:category:水果', group: '品类', label: '水果', source: 'manual' },
@@ -2119,6 +2122,10 @@ DO $$
 BEGIN
   IF to_regclass('public.data_permissions') IS NOT NULL THEN
     REVOKE INSERT, UPDATE, DELETE ON data_permissions FROM anon, authenticated;
+    -- review 跟踪项（DW0 review #2，2026-08-16）：pg_default_acl 环境级给新表默认 arwd，
+    -- 快照/哨兵两表 authenticated 实际可 INSERT（触发器只封 UPDATE/DELETE）——伪造行污染对账基线。
+    -- freeze/unfreeze 走 SECURITY DEFINER 不受 REVOKE 影响。
+    REVOKE INSERT, UPDATE, DELETE ON perm_freeze_snapshot, perm_freeze_sentinel FROM anon, authenticated;
   END IF;
 END $$;
 
