@@ -32,9 +32,10 @@ async function actionDisable(): Promise<{ processed: number; enqueued: number }>
   for (const user of inactive) {
     const result = await disableUser(user.wecom_id);
     if (!result.ok) {
-      // 写失败 → 入 outbox
-      await enqueue(user.wecom_id, 'disable', { name: user.name });
-      enqueued++;
+      // 写失败 → 入 outbox（B6：只在实际入队时计数；下一轮 is_active=false 仍会被重新扫描，不丢）
+      const q = await enqueue(user.wecom_id, 'disable', { name: user.name });
+      if (q.enqueued) enqueued++;
+      else console.error('[thin-sync] disable 失败且 outbox 入队失败，下轮重试:', user.wecom_id);
     } else {
       // 成功 → 标记 casdoor_writer='disabled'
       await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(user.wecom_id)}`, {
@@ -72,9 +73,10 @@ async function actionAssignRoles(): Promise<{ processed: number; changed: number
 
     const casdoorResult = await assignRoles(user.wecom_id, [derivedCode]);
     if (!casdoorResult.ok) {
-      // 写失败 → 入 outbox
-      await enqueue(user.wecom_id, 'assign_role', { role_codes: [derivedCode], name: user.name });
-      enqueued++;
+      // 写失败 → 入 outbox（B6：只在实际入队时计数；入队失败不标任何状态，下轮重算重试）
+      const q = await enqueue(user.wecom_id, 'assign_role', { role_codes: [derivedCode], name: user.name });
+      if (q.enqueued) enqueued++;
+      else console.error('[thin-sync] assign_role 失败且 outbox 入队失败，下轮重试:', user.wecom_id);
       continue;
     }
 
@@ -111,11 +113,18 @@ async function actionProvision(): Promise<{ processed: number; enqueued: number 
       displayName: user.name ?? user.wecom_id,
     });
 
+    // B5（review 修复）：synced_at 只在「有重试路径」时标记——成功，或失败但已入 outbox。
+    // 失败且 outbox 入队也不成功（如 synced_outbox 挂）→ 不标 synced_at → 下一轮该用户仍在
+    // casdoor_synced_at=is.null 集合里，直接重试 provision（JIT 幂等，不会重复建户，无数据丢失）。
+    // 原实现无条件标 synced_at：Casdoor 故障期把用户标成已同步 → 永不再 provision（静默丢户）。
     if (!result.ok) {
-      await enqueue(user.wecom_id, 'provision', { display_name: user.name });
-      enqueued++;
+      const q = await enqueue(user.wecom_id, 'provision', { display_name: user.name });
+      if (q.enqueued) enqueued++;
+      else {
+        console.error('[thin-sync] provision 失败且 outbox 入队失败，保留 unsynced 待下轮重试:', user.wecom_id);
+        continue;
+      }
     }
-    // 无论成功与否都标 synced_at（JIT 建户幂等，已存在也算 synced）
     await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(user.wecom_id)}`, {
       method: 'PATCH',
       headers: PG_H(),

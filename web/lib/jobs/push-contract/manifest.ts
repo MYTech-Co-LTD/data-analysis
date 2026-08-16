@@ -138,15 +138,29 @@ async function checkSelectorRefs(): Promise<ContractCheckResult> {
 
     const issues: string[] = [];
 
+    // B7（review 修复）：入 in.() 的值来自 DB 落库的 selector.ids（起源于操作者输入/引擎推导），
+    // 不做白名单校验直接拼 URL 会有 PostgREST filter 注入面（值里带 )|& 等改变查询语义）。
+    // 双重防护：① 白名单字符集校验，非法值进 issues（contract 红），不进查询；
+    //           ② 合法值仍 URL 编码后再拼 in.() 列表。
+    const ID_RE = /^[A-Za-z0-9_-]+$/;
+    const buildInList = (values: string[]): string =>
+      values.map((v) => encodeURIComponent(v)).join(',');
+
     // 校验 dept IDs 存在于 org_departments
     if (deptIds.size > 0) {
-      const existing = await pgQuery<Array<{ id: string }>>(
-        `/org_departments?id=in.(${[...deptIds].join(',')})&select=id`,
-      );
-      const existingSet = new Set(existing.map((d) => d.id));
-      const missingDepts = [...deptIds].filter((id) => !existingSet.has(id));
-      if (missingDepts.length > 0) {
-        issues.push(`dept 缺失: ${missingDepts.join(', ')}`);
+      const deptList = [...deptIds];
+      const invalidDepts = deptList.filter((id) => !ID_RE.test(id));
+      for (const bad of invalidDepts) issues.push(`dept id 非法字符(仅 [A-Za-z0-9_-]): ${bad}`);
+      const safeDepts = deptList.filter((id) => ID_RE.test(id));
+      if (safeDepts.length > 0) {
+        const existing = await pgQuery<Array<{ id: string }>>(
+          `/org_departments?id=in.(${buildInList(safeDepts)})&select=id`,
+        );
+        const existingSet = new Set(existing.map((d) => d.id));
+        const missingDepts = safeDepts.filter((id) => !existingSet.has(id));
+        if (missingDepts.length > 0) {
+          issues.push(`dept 缺失: ${missingDepts.join(', ')}`);
+        }
       }
     }
 
@@ -154,12 +168,15 @@ async function checkSelectorRefs(): Promise<ContractCheckResult> {
     const ADMIN_CODE = 'admin';
     if (roleCodes.size > 0) {
       const nonAdminCodes = [...roleCodes].filter((c) => c !== ADMIN_CODE);
-      if (nonAdminCodes.length > 0) {
+      const invalidCodes = nonAdminCodes.filter((c) => !ID_RE.test(c));
+      for (const bad of invalidCodes) issues.push(`role code 非法字符(仅 [A-Za-z0-9_-]): ${bad}`);
+      const safeCodes = nonAdminCodes.filter((c) => ID_RE.test(c));
+      if (safeCodes.length > 0) {
         const existing = await pgQuery<Array<{ code: string }>>(
-          `/roles?code=in.(${nonAdminCodes.join(',')})&select=code`,
+          `/roles?code=in.(${buildInList(safeCodes)})&select=code`,
         );
         const existingSet = new Set(existing.map((r) => r.code));
-        const missingRoles = nonAdminCodes.filter((c) => !existingSet.has(c));
+        const missingRoles = safeCodes.filter((c) => !existingSet.has(c));
         if (missingRoles.length > 0) {
           issues.push(`role 缺失: ${missingRoles.join(', ')}`);
         }
