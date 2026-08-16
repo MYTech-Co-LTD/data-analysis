@@ -47,6 +47,13 @@ services:
       - NOTIFY_DEFAULT_TUSERS=${NOTIFY_DEFAULT_TUSERS}
       # Task3 功能门禁兜底：BREAKGLASS_ADMINS 传递（checkFeaturePerm 读，缺此行 env 进不了容器）
       - BREAKGLASS_ADMINS=${BREAKGLASS_ADMINS:-}
+      # W1 Task6：web 容器内 Casdoor client_credentials（web/lib/sync/casdoor-client.ts——
+      # resource-sync / reconcile-catalog（辅助页+cron）经此调 Casdoor；thin-sync 亦同源。
+      # 此前未注入 = 容器内 Casdoor 调用恒 no_access_token，synced 状态不可用）
+      - CASDOOR_API_URL=${CASDOOR_API_URL:-https://sso.shanhaiyiguo.com}
+      - CASDOOR_CLIENT_ID=${CASDOOR_CLIENT_ID:-}
+      - CASDOOR_CLIENT_SECRET=${CASDOOR_CLIENT_SECRET:-}
+      - CASDOOR_ORG=${CASDOOR_ORG:-shanhai}
     depends_on:
       - insforge
     networks:
