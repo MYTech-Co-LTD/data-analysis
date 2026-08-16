@@ -104,19 +104,20 @@ test.describe('C. admin 门禁（requireAdmin: 验签+sub 绑定+permission clai
 });
 
 test.describe('D. 报表中心渲染 + RLS 数据差异', () => {
-  test('D1 boss /reports（目标列表）渲染成功', async ({ page }) => {
+  // /reports 现为落地重定向（redirect("/")），目标列表首页在 /（2026-08-16 部署后实测）
+  test('D1 boss /reports → /（目标列表首页）渲染成功', async ({ page }) => {
     await inject(page, boss);
     await page.goto('/reports', { waitUntil: 'domcontentloaded' });
-    await expect(page).toHaveURL(/\/reports/);
+    await expect(page).toHaveURL(/\/$/);
     const text = await page.locator('body').innerText();
     expect(text).not.toContain('PGRST');
     expect(text).not.toContain('TypeError');
   });
 
-  test('D2 manager /reports 渲染成功（行级 brands/branch_nums 过滤生效，无 500）', async ({ page }) => {
+  test('D2 manager /reports → / 渲染成功（行级 brands/branch_nums 过滤生效，无 500）', async ({ page }) => {
     await inject(page, manager);
     await page.goto('/reports', { waitUntil: 'domcontentloaded' });
-    await expect(page).toHaveURL(/\/reports/);
+    await expect(page).toHaveURL(/\/$/);
     const text = await page.locator('body').innerText();
     expect(text).not.toContain('PGRST');
     expect(text).not.toContain('TypeError');
