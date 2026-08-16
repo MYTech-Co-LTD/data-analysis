@@ -11,6 +11,11 @@ const PG_H = (): Record<string, string> => {
 };
 
 // ---- 部门名→角色码映射规则（与 152 migration 逐行一致） ----
+// ⚠️ 锚定约束（review 讨论记录）：这些正则故意「不锚定」——152 refresh_role_assignments
+// 用的是 PostgreSQL ~（contains 语义）同一组 pattern：/'(总经办|运营总|老板)'/ 等。
+// 本文件与 152 必须逐行等价（禁双推导引擎）。若要做词边界/全串锚定收紧，
+// 必须 152 SQL + 本文件 + dept_role_mapping 重算三处同步改（回归影响现网角色），
+// 属设计变更，不在 P2 修复范围；此处只做 null 防护（与 SQL 的 d.name ~ 遇 NULL 不匹配等价）。
 interface RoleMappingRule {
   pattern: RegExp;
   code: string;
@@ -27,8 +32,16 @@ const MAPPING_RULES: RoleMappingRule[] = [
 
 const DEFAULT_ROLE_CODE = 'manager';
 
-/** 按部门名推断角色码+优先级（无匹配返回 null） */
+// in.() 值白名单+编码（与 push-contract B7 同款防护：部门 id 来自通讯录落库，
+// 拼 PostgREST filter 前过滤非法字符并 URL 编码，防 filter 注入/查询语义被改）
+// 合法（数字/字母/下划线连字符）id 全部通过，行为与 152 逐行等价；只拦肯定写坏的数据。
+const DEPT_ID_RE = /^[A-Za-z0-9_-]+$/;
+const buildDeptIdList = (ids: string[]): string =>
+  ids.filter((id) => DEPT_ID_RE.test(id)).map(encodeURIComponent).join(',');
+
+/** 按部门名推断角色码+优先级（无匹配返回 null；空名不匹配——与 152 SQL 遇 NULL 不命中等价） */
 export function matchDeptToRole(deptName: string): { code: string; priority: number } | null {
+  if (!deptName) return null;
   for (const rule of MAPPING_RULES) {
     if (rule.pattern.test(deptName)) {
       return { code: rule.code, priority: rule.priority };
@@ -44,7 +57,8 @@ export async function deriveRoleForUser(
   if (!departmentIds.length) return null;
 
   // 查部门名
-  const deptIdList = departmentIds.join(',');
+  const deptIdList = buildDeptIdList(departmentIds);
+  if (!deptIdList) return null;
   const depts: Array<{ id: string; name: string }> = await fetch(
     `${POSTGREST_URL}/org_departments?select=id,name&id=in.(${deptIdList})&is_active=eq.true`,
     { headers: PG_H(), cache: 'no-store' },
@@ -93,7 +107,8 @@ export async function deriveAllAutoRoles(): Promise<DerivedRole[]> {
   const allDeptIds = [...new Set(users.flatMap(u => u.department_ids ?? []))];
   const deptMap = new Map<string, string>();
   if (allDeptIds.length) {
-    const deptIdList = allDeptIds.join(',');
+    const deptIdList = buildDeptIdList(allDeptIds);
+    if (!deptIdList) return [];
     const depts: Array<{ id: string; name: string }> = await fetch(
       `${POSTGREST_URL}/org_departments?select=id,name&id=in.(${deptIdList})&is_active=eq.true`,
       { headers: PG_H(), cache: 'no-store' },

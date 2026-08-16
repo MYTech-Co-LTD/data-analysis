@@ -39,13 +39,22 @@ export const permShadowManifest: JobManifest = {
     if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return { status: 'skipped' };
     try {
       const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
-      // 取所有 active 用户
-      const { data: users, error } = await client.database
-        .from('org_users')
-        .select('wecom_id')
-        .eq('is_active', true);
-      if (error) throw new Error(`查询用户失败: ${error.message}`);
-      if (!users?.length) {
+      // 取所有 active 用户（分页——review 修复：原无 range 上限，PostgREST 默认截断 1000 行，
+      // 员工超 1000 后 diff 静默只覆盖前 1000 人，U2 就绪判据失真）
+      const PAGE = 1000;
+      const users: any[] = [];
+      for (let off = 0; ; off += PAGE) {
+        const { data: page, error } = await client.database
+          .from('org_users')
+          .select('wecom_id')
+          .eq('is_active', true)
+          .range(off, off + PAGE - 1);
+        if (error) throw new Error(`查询用户失败: ${error.message}`);
+        const rows = (page || []) as any[];
+        users.push(...rows);
+        if (rows.length < PAGE) break;
+      }
+      if (!users.length) {
         console.log('[perm-shadow] 无 active 用户，跳过');
         return { status: 'ok' };
       }
@@ -88,14 +97,23 @@ export const permShadowManifest: JobManifest = {
         if (insertErr) console.error('[perm-shadow] 写入日志失败:', insertErr.message);
       }
 
-      // 统计最近 7 天 diff 用户数（告警用）
+      // 统计最近 7 天 diff 用户数（告警用；分页——同上 1000 行截断问题：一行=一次检查快照，
+      // 7 天窗口内同一用户多条 diff 快照，截断后 Set 去重数低估）
       const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-      const { data: recentDiffs } = await client.database
-        .from('perm_shadow_log')
-        .select('wecom_id', { count: 'exact', head: false })
-        .gt('checked_at', sevenDaysAgo)
-        .neq('diff_keys', '{}');
-      const recentDiffUsers = new Set((recentDiffs || []).map((r: any) => r.wecom_id)).size;
+      const distinctRecentDiffs = new Set<string>();
+      for (let off = 0; ; off += PAGE) {
+        const { data: page, error: recentErr } = await client.database
+          .from('perm_shadow_log')
+          .select('wecom_id')
+          .gt('checked_at', sevenDaysAgo)
+          .neq('diff_keys', '{}')
+          .range(off, off + PAGE - 1);
+        if (recentErr) throw new Error(`查询近 7 天 diff 失败: ${recentErr.message}`);
+        const rows = (page || []) as any[];
+        rows.forEach((r: any) => { if (r?.wecom_id) distinctRecentDiffs.add(r.wecom_id); });
+        if (rows.length < PAGE) break;
+      }
+      const recentDiffUsers = distinctRecentDiffs.size;
 
       const msg = `[perm-shadow] 完成：${total} 用户，${diffCount} diff；近7天累计 ${recentDiffUsers} 用户有 diff`;
       console.log(msg);

@@ -85,12 +85,13 @@ const PG_HEADERS = {
 /**
  * 写入单组 shadow payload 到 push_trigger_payloads。
  * mode='shadow' 嵌入 payload JSONB（表无 mode 列，Task 9 迁移 173_push_audit.sql 建表）。
+ * 返回是否写入成功（review 修复：原实现失败只打日志，调用方无法感知缺组 → diff 静默失真）。
  */
 async function insertShadowPayload(
   txnId: string,
   groupSig: string,
   rendered: RenderedGroup,
-): Promise<void> {
+): Promise<boolean> {
   const body = {
     txn_id: txnId,
     group_sig: groupSig,
@@ -104,7 +105,9 @@ async function insertShadowPayload(
   if (!r.ok) {
     const detail = await r.text().catch(() => '');
     console.error(`[shadow] insert payload failed: ${r.status} ${detail}`);
+    return false;
   }
+  return true;
 }
 
 // ---- shadow 公共接口 ----
@@ -129,6 +132,8 @@ export interface ShadowRunResult {
   skipped: string[];
   /** 渲染组详情（含每组 payload，供 diff 脚本消费） */
   rendered: RenderedGroup[];
+  /** 落盘失败的组数（>0 = diff 基准不完整，消费方应降级并告警） */
+  insertFailed: number;
 }
 
 /**
@@ -151,19 +156,24 @@ export async function shadowRun(opts: ShadowRunOpts): Promise<ShadowRunResult> {
   // renderedGroups 由 runPush deliver=false 分支返回
   const rendered: RenderedGroup[] = result.renderedGroups ?? [];
 
-  // 逐组写入（失败不阻断，降级记日志）
+  // 逐组写入（失败不阻断，但计数——diff 消费方据此判定基准完整性）
   let inserted = 0;
+  let insertFailed = 0;
   for (const group of rendered) {
     try {
-      await insertShadowPayload(result.txnId, group.signature, group);
-      inserted++;
+      const ok = await insertShadowPayload(result.txnId, group.signature, group);
+      if (ok) inserted++;
+      else insertFailed++;
     } catch (e: unknown) {
       console.error(`[shadow] insert failed for group ${group.signature}:`, e);
+      insertFailed++;
     }
   }
 
   console.log(
-    `[shadow] txn=${result.txnId} groups=${result.groups} rendered=${rendered.length} inserted=${inserted} skipped=${result.skipped.length}`,
+    `[shadow] txn=${result.txnId} groups=${result.groups} rendered=${rendered.length}` +
+    ` inserted=${inserted} failed=${insertFailed} skipped=${result.skipped.length}` +
+    (insertFailed > 0 ? ' [INSERT_FAILED: diff 基准不完整]' : ''),
   );
 
   return {
@@ -171,6 +181,7 @@ export async function shadowRun(opts: ShadowRunOpts): Promise<ShadowRunResult> {
     groups: result.groups,
     skipped: result.skipped,
     rendered,
+    insertFailed,
   };
 }
 

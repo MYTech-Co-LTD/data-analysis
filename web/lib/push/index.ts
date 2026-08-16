@@ -70,20 +70,22 @@ async function getPermsStrict(userId: string): Promise<Perms | null> {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${postgrestKey}`,
       },
-      body: JSON.stringify({ p_user_id: userId }),
+      // 参数名必须与 migration 170 的 p_wecom_id 一致（曾误写 p_user_id → 400）
+      body: JSON.stringify({ p_wecom_id: userId }),
     }
   );
 
   if (!resp.ok) return null;
+  // migration 170 返回标量 JSONB（对象或 null），PostgREST 直接以 body 返回；
+  // 不是 [{...}] 数组——旧的 data[0] 解构永远拿不到值（静默 null）。
   const data = await resp.json();
-  if (!data?.length) return null;
-
-  const row = data[0];
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  const row = data as Record<string, unknown>;
   return {
-    brands: row.brands,
-    branch_nums: row.branch_nums,
-    categories: row.categories,
-    can_see_cost: row.can_see_cost,
+    brands: Array.isArray(row.brands) ? (row.brands as string[]) : undefined,
+    branch_nums: Array.isArray(row.branch_nums) ? (row.branch_nums as string[]) : undefined,
+    categories: Array.isArray(row.categories) ? (row.categories as string[]) : undefined,
+    can_see_cost: typeof row.can_see_cost === 'boolean' ? row.can_see_cost : undefined,
   };
 }
 

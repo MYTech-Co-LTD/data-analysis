@@ -148,7 +148,7 @@ export const thinSyncManifest: JobManifest = {
       console.log('[thin-sync] 开始薄同步 cycle');
 
       // ① 先 drain outbox（积压优先）
-      let drainResult: DrainResult = { total: 0, succeeded: 0, failed: 0, errors: [] };
+      let drainResult: DrainResult = { total: 0, succeeded: 0, failed: 0, deadLettered: 0, errors: [] };
       try {
         drainResult = await drain(50);
         if (drainResult.total > 0) {
@@ -198,6 +198,18 @@ export const thinSyncManifest: JobManifest = {
         await notifyWecom(
           '⚠️ 薄同步有操作失败',
           `**新增 outbox**: ${totalEnqueued}\n${summary}`,
+        ).catch(() => {});
+      }
+
+      // 死信告警（review 修复：outbox 达 MAX_ATTEMPTS 封存后无重试路径，必须响亮告警，否则静默丢操作）
+      if (drainResult.deadLettered > 0) {
+        const deadRows = drainResult.errors
+          .filter((e) => e.error.startsWith('DEAD_LETTER'))
+          .map((e) => `- ${e.wecom_id} ${e.action}: ${e.error}`)
+          .join('\n');
+        await notifyWecom(
+          '⛔ 薄同步 outbox 死信',
+          `**死信 ${drainResult.deadLettered} 条（已封存，不再自动重试）**\n${deadRows}\n\n请人工介入（检查 Casdoor 连接/用户状态）后手动处置或重试。`,
         ).catch(() => {});
       }
 

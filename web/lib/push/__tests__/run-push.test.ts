@@ -81,26 +81,24 @@ describe('runPush', () => {
             ]),
         });
       }
-      // get_user_perms_strict
+      // get_user_perms_strict —— migration 170 返回标量 JSONB，PostgREST 直接以对象作 body（非数组）
       if (url.includes('get_user_perms_strict')) {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve([
-              {
-                brands: ['3120'],
-                branch_nums: ['*'],
-                categories: ['水果'],
-                can_see_cost: true,
-              },
-            ]),
+            Promise.resolve({
+              brands: ['3120'],
+              branch_nums: ['*'],
+              categories: ['水果'],
+              can_see_cost: true,
+            }),
         });
       }
-      // require_push_owner
+      // require_push_owner —— migration 177 RETURNS TABLE → PostgREST 数组包裹
       if (url.includes('require_push_owner')) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ paused: false }),
+          json: () => Promise.resolve([{ paused: false }]),
         });
       }
       // push_subscriber_tokens
@@ -174,20 +172,18 @@ describe('runPush', () => {
     // mock perms 无成本权限
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('require_push_owner')) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ paused: false }) });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
       }
       if (url.includes('get_user_perms_strict')) {
         return Promise.resolve({
           ok: true,
           json: () =>
-            Promise.resolve([
-              {
-                brands: ['3120'],
-                branch_nums: ['*'],
-                categories: ['水果'],
-                can_see_cost: false, // ← 无成本权限
-              },
-            ]),
+            Promise.resolve({
+              brands: ['3120'],
+              branch_nums: ['*'],
+              categories: ['水果'],
+              can_see_cost: false, // ← 无成本权限
+            }),
         });
       }
       if (url.includes('org_users?is_active=eq.true')) {
@@ -240,7 +236,7 @@ describe('runPush', () => {
   it('无有效收件人 → 返回错误', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('require_push_owner')) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve({ paused: false }) });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
       }
       if (url.includes('org_users')) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve([]) }); // 空

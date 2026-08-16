@@ -77,12 +77,19 @@ export interface DrainResult {
   total: number;
   succeeded: number;
   failed: number;
+  deadLettered: number;
   errors: Array<{ id: number; wecom_id: string; action: string; error: string }>;
 }
+
+/** 单条 outbox 最大重试次数，达到即死信封存（review 修复：原无限重试，操作永久失败会卡死队首且无终态） */
+export const MAX_ATTEMPTS = 10;
 
 /**
  * drain：取所有未完成 outbox 项→逐条执行→成功标 done、失败更新 attempts+error。
  * 每次 drain 最多处理 maxItems 条（防积压时一次处理太多）。
+ * 单条达到 MAX_ATTEMPTS → 标 done=true + error='DEAD_LETTER: <原因>' 封存，
+ *   计入 deadLettered 并出现在 errors（调用方须据 deadLettered 告警——
+ *   死信操作不会再有重试路径，静默丢弃即数据丢失）。
  */
 export async function drain(maxItems = 100): Promise<DrainResult> {
   const pending: OutboxRow[] = await fetch(
@@ -90,7 +97,7 @@ export async function drain(maxItems = 100): Promise<DrainResult> {
     { headers: PG_H(), cache: 'no-store' },
   ).then(r => r.json()).catch(() => []);
 
-  const result: DrainResult = { total: pending.length, succeeded: 0, failed: 0, errors: [] };
+  const result: DrainResult = { total: pending.length, succeeded: 0, failed: 0, deadLettered: 0, errors: [] };
 
   for (const row of pending) {
     const execResult = await executeOutboxRow(row);
@@ -104,18 +111,38 @@ export async function drain(maxItems = 100): Promise<DrainResult> {
       });
       result.succeeded++;
     } else {
-      // 更新 attempts + error
-      await fetch(`${POSTGREST_URL}/sync_outbox?id=eq.${row.id}`, {
-        method: 'PATCH',
-        headers: PG_H(),
-        body: JSON.stringify({
-          attempts: row.attempts + 1,
-          error: execResult.error,
-          updated_at: new Date().toISOString(),
-        }),
-      });
-      result.failed++;
-      result.errors.push({ id: row.id, wecom_id: row.wecom_id, action: row.action, error: execResult.error ?? 'unknown' });
+      const attempts = row.attempts + 1;
+      if (attempts >= MAX_ATTEMPTS) {
+        // 死信封存：不再重试（防队首毒药卡死后续积压）；error 带 DEAD_LETTER 标记供排查/告警
+        await fetch(`${POSTGREST_URL}/sync_outbox?id=eq.${row.id}`, {
+          method: 'PATCH',
+          headers: PG_H(),
+          body: JSON.stringify({
+            done: true,
+            attempts,
+            error: `DEAD_LETTER: ${execResult.error ?? 'unknown'}`,
+            updated_at: new Date().toISOString(),
+          }),
+        });
+        result.deadLettered++;
+        result.errors.push({
+          id: row.id, wecom_id: row.wecom_id, action: row.action,
+          error: `DEAD_LETTER (attempts=${attempts}): ${execResult.error ?? 'unknown'}`,
+        });
+      } else {
+        // 更新 attempts + error
+        await fetch(`${POSTGREST_URL}/sync_outbox?id=eq.${row.id}`, {
+          method: 'PATCH',
+          headers: PG_H(),
+          body: JSON.stringify({
+            attempts,
+            error: execResult.error,
+            updated_at: new Date().toISOString(),
+          }),
+        });
+        result.failed++;
+        result.errors.push({ id: row.id, wecom_id: row.wecom_id, action: row.action, error: execResult.error ?? 'unknown' });
+      }
     }
   }
 
