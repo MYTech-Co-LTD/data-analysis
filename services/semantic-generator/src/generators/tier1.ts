@@ -23,7 +23,8 @@ function baseRef(metric: Metric, ctx: Ctx): string {
 
 function maskCost(expr: string, metric: Metric): string {
   if (!metric.cost_sensitive) return expr;
-  return `CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN ${expr} END`;
+  // 182 形状鉴别：fields.cost 主读 + legacy 顶层 key 回退（Task 16 消费侧切，H7）
+  return `CASE WHEN can_cost_visible() THEN ${expr} END`;
 }
 
 /** 收集所选指标涉及的全部 base 叶子指标（含 derived 递归依赖） */

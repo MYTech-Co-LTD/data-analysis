@@ -5,6 +5,11 @@
 --   多角色 UNION 语义：权限从所有已分配角色合并（取并集/bool_or）
 --   个人 override 语义不变（user 行覆盖基底）
 -- 幂等：DROP FUNCTION IF EXISTS + CREATE FUNCTION（migrate.sh 可重跑）。
+-- W6 修正（Task 20，185 前置）：三段函数体均读 data_permissions——plpgsql 体 CREATE 时不校验表存在，
+--   但 sunset 后每部署重跑本文件会重建出「引用已删表」的函数体；整段包 to_regclass 守卫
+--   （表删后跳过重建——终版函数由 185 段落负责落；两迁移同部署序内 185 恒后于 175）。
+--   perm_shadow_log 表（§①）与 data_permissions 无关，保持无守卫原样。
+--   外层 DO 用 $g$ 定界（与函数体 $$ 不同标签，防 dollar-quote 嵌套误闭合）。
 BEGIN;
 
 -- ① shadow diff 日志表（供 perm-shadow job 写入双源比对结果）
@@ -22,7 +27,10 @@ COMMENT ON TABLE perm_shadow_log IS 'U2 shadow diff 日志：双源权限比对�
 GRANT SELECT, INSERT ON perm_shadow_log TO anon, authenticated;
 GRANT USAGE, SELECT ON SEQUENCE perm_shadow_log_id_seq TO anon, authenticated;
 
--- ② get_user_perms 重建：读 system_flags('perms_input') 分支
+-- ② get_user_perms 重建：读 system_flags('perms_input') 分支（W6 守卫：表删后跳过，终版在 185）
+DO $g$
+BEGIN
+IF to_regclass('public.data_permissions') IS NOT NULL THEN
 DROP FUNCTION IF EXISTS get_user_perms(TEXT);
 CREATE OR REPLACE FUNCTION get_user_perms(p_wecom_id VARCHAR) RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -227,8 +235,13 @@ END;
 $$;
 COMMENT ON FUNCTION get_user_perms(VARCHAR) IS '权限合成 RPC（175 分支版）：读 system_flags(perms_input) 决定 legacy(role_id) 或 casdoor(role_codes UNION)；个人 override 不变';
 GRANT EXECUTE ON FUNCTION get_user_perms(VARCHAR) TO anon, authenticated;
+END IF;
+END $g$;
 
 -- ③ get_user_perms_casdoor：纯 casdoor 路径独立副本（shadow diff 用，不读开关，硬编码 casdoor 逻辑）
+DO $g$
+BEGIN
+IF to_regclass('public.data_permissions') IS NOT NULL THEN
 DROP FUNCTION IF EXISTS get_user_perms_casdoor(TEXT);
 CREATE OR REPLACE FUNCTION get_user_perms_casdoor(p_wecom_id VARCHAR) RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -332,8 +345,13 @@ END;
 $$;
 COMMENT ON FUNCTION get_user_perms_casdoor(VARCHAR) IS 'Shadow diff 专用：纯 casdoor(role_codes) 路径独立副本，不读 system_flags，供 perm-shadow job 双源比对';
 GRANT EXECUTE ON FUNCTION get_user_perms_casdoor(VARCHAR) TO anon, authenticated;
+END IF;
+END $g$;
 
 -- ④ get_user_perms_legacy：纯 legacy 路径独立副本（shadow diff 用，不读开关，硬编码 role_id 逻辑）
+DO $g$
+BEGIN
+IF to_regclass('public.data_permissions') IS NOT NULL THEN
 DROP FUNCTION IF EXISTS get_user_perms_legacy(TEXT);
 CREATE OR REPLACE FUNCTION get_user_perms_legacy(p_wecom_id VARCHAR) RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -431,5 +449,7 @@ END;
 $$;
 COMMENT ON FUNCTION get_user_perms_legacy(VARCHAR) IS 'Shadow diff 专用：纯 legacy(role_id) 路径独立副本，不读 system_flags，供 perm-shadow job 双源比对';
 GRANT EXECUTE ON FUNCTION get_user_perms_legacy(VARCHAR) TO anon, authenticated;
+END IF;
+END $g$;
 
 COMMIT;

@@ -1,5 +1,5 @@
 // web/app/admin/permissions/page.tsx
-// 权限管理：用户 / 部门 / 角色 三 tab + StorePicker（品牌感知门店选择器）
+// 权限管理：用户 / 部门 / 角色 / 例外 四 tab + StorePicker（品牌感知门店选择器）
 //          + 个人 override 编辑器（四维 + 到期 + note + 删除恢复继承）+ 审计区（最近变更）
 // 数据契约：web/app/api/admin/permissions/*（Task 2）：
 //   GET  /users            → { users, roles, departments }
@@ -9,9 +9,15 @@
 //   DELETE /users/:wecom_id → 删 override 恢复继承
 //   GET  /depts            → { departments: DeptRow[] }
 //   PUT  /depts            → { id, branch_nums?, can_see_cost? }
+//   ⚠️ W5 写关闭（Task 18 / 迁移 184）：data_permissions DB 级禁写（REVOKE+触发器），
+//      四维 override 编辑器改只读；上述写路径命中禁写时返回 409 { error:'frozen', guidance }，
+//      临时例外唯一通道 = 「例外」tab（temporary_grants，迁移 183）。
 //   GET  /roles            → { roles: RoleRow[] }
 //   PUT  /roles/:id        → 参数 + 默认范围四维
 //   GET  /audit?limit=20   → { items: AuditItem[] }
+//   GET  /grants           → { grants: GrantRow[] }（Task 17：活跃 + 近30天已失效）
+//   POST /grants           → { wecom_id, dim, value, expires_at, note? }（≤90 天 + 单维 ≤50 条）
+//   DELETE /grants?id=     → 撤销（写 revoked_at + 审计 + 服务端同步清 RT 缓存）
 // 门店数据：GET /api/admin/branches（branch_admin_v，含 war_zone / region_l2）
 // 品牌数据：GET /api/admin/brands（dim_brand）
 // 生效时机：权限改动后用户下次登录（重新签发 JWT）生效。
@@ -21,7 +27,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle, Building2, History, MapPin, Pencil, RefreshCw,
-  Search, ShieldCheck, Trash2, Users, X,
+  Search, ShieldCheck, Timer, Trash2, Users, X,
 } from 'lucide-react';
 
 // ================= 类型 =================
@@ -70,7 +76,12 @@ type Preview = {
     permissions: { subject_type: string; subject_id: string; can_see_cost: boolean; expires_at: string | null; note: string | null }[];
   };
 };
-type TabKey = 'users' | 'depts' | 'roles';
+type GrantRow = {
+  id: number; user_id: string; dim: string; value: string;
+  expires_at: string; revoked_at: string | null; granted_by: string;
+  note: string | null; created_at: string;
+};
+type TabKey = 'users' | 'depts' | 'roles' | 'grants';
 type Json = Record<string, unknown> | null;
 
 // ================= 常量 =================
@@ -92,7 +103,16 @@ const ACTION_LABEL: Record<string, string> = {
   upsert_data_permission: '更新权限',
   delete_data_permission: '删除 override',
   update_role: '更新角色',
+  grant_create: '授予例外',
+  grant_revoke: '撤销例外',
 };
+// 例外维度（temporary_grants.dim，迁移 183 CHECK 四值）；branch 值 = branch_number 全局唯一键（门店键铁律）
+const GRANT_DIM_OPTIONS = [
+  { value: 'branch_nums', label: '门店', hint: 'branch_number 全局唯一键，如 3120-001' },
+  { value: 'brands', label: '品牌', hint: 'system_book_code，如 3120' },
+  { value: 'categories', label: '品类', hint: '如 水果 / 标品 / 耗材' },
+  { value: 'fields', label: '字段', hint: '当前仅 cost（成本可见）' },
+];
 
 // ================= 工具 =================
 
@@ -171,6 +191,15 @@ function auditDetail(a: AuditItem): string {
       if (p?.categories !== undefined && p?.categories !== null) bits.push(`品类 ${fmtList(p.categories)}`);
       if (p?.can_see_cost !== undefined && p?.can_see_cost !== null) bits.push(`成本${p.can_see_cost ? '可见' : '不可见'}`);
       return bits.join('、') || '更新角色';
+    }
+    case 'grant_create':
+    case 'grant_revoke': {
+      const dimLabel = GRANT_DIM_OPTIONS.find(d => d.value === p?.dim)?.label ?? String(p?.dim ?? '?');
+      const bits = [`${dimLabel} ${String(p?.value ?? '?')}`];
+      if (p?.expires_at) bits.push(`至 ${fmtShanghai(String(p.expires_at))}`);
+      if (p?.revoked_at) bits.push(`撤销于 ${fmtShanghai(String(p.revoked_at))}`);
+      if (p?.note) bits.push(String(p.note));
+      return bits.join('、');
     }
     default:
       return a.action;
@@ -493,9 +522,8 @@ function StorePicker({ value, onChange }: { value: string[] | null; onChange: (v
 
 // ================= 用户 tab =================
 
-function UsersTab({ users, roles, departments, onChanged }: {
+function UsersTab({ users, roles, departments }: {
   users: User[]; roles: RoleBrief[]; departments: DeptBrief[];
-  onChanged: () => void;
 }) {
   const [search, setSearch] = useState('');
   const [overrideUser, setOverrideUser] = useState<User | null>(null);
@@ -576,7 +604,7 @@ function UsersTab({ users, roles, departments, onChanged }: {
       </div>
 
       {overrideUser && (
-        <OverrideEditor user={overrideUser} onClose={() => setOverrideUser(null)} onChanged={() => { setOverrideUser(null); onChanged(); }} />
+        <OverrideEditor user={overrideUser} onClose={() => setOverrideUser(null)} />
       )}
       {preview && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4" onClick={() => setPreview(null)}>
@@ -591,13 +619,12 @@ function UsersTab({ users, roles, departments, onChanged }: {
   );
 }
 
-// 个人 override 编辑器：四维 + expires_at + note；维留空=继承（PUT null）；删除=恢复继承
-function OverrideEditor({ user, onClose, onChanged }: {
-  user: User; onClose: () => void; onChanged: () => void;
+// 个人 override 查看器（W5 写关闭后只读，Task 18 / 迁移 184）：
+// 四维 + expires_at + note 仅展示现状；写入通道已 DB 级冻结——引导 Casdoor / 「例外」tab。
+function OverrideEditor({ user, onClose }: {
+  user: User; onClose: () => void;
 }) {
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [hasOverride, setHasOverride] = useState(false);
   const [err, setErr] = useState('');
   const brands = useBrands();
   const [form, setForm] = useState({
@@ -617,7 +644,6 @@ function OverrideEditor({ user, onClose, onChanged }: {
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;
         const ov = (j.override ?? null) as OverrideRow | null;
-        setHasOverride(!!ov);
         setForm({
           branchNums: ov?.branch_nums ?? null,
           brands: ov?.brands ?? null,
@@ -632,96 +658,60 @@ function OverrideEditor({ user, onClose, onChanged }: {
     return () => { cancelled = true; };
   }, [user.wecom_id]);
 
-  async function save() {
-    setSaving(true); setErr('');
-    const body = {
-      branch_nums: form.branchNums && form.branchNums.length ? form.branchNums : null,
-      brands: form.brands && form.brands.length ? form.brands : null,
-      categories: form.categories && form.categories.length ? form.categories : null,
-      can_see_cost: form.canSeeCost,
-      expires_at: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
-      note: form.note.trim() || null,
-    };
-    const allNull = (body.branch_nums ?? null) === null && (body.brands ?? null) === null
-      && (body.categories ?? null) === null && (body.can_see_cost ?? null) === null;
-    try {
-      const r = await fetch(`/api/admin/permissions/users/${encodeURIComponent(user.wecom_id)}`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
-      toast.success(allNull ? '已恢复继承，用户重新登录后生效' : '已保存单独授权，用户重新登录后生效');
-      onChanged();
-    } catch { setErr('保存失败，请重试'); }
-    finally { setSaving(false); }
-  }
-
-  async function remove() {
-    if (!confirm(`删除 ${user.name ?? user.wecom_id} 的单独授权并恢复继承？`)) return;
-    setSaving(true); setErr('');
-    try {
-      const r = await fetch(`/api/admin/permissions/users/${encodeURIComponent(user.wecom_id)}`, { method: 'DELETE' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `删除失败 ${r.status}`); return; }
-      toast.success('已删除 override，用户重新登录后恢复继承');
-      onChanged();
-    } catch { setErr('删除失败，请重试'); }
-    finally { setSaving(false); }
-  }
-
   return (
-    <Modal title={`单独授权 - ${user.name ?? user.wecom_id}`} onClose={onClose} wide>
+    <Modal title={`单独授权（只读） - ${user.name ?? user.wecom_id}`} onClose={onClose} wide>
       {loading ? <div className="py-6 text-sm text-slate-400">加载中…</div> : (
         <div>
           {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
-          <Field label="品牌范围" hint="留空=继承（不覆盖角色∪部门基底）">
-            <DimCheckboxes
-              options={brands.map(b => ({ value: b.system_book_code, label: `${b.system_book_code} ${b.brand_name}` }))}
-              value={form.brands}
-              onChange={v => setForm(f => ({ ...f, brands: v }))}
-            />
-          </Field>
-          <Field label="品类范围" hint="留空=继承">
-            <DimCheckboxes
-              options={CATEGORY_OPTIONS.map(c => ({ value: c, label: c }))}
-              value={form.categories}
-              onChange={v => setForm(f => ({ ...f, categories: v }))}
-            />
-          </Field>
-          <Field label="门店范围" hint="留空=继承；全部门(*) = 放行全部门店">
-            <StorePicker value={form.branchNums} onChange={v => setForm(f => ({ ...f, branchNums: v }))} />
-          </Field>
-          <Field label="成本可见" hint={form.canSeeCost === null ? '继承 = 不覆盖基底' : form.canSeeCost ? '覆盖为：可见成本' : '覆盖为：隐藏成本'}>
-            <CostTriState value={form.canSeeCost} onChange={v => setForm(f => ({ ...f, canSeeCost: v }))} />
-          </Field>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="到期时间（留空=永久）" hint="到期后该 override 自动失效（继承恢复）">
-              <input
-                type="datetime-local"
-                value={form.expiresAt}
-                onChange={e => setForm(f => ({ ...f, expiresAt: e.target.value }))}
-                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              />
-            </Field>
-            <Field label="备注">
-              <input
-                value={form.note}
-                onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
-                placeholder="如：临时授权 - 华东大促"
-                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
-              />
-            </Field>
+          {/* W5 写关闭引导（同页顶部横幅样式） */}
+          <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+            <span>四维授权已冻结（W5 写关闭）：本弹窗仅查看现状，不提供编辑。长期调整请在 Casdoor 配置；临时例外用「例外」tab。</span>
           </div>
-          <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-3">
-            {hasOverride ? (
-              <Btn danger disabled={saving} onClick={remove}>
-                <Trash2 size={14} /> 删除恢复继承
-              </Btn>
-            ) : <span />}
-            <div className="flex gap-2">
-              <Btn variant="ghost" onClick={onClose}>取消</Btn>
-              <Btn disabled={saving} onClick={save}>{saving ? '保存中…' : '保存'}</Btn>
+          {/* fieldset disabled：原生禁用内层全部表单控件（四维 + 到期 + 备注）——只读 */}
+          <fieldset disabled className="contents">
+            <Field label="品牌范围" hint="留空=继承（不覆盖角色∪部门基底）">
+              <DimCheckboxes
+                options={brands.map(b => ({ value: b.system_book_code, label: `${b.system_book_code} ${b.brand_name}` }))}
+                value={form.brands}
+                onChange={v => setForm(f => ({ ...f, brands: v }))}
+              />
+            </Field>
+            <Field label="品类范围" hint="留空=继承">
+              <DimCheckboxes
+                options={CATEGORY_OPTIONS.map(c => ({ value: c, label: c }))}
+                value={form.categories}
+                onChange={v => setForm(f => ({ ...f, categories: v }))}
+              />
+            </Field>
+            <Field label="门店范围" hint="留空=继承；全部门(*) = 放行全部门店">
+              <StorePicker value={form.branchNums} onChange={v => setForm(f => ({ ...f, branchNums: v }))} />
+            </Field>
+            <Field label="成本可见" hint={form.canSeeCost === null ? '继承 = 不覆盖基底' : form.canSeeCost ? '覆盖为：可见成本' : '覆盖为：隐藏成本'}>
+              <CostTriState value={form.canSeeCost} onChange={v => setForm(f => ({ ...f, canSeeCost: v }))} />
+            </Field>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="到期时间（留空=永久）" hint="到期后该 override 自动失效（继承恢复）">
+                <input
+                  type="datetime-local"
+                  value={form.expiresAt}
+                  onChange={e => setForm(f => ({ ...f, expiresAt: e.target.value }))}
+                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
+              <Field label="备注">
+                <input
+                  value={form.note}
+                  onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+                  placeholder="如：临时授权 - 华东大促"
+                  className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                />
+              </Field>
             </div>
+          </fieldset>
+          <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-3">
+            <span className="text-xs text-slate-400">四维已冻结（W5）：例外走「例外」tab，调整走 Casdoor</span>
+            <Btn variant="ghost" onClick={onClose}>关闭</Btn>
           </div>
         </div>
       )}
@@ -803,7 +793,7 @@ function DeptEditor({ dept, onClose, onChanged, setErr }: {
         }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
+      if (!r.ok) { setErr(j.guidance || j.error || `保存失败 ${r.status}`); return; }   // guidance：W5 写关闭 409 引导文案
       toast.success(`已保存部门「${dept.name}」权限，用户重新登录后生效`);
       onChanged();
     } catch { setErr('保存失败，请重试'); }
@@ -930,7 +920,7 @@ function RoleEditor({ role, onClose, onChanged, setErr }: {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(j.error || `保存失败 ${r.status}`); return; }
+      if (!r.ok) { setErr(j.guidance || j.error || `保存失败 ${r.status}`); return; }   // guidance：W5 写关闭 409 引导文案
       toast.success(`已保存角色「${role.name}」，用户重新登录后生效`);
       onChanged();
     } catch { setErr('保存失败，请重试'); }
@@ -1097,6 +1087,250 @@ function AuditPanel({ items, loading, onRefresh }: {
   );
 }
 
+// ================= 例外 tab（Task 17，迁移 183 temporary_grants） =================
+
+function GrantsTab({ users, onChanged }: { users: User[]; onChanged: () => void }) {
+  const [grants, setGrants] = useState<GrantRow[]>([]);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const brands = useBrands();
+  const [form, setForm] = useState({ wecomId: '', dim: 'branch_nums', value: '', days: 7, note: '' });
+  const [showInactive, setShowInactive] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch('/api/admin/permissions/grants', { cache: 'no-store' });
+      if (!r.ok) { setErr(`例外列表加载失败 ${r.status}`); return; }
+      const d = await r.json();
+      setGrants(d.grants ?? []);
+      setErr('');
+    } catch { setErr('例外列表加载失败'); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const nameOf = (uid: string) => users.find(u => u.wecom_id === uid)?.name ?? uid;
+  const dimLabel = (dim: string) => GRANT_DIM_OPTIONS.find(d => d.value === dim)?.label ?? dim;
+  const now = Date.now();
+  const active = grants.filter(g => !g.revoked_at && new Date(g.expires_at).getTime() > now);
+  const inactive = grants.filter(g => g.revoked_at || new Date(g.expires_at).getTime() <= now);
+
+  async function grant() {
+    if (!form.wecomId) { setErr('请选择用户'); return; }
+    if (!form.value.trim()) { setErr('请填写例外值'); return; }
+    const days = Math.floor(Number(form.days));
+    if (!(days > 0 && days <= 90)) { setErr('到期天数须在 (0, 90]'); return; }
+    setSaving(true); setErr('');
+    try {
+      const r = await fetch('/api/admin/permissions/grants', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          wecom_id: form.wecomId, dim: form.dim, value: form.value.trim(),
+          expires_at: new Date(Date.now() + days * 86_400_000).toISOString(),
+          note: form.note.trim() || null,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(j.error || `授予失败 ${r.status}`); return; }
+      toast.success(`已授予例外（${dimLabel(form.dim)} ${form.value.trim()}，${days} 天后到期）`);
+      setForm(f => ({ ...f, value: '', note: '' }));
+      await load(); onChanged();   // onChanged 刷新审计区
+    } catch { setErr('授予失败，请重试'); }
+    finally { setSaving(false); }
+  }
+
+  async function revoke(id: number) {
+    setErr('');
+    try {
+      const r = await fetch(`/api/admin/permissions/grants?id=${id}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(j.error || `撤销失败 ${r.status}`); return; }
+      toast.success('已撤销（RLS 例外并集即时收口，app 侧缓存 ≤5min 失效）');
+      await load(); onChanged();
+    } catch { setErr('撤销失败，请重试'); }
+  }
+
+  const dimHint = GRANT_DIM_OPTIONS.find(d => d.value === form.dim)?.hint ?? '';
+
+  return (
+    <div>
+      {err && <div className="mb-3 text-sm text-red-600">{err}</div>}
+      <p className="text-xs text-slate-400 mb-3">
+        临时例外 = 到期自动失效的临时授权（如临时查看某门店）。不折叠进登录 claims（B5）：RLS 每请求实查并集，
+        撤销/到期即时收口；app 侧读取有 ≤5min 缓存。到期 ≤90 天，单用户单维活跃例外 ≤50 条。
+      </p>
+
+      <div className="rounded-md border border-slate-200 bg-slate-50 p-4 mb-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <Field label="用户">
+            <select
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm bg-white"
+              value={form.wecomId} onChange={e => setForm(f => ({ ...f, wecomId: e.target.value }))}
+            >
+              <option value="">选择用户…</option>
+              {users.map(u => <option key={u.wecom_id} value={u.wecom_id}>{u.name}（{u.wecom_id}）</option>)}
+            </select>
+          </Field>
+          <Field label="维度">
+            <select
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm bg-white"
+              value={form.dim} onChange={e => setForm(f => ({ ...f, dim: e.target.value, value: '' }))}
+            >
+              {GRANT_DIM_OPTIONS.map(d => <option key={d.value} value={d.value}>{d.label}（{d.value}）</option>)}
+            </select>
+          </Field>
+          <Field label="例外值" hint={dimHint}>
+            {form.dim === 'brands' ? (
+              <select
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm bg-white"
+                value={form.value} onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
+              >
+                <option value="">选择品牌…</option>
+                {brands.map(b => <option key={b.system_book_code} value={b.system_book_code}>{b.brand_name}（{b.system_book_code}）</option>)}
+              </select>
+            ) : form.dim === 'categories' ? (
+              <select
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm bg-white"
+                value={form.value} onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
+              >
+                <option value="">选择品类…</option>
+                {['水果', '标品', '耗材'].map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            ) : form.dim === 'fields' ? (
+              <select
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm bg-white"
+                value={form.value} onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
+              >
+                <option value="">选择字段…</option>
+                <option value="cost">成本可见（cost）</option>
+              </select>
+            ) : (
+              <input
+                className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                placeholder="如 3120-001" value={form.value}
+                onChange={e => setForm(f => ({ ...f, value: e.target.value }))}
+              />
+            )}
+          </Field>
+          <Field label="到期天数（≤90）">
+            <input
+              type="number" min={1} max={90}
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm tabular-nums"
+              value={form.days} onChange={e => setForm(f => ({ ...f, days: Number(e.target.value) }))}
+            />
+          </Field>
+          <Field label="备注（可选）">
+            <input
+              className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+              placeholder="授予原因（审计归因）" value={form.note}
+              onChange={e => setForm(f => ({ ...f, note: e.target.value }))}
+            />
+          </Field>
+        </div>
+        <div className="mt-1">
+          <Btn onClick={grant} disabled={saving}>{saving ? '授予中…' : '授予例外'}</Btn>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="py-8 text-sm text-slate-400 text-center">加载中…</div>
+      ) : (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-medium text-slate-700">活跃例外</h3>
+            <span className="text-xs text-slate-400 tabular-nums">共 {active.length} 条</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse tabular-nums">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200">
+                  <th className="py-2 pr-4">用户</th>
+                  <th className="py-2 pr-4">维度</th>
+                  <th className="py-2 pr-4">值</th>
+                  <th className="py-2 pr-4">到期</th>
+                  <th className="py-2 pr-4">授予人</th>
+                  <th className="py-2 pr-4">备注</th>
+                  <th className="py-2">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {active.map(g => {
+                  const soon = new Date(g.expires_at).getTime() - now < 7 * 86_400_000;
+                  return (
+                    <tr key={g.id} className="border-b border-slate-100">
+                      <td className="py-2 pr-4 text-slate-800">{nameOf(g.user_id)}</td>
+                      <td className="py-2 pr-4"><Badge>{dimLabel(g.dim)}</Badge></td>
+                      <td className="py-2 pr-4 text-slate-800">{g.value}</td>
+                      <td className="py-2 pr-4 text-slate-600">
+                        {soon ? <Badge tone="warn">{fmtShanghai(g.expires_at)} 即将到期</Badge> : fmtShanghai(g.expires_at)}
+                      </td>
+                      <td className="py-2 pr-4 text-slate-600">{nameOf(g.granted_by)}</td>
+                      <td className="py-2 pr-4 text-xs text-slate-500 max-w-[200px]">
+                        <span className="block truncate" title={g.note ?? ''}>{g.note ?? '-'}</span>
+                      </td>
+                      <td className="py-2">
+                        <Btn variant="ghost" danger onClick={() => revoke(g.id)}><Trash2 size={14} /> 撤销</Btn>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!active.length && (
+                  <tr><td colSpan={7} className="py-6 text-center text-slate-400 text-sm">暂无活跃例外</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {inactive.length > 0 && (
+            <div className="mt-6">
+              <button
+                className="text-xs text-slate-500 hover:text-primary underline"
+                onClick={() => setShowInactive(v => !v)}
+              >
+                {showInactive ? '收起' : '展开'}已失效例外（近30天，{inactive.length} 条）
+              </button>
+              {showInactive && (
+                <div className="overflow-x-auto mt-2">
+                  <table className="w-full text-sm border-collapse tabular-nums">
+                    <thead>
+                      <tr className="text-left text-slate-500 border-b border-slate-200">
+                        <th className="py-2 pr-4">用户</th>
+                        <th className="py-2 pr-4">维度</th>
+                        <th className="py-2 pr-4">值</th>
+                        <th className="py-2 pr-4">状态</th>
+                        <th className="py-2 pr-4">到期</th>
+                        <th className="py-2 pr-4">撤销于</th>
+                        <th className="py-2 pr-4">授予人</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {inactive.map(g => (
+                        <tr key={g.id} className="border-b border-slate-100 text-slate-400">
+                          <td className="py-2 pr-4">{nameOf(g.user_id)}</td>
+                          <td className="py-2 pr-4">{dimLabel(g.dim)}</td>
+                          <td className="py-2 pr-4">{g.value}</td>
+                          <td className="py-2 pr-4">
+                            {g.revoked_at ? <Badge tone="off">已撤销</Badge> : <Badge tone="off">已到期</Badge>}
+                          </td>
+                          <td className="py-2 pr-4">{fmtShanghai(g.expires_at)}</td>
+                          <td className="py-2 pr-4">{fmtShanghai(g.revoked_at)}</td>
+                          <td className="py-2 pr-4">{nameOf(g.granted_by)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ================= 页面 =================
 
 export default function PermissionsPage() {
@@ -1162,6 +1396,7 @@ export default function PermissionsPage() {
     { key: 'users', label: '用户', icon: <Users size={16} /> },
     { key: 'depts', label: '部门', icon: <Building2 size={16} /> },
     { key: 'roles', label: '角色', icon: <ShieldCheck size={16} /> },
+    { key: 'grants', label: '例外', icon: <Timer size={16} /> },
   ];
 
   return (
@@ -1170,11 +1405,21 @@ export default function PermissionsPage() {
         <h1 className="text-xl font-semibold text-slate-800 inline-flex items-center gap-2">
           <ShieldCheck size={20} /> 权限管理
         </h1>
-        <span className="text-xs text-slate-400">用户 / 部门 / 角色三层授权 + 变更审计</span>
+        <span className="text-xs text-slate-400">用户 / 部门 / 角色 / 例外授权 + 变更审计</span>
       </div>
       <div className="mb-4 flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
         <AlertTriangle size={15} className="shrink-0 mt-0.5" />
         <span>权限改动后，用户下次登录（重新签发 JWT）生效。</span>
+      </div>
+      {/* W5 写关闭引导横幅（Task 18 / 迁移 184）：四维授权上收 Casdoor，本页 override 只读，例外走「例外」tab */}
+      <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+        <span>
+          四维数据授权（品牌 / 品类 / 门店 / 成本）已上收统一身份平台并 DB 级冻结（W5 写关闭）——请在
+          <a href="https://sso.shanhaiyiguo.com/login/shanhai" target="_blank" rel="noreferrer" className="mx-1 font-medium underline hover:text-amber-900">Casdoor 管理端</a>
+          配置；临时例外（≤90 天自动失效）走
+          <button type="button" onClick={() => setTab('grants')} className="mx-1 font-medium underline hover:text-amber-900">「例外」tab</button>。
+        </span>
       </div>
       {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
 
@@ -1194,9 +1439,10 @@ export default function PermissionsPage() {
               </button>
             ))}
           </div>
-          {tab === 'users' && <UsersTab users={users} roles={roleBriefs} departments={userDepts} onChanged={reloadAll} />}
+          {tab === 'users' && <UsersTab users={users} roles={roleBriefs} departments={userDepts} />}
           {tab === 'depts' && <DeptsTab departments={departments} onChanged={reloadAll} />}
           {tab === 'roles' && <RolesTab roles={roles} onChanged={reloadAll} />}
+          {tab === 'grants' && <GrantsTab users={users} onChanged={reloadAll} />}
         </div>
         <div className="mt-6 xl:mt-0">
           <AuditPanel items={audit} loading={auditLoading} onRefresh={loadAudit} />

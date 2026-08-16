@@ -7,6 +7,10 @@
 --   不直读镜像、不篡改 get_user_perms 既有语义（委托同一内核，登录路径宽松语义不变）。
 --   与 U2 输入源切换分离（单变量纪律）：strict 不消费 PERMS_INPUT 之外的任何开关。
 -- 幂等：CREATE TABLE IF NOT EXISTS / INSERT ON CONFLICT DO NOTHING / CREATE OR REPLACE。
+-- W6 修正（Task 20，185 前置）：§② 函数体判空分支读 data_permissions——sunset 后每部署重跑会
+--   重建出「引用已删表」的函数体；包 to_regclass 守卫（表删后跳过——终版 strict 由 185 段落落，
+--   两迁移同部署序内 185 恒后于 170）。§① system_flags 与 data_permissions 无关，无守卫原样。
+--   外层 DO 用 $g$ 定界（与函数体 $$ 不同标签，防 dollar-quote 嵌套误闭合）。
 BEGIN;
 
 -- ① 输入源开关表（Task 13 完整化前先落本表与缺省值）
@@ -22,6 +26,9 @@ INSERT INTO system_flags(key, value) VALUES ('perms_input', 'legacy')
 -- ② strict wrapper：未知/离职 → NULL；空基底（按 PERMS_INPUT 分模式判空）→ NULL；
 --    否则委托 get_user_perms（SECURITY DEFINER + 固定 search_path，同 167/168 RPC 模式，
 --    调用方（anon/authenticated）无须直读 org_users/data_permissions）。
+DO $g$
+BEGIN
+IF to_regclass('public.data_permissions') IS NOT NULL THEN
 CREATE OR REPLACE FUNCTION get_user_perms_strict(p_wecom_id TEXT)
 RETURNS JSONB
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public
@@ -92,6 +99,8 @@ $$;
 COMMENT ON FUNCTION get_user_perms_strict(TEXT) IS '引擎路径 strict 权限 RPC：NULL=未知/离职/空基底（fail-close，跳过+审计）；jsonb=有效权限（空集≠NULL）。PERMS_INPUT 感知判空（system_flags，缺省 legacy）；委托 get_user_perms 内核';
 
 GRANT EXECUTE ON FUNCTION get_user_perms_strict(TEXT) TO anon, authenticated;
+END IF;
+END $g$;
 GRANT SELECT ON system_flags TO anon, authenticated;
 
 COMMIT;

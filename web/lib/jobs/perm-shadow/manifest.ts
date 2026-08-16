@@ -4,11 +4,30 @@
 //   运行 legacy(role_id) 和 casdoor(role_codes) 两条独立路径，逐用户比对结果。
 //   diff=0 连续 ≥7 天 + 白名单外 diff=0 + outbox 清空 = 切换就绪。
 //   system_flags.perms_input 未切换前此 job 只做比对记录，不改权限。
+// W6 sunset 守卫（Task 20）：data_permissions 已删（迁移 185 落 data_permissions_sunset 旗标）→
+//   双源之一的 legacy 源不复存在，job 使命结束——读旗标 no-op（否则每日全员 RPC 404 写 ERROR 行）。
+//   回滚窗口（database/rollback/167_reverse.sql）DELETE 旗标行 → job 自动恢复常态。
 import { createClient } from '@insforge/sdk';
 import type { JobManifest, JobResult } from '../../contracts';
 import { tryAcquireLock } from '../../scheduler-lock';
 import { INSFORGE_API_BASE, INSFORGE_API_KEY, POSTGREST_URL } from '../env';
 import { runningTasks } from '../state';
+
+// 读 sunset 旗标（185 ⑤落 / 167_reverse 撤）——异常按「未 sunset」处理（fail 到原逻辑，不静默吞）
+async function isPermSunsetDone(): Promise<boolean> {
+  try {
+    const res = await fetch(`${POSTGREST_URL}/system_flags?key=eq.data_permissions_sunset&select=value`, {
+      headers: { apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return false;
+    const rows: Array<{ value: string }> = await res.json();
+    return Array.isArray(rows) && rows[0]?.value === 'done';
+  } catch {
+    return false;
+  }
+}
 
 // 两路径 JSONB 对比：返回存在差异的 key 列表（空=无差异）
 function diffKeys(a: Record<string, unknown>, b: Record<string, unknown>): string[] {
@@ -37,6 +56,9 @@ export const permShadowManifest: JobManifest = {
   run: async (): Promise<JobResult> => {
     const JOB_KEY = '__perm_shadow_diff';
     if (!tryAcquireLock(runningTasks, JOB_KEY, `任务 ${JOB_KEY}`)) return { status: 'skipped' };
+    if (await isPermSunsetDone()) {
+      return { status: 'skipped', message: 'data_permissions sunset（W6，185）：legacy 源已删，shadow diff 使命结束' };
+    }
     try {
       const client = createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
       // 取所有 active 用户（分页——review 修复：原无 range 上限，PostgREST 默认截断 1000 行，

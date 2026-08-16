@@ -20,9 +20,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'invalid token' }, { status: 401 });
   }
   return NextResponse.json({
-    // branch_nums 缺省 '*' 表示全权（不限门店）
-    branch_nums: claims.branch_nums ?? '*',
-    // can_see_cost 严格布尔（缺省/非 true 一律 false）
-    can_see_cost: claims.can_see_cost === true,
+    // branch_nums（W6 / Task 20 对齐）：顶层镜像已摘——旧令牌（双氧期签发）读顶层，
+    // 新令牌读 data_scope.branch_nums（数组含 '*' = 全权；空数组 = 受限∅），两者皆缺省 '*'
+    branch_nums: claims.branch_nums ?? claims.data_scope?.branch_nums ?? '*',
+    // 列掩码（W6 终态）：唯一源 claims.fields.cost（顶层 can_see_cost 回退已随镜像摘除删——
+    // 旧形状令牌在 RLS 终版本就 deny，展示层同向全掩）。响应字段名 can_see_cost 保持不变：
+    // 这是 /api/me → 前端 hook 的内部布尔契约，下游 useCanSeeCost/MaskedBadge 不感知。
+    can_see_cost: claims.fields?.cost === true,
   });
 }

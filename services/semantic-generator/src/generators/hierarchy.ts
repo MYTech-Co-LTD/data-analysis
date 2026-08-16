@@ -502,9 +502,9 @@ function generateCategoryView(
     COALESCE(d.target_id, w.target_id) AS target_id,
     COALESCE(d.category, w.category) AS category,
     COALESCE(d.sale_actual, 0) + COALESCE(w.sale_actual, 0) AS sale_actual,
-    CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(d.profit_actual, 0) + COALESCE(w.profit_actual, 0) END AS profit_actual,
+    CASE WHEN can_cost_visible() THEN COALESCE(d.profit_actual, 0) + COALESCE(w.profit_actual, 0) END AS profit_actual,
     COALESCE(d.daily_amount, 0) + COALESCE(w.daily_amount, 0) AS daily_amount,
-    CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN COALESCE(d.daily_profit, 0) + COALESCE(w.daily_profit, 0) END AS daily_profit
+    CASE WHEN can_cost_visible() THEN COALESCE(d.daily_profit, 0) + COALESCE(w.daily_profit, 0) END AS daily_profit
   FROM delivery_actuals d
   FULL OUTER JOIN wholesale_actuals w ON w.target_id = d.target_id AND w.category = d.category
 )`);
@@ -576,10 +576,11 @@ SELECT ${finalCols.join(', ')} FROM total_level;`;
 
 // ──────────── T6 辅助：final SELECT + 各级 UNION ALL ────────────
 
-/** cost 脱敏（与 tier1 一致；下钻表当前无 cost_sensitive 指标，保留调用点） */
+/** cost 脱敏（与 tier1 一致；下钻表当前无 cost_sensitive 指标，保留调用点）
+ *  182 形状鉴别：fields.cost 主读 + legacy 顶层 key 回退（Task 16 消费侧切，H7） */
 function maskCost(expr: string, m: Metric): string {
   if (!m.cost_sensitive) return expr;
-  return `CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN ${expr} END`;
+  return `CASE WHEN can_cost_visible() THEN ${expr} END`;
 }
 
 /** 构建最终的 DROP+CREATE VIEW SQL：CTE 链 + 各级 SELECT UNION ALL */

@@ -44,7 +44,8 @@ async function getAccessToken(): Promise<string | null> {
   }
 }
 
-async function casdoorFetch(
+// 导出供 group-expand 等模块复用同一 fetch seam（契约测试 vi.mock('../casdoor-client')）。
+export async function casdoorFetch(
   path: string,
   opts: RequestInit = {},
 ): Promise<{ ok: boolean; data?: unknown; error?: string }> {
@@ -52,7 +53,9 @@ async function casdoorFetch(
   if (!token) return { ok: false, error: 'no_access_token' };
 
   try {
-    const resp = await fetch(`${CASDOOR_API}${path}`, {
+    // 绝对 URL 直传：group-expand 经此 seam 读 PostgREST（maps_branch_group），非 Casdoor 域
+    const url = /^https?:\/\//.test(path) ? path : `${CASDOOR_API}${path}`;
+    const resp = await fetch(url, {
       ...opts,
       headers: {
         'Content-Type': 'application/json',
@@ -216,5 +219,28 @@ export async function getUserRoles(wecomId: string): Promise<{
   const roles: string[] = rolesArr.map((r: unknown) =>
     typeof r === 'object' && r !== null ? String((r as Record<string, unknown>).name ?? '') : String(r),
   );
+  return { ok: true, roles };
+}
+
+/**
+ * 拉取组织全量 role name（契约①替代 H11/W6：Casdoor roles ⊆ 期望源差分的 Casdoor 侧输入；
+ * scripts/tests/roles-contract-sunset.test.mjs live 段与发布窗对账 cron 消费）。
+ */
+export async function casdoorListRoles(): Promise<{
+  ok: boolean;
+  roles?: string[];
+  error?: string;
+}> {
+  const result = await casdoorFetch(
+    `/api/get-roles?owner=${encodeURIComponent(CASDOOR_ORG)}`,
+  );
+  if (!result.ok || !result.data) {
+    return { ok: false, error: result.error ?? 'roles_fetch_failed' };
+  }
+  const data = result.data as { data?: unknown };
+  const rows = Array.isArray(data?.data) ? data.data : [];
+  const roles = rows
+    .map((r: unknown) => String((r as Record<string, unknown>)?.name ?? ''))
+    .filter((n: string) => n.length > 0);
   return { ok: true, roles };
 }

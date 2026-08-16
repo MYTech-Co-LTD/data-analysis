@@ -52,9 +52,115 @@ var require_cors = __commonJS({
   }
 });
 
+// functions/wecom-oidc-callback/claims.js
+var require_claims = __commonJS({
+  "functions/wecom-oidc-callback/claims.js"(exports2, module2) {
+    function buildClaims2(ctx) {
+      const oidcGroups = ctx.oidcToken?.groups ?? null;
+      if (!Array.isArray(oidcGroups) || oidcGroups.length === 0) return null;
+      if (!Array.isArray(ctx.reachable)) return null;
+      const expanded = ctx.expandResult;
+      if (!expanded || expanded.ok !== true) return null;
+      const permissions = ctx.reachable.filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:"));
+      const brands = permissions.filter((k) => k.startsWith("data-analysis:brand:")).map((k) => k.slice("data-analysis:brand:".length));
+      const categories = permissions.filter((k) => k.startsWith("data-analysis:category:")).map((k) => k.slice("data-analysis:category:".length));
+      const data_scope = { brands, categories, branch_nums: [...expanded.branch_nums ?? []] };
+      const fields = { cost: permissions.includes("data-analysis:field:cost") };
+      return {
+        ...ctx.legacy,
+        // H5：08-15 保留字段（role_code 等）全量透传
+        permissions,
+        // B2 资源串
+        groups: oidcGroups,
+        // F4：原生 token 全路径（判定用，禁中文 label 派生）
+        data_scope,
+        // B1：空段 = deny 语义载体
+        fields,
+        catalog_v: ctx.catalogV
+      };
+    }
+    module2.exports = { buildClaims: buildClaims2 };
+  }
+});
+
 // functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
+var { buildClaims } = require_claims();
+function decodeJwtPayload(token) {
+  try {
+    const part = String(token).split(".")[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b64 + "=".repeat((4 - b64.length % 4) % 4));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+async function fetchAllObjects(issuer, accessToken, userId) {
+  try {
+    const q = userId ? `?userId=${encodeURIComponent(userId)}` : "";
+    const res = await fetch(`${issuer}/api/get-all-objects${q}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!res.ok) {
+      console.error(
+        "wecom-oidc-callback: get-all-objects http",
+        res.status,
+        (await res.text().catch(() => "")).slice(0, 200)
+      );
+      return null;
+    }
+    const data = await res.json();
+    const arr = data && data.data;
+    return Array.isArray(arr) ? arr.filter((k) => typeof k === "string") : null;
+  } catch (e) {
+    console.error("wecom-oidc-callback: get-all-objects failed", e);
+    return null;
+  }
+}
+async function expandGroupsToBranches(groupPaths, pgrstUrl) {
+  try {
+    const mapsRes = await fetch(
+      `${pgrstUrl}/maps_branch_group?is_active=eq.true&select=group_id,group_type,branch_number`,
+      { headers: { "Content-Type": "application/json" } }
+    );
+    if (!mapsRes.ok) {
+      return { branch_nums: [], ok: false, error: `maps_branch_group http ${mapsRes.status}` };
+    }
+    const maps = await mapsRes.json();
+    if (!Array.isArray(maps)) {
+      return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
+    }
+    const results = /* @__PURE__ */ new Set();
+    for (const path of groupPaths ?? []) {
+      const g = String(path).split("/").pop();
+      const exact = maps.find((m) => m.group_id === g);
+      if (exact) {
+        if (exact.group_type === "store" && exact.branch_number) results.add(exact.branch_number);
+        else if (exact.group_type === "region") {
+          for (const m of maps) {
+            if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
+          }
+        }
+        continue;
+      }
+      const asRegion = maps.some((m) => m.group_id.startsWith(g + "-"));
+      if (asRegion) {
+        for (const m of maps) {
+          if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
+        }
+        continue;
+      }
+      return { branch_nums: [], ok: false, error: `unknown group: ${g}` };
+    }
+    return { branch_nums: [...results].sort(), ok: true };
+  } catch (e) {
+    return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
+  }
+}
 module.exports = async function(req) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
   const issuer = Deno.env.get("CASDOOR_ISSUER");
@@ -151,28 +257,49 @@ module.exports = async function(req) {
     } catch (e) {
       console.error("get_user_perms failed", e);
     }
-    const permKeys = [];
-    if (perms.branch_nums) permKeys.push("branch_nums");
-    if (perms.brands) permKeys.push("brands");
-    if (perms.categories) permKeys.push("categories");
-    if (perms.can_see_cost) permKeys.push("can_see_cost");
+    const tokenPayload = decodeJwtPayload(accessToken) || {};
+    const oidcGroups = Array.isArray(tokenPayload.groups) ? tokenPayload.groups : Array.isArray(userData.groups) ? userData.groups : null;
+    if (!oidcGroups) {
+      console.error("wecom-oidc-callback: groups claim missing, login denied (C2)");
+      return json({ error: "group_claim_missing_login_denied" }, 503);
+    }
+    const reachable = await fetchAllObjects(issuer, accessToken, tokenPayload.sub);
+    const expandResult = await expandGroupsToBranches(oidcGroups, pgrstUrl);
+    const claims = buildClaims({
+      oidcToken: { groups: oidcGroups },
+      reachable,
+      expandResult,
+      catalogV: Deno.env.get("CATALOG_V") ?? "0",
+      legacy: {
+        // 08-15 保留字段（H5）全量透传——仍从 get_user_perms 读，缺字段兜底语义不变
+        role_code: perms.role_code ?? null,
+        default_landing: perms.default_landing || "/",
+        default_metric: perms.default_metric || "sale",
+        visible_panels: perms.visible_panels || [],
+        departments: departmentIds,
+        roles: casdoorRoles
+        // Task 13: Casdoor 角色码（string[]）
+      }
+    });
+    if (!claims) {
+      console.error(
+        "wecom-oidc-callback: group scope unavailable, login denied",
+        { expandError: expandResult?.error ?? null, reachable: Array.isArray(reachable) ? reachable.length : null }
+      );
+      return json({ error: "group scope unavailable, login denied" }, 503);
+    }
+    try {
+      await client.database.from("org_users").update({
+        groups: oidcGroups
+      }).eq("wecom_id", wecomUserId);
+    } catch (e) {
+      console.error("groups projection mirror write failed", e);
+    }
     const now = Math.floor(Date.now() / 1e3);
     const jwt = await signJwt({
       sub: wecomUserId,
       role: "authenticated",
-      departments: departmentIds,
-      role_code: perms.role_code ?? null,
-      branch_nums: perms.branch_nums || ["*"],
-      brands: perms.brands || ["*"],
-      categories: perms.categories || ["*"],
-      can_see_cost: perms.can_see_cost ?? false,
-      default_landing: perms.default_landing || "/",
-      default_metric: perms.default_metric || "sale",
-      visible_panels: perms.visible_panels || [],
-      roles: casdoorRoles,
-      // Task 13: Casdoor 角色码（string[]）
-      permissions: permKeys,
-      // Task 13: 已授权维度 key 列表（additive）
+      ...claims,
       iss: "casdoor-oidc",
       iat: now,
       exp: now + 7 * 86400

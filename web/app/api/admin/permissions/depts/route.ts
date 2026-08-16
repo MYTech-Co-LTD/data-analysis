@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
 import { writeAudit } from '@/lib/permission-audit';
 import { normArr, arrOrNull, canSeeCostOk } from '@/lib/permission-guards';
+import { isPermFrozenError, permFrozenConflict } from '@/lib/perm-write-close';
 
 const POSTGREST_URL = process.env.POSTGREST_URL || 'http://postgrest:3000';
 const KEY = process.env.INSFORGE_API_KEY!;
@@ -64,9 +65,13 @@ export async function PUT(req: NextRequest) {
   if (merged.branch_nums === null && merged.can_see_cost === null) {
     // 全 null：有旧行 → 删行（恢复继承）；无旧行 → 本即「未配置」，no-op 不建全 NULL 垃圾行（review NIT #2）
     if (oldArr.length) {
-      // 删失败 502 且不写审计（F1）
+      // 删失败 502 且不写审计（F1）；W5 写关闭（184）→ 409 引导
       const dr = await fetch(`${POSTGREST_URL}/data_permissions?id=eq.${(last as { id: number }).id}`, { method: 'DELETE', headers: { ...H, Prefer: 'return=minimal' } });
-      if (!dr.ok) return NextResponse.json({ ok: false, error: await dr.text() }, { status: 502 });
+      if (!dr.ok) {
+        const errText = await dr.text();
+        if (isPermFrozenError(errText)) return permFrozenConflict();
+        return NextResponse.json({ ok: false, error: errText }, { status: 502 });
+      }
       await writeAudit(req, { action: 'delete_data_permission', subjectType: 'dept', subjectId: String(b.id), before: last, after: null });
     }
     return NextResponse.json({ ok: true });
@@ -74,7 +79,11 @@ export async function PUT(req: NextRequest) {
   const r = await (oldArr.length
     ? fetch(`${POSTGREST_URL}/data_permissions?id=eq.${(last as { id: number }).id}`, { method: 'PATCH', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify({ branch_nums: merged.branch_nums, can_see_cost: merged.can_see_cost, note: body.note }) })
     : fetch(`${POSTGREST_URL}/data_permissions`, { method: 'POST', headers: { ...H, Prefer: 'return=minimal' }, body: JSON.stringify(body) }));
-  if (!r.ok) return NextResponse.json({ ok: false, error: await r.text() }, { status: 502 });
+  if (!r.ok) {
+    const errText = await r.text();
+    if (isPermFrozenError(errText)) return permFrozenConflict();       // W5 写关闭（184）→ 409 引导
+    return NextResponse.json({ ok: false, error: errText }, { status: 502 });
+  }
   await writeAudit(req, { action: 'upsert_data_permission', subjectType: 'dept', subjectId: String(b.id), before: last, after: body });
   return NextResponse.json({ ok: true });
 }

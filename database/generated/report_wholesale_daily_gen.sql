@@ -13,12 +13,12 @@ cte0 AS (
     SUM(s.wholesale_profit) AS wholesale_ext_profit
   FROM report_daily_wholesale s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.latest_day
-  WHERE s.system_book_code = '3120' AND claim_match_or_star(current_setting('request.jwt.claims.brands', true)::jsonb, s.system_book_code) AND claim_match_or_star(current_setting('request.jwt.claims.branch_nums', true)::jsonb, s.branch_num::text)
+  WHERE s.system_book_code = '3120' AND scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num))
   GROUP BY tgt.target_id, s.biz_date
 )
 SELECT cte0.target_id AS target_id,
   cte0.biz_date AS biz_date,
   cte0.wholesale_ext_amount AS wholesale_ext_amount,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN cte0.wholesale_ext_profit END AS wholesale_ext_profit,
-  CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false) THEN round((COALESCE(cte0.wholesale_ext_profit, 0) / NULLIF(COALESCE(cte0.wholesale_ext_amount, 0), 0)), 4) END AS wholesale_ext_margin
+  CASE WHEN can_cost_visible() THEN cte0.wholesale_ext_profit END AS wholesale_ext_profit,
+  CASE WHEN can_cost_visible() THEN round((COALESCE(cte0.wholesale_ext_profit, 0) / NULLIF(COALESCE(cte0.wholesale_ext_amount, 0), 0)), 4) END AS wholesale_ext_margin
 FROM cte0;
