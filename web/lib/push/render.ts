@@ -38,6 +38,10 @@ export async function generateScopedJwt(perms: Perms): Promise<string> {
     branch_nums: perms.branch_nums,
     categories: perms.categories,
     can_see_cost: perms.can_see_cost,
+    // Task 16 消费侧切（H7）：代签令牌带新形状 fields 段——视图层 can_cost_visible()
+    // （迁移 182 形状鉴别）以 fields.cost 为主读；顶层 can_see_cost 镜像双氧保留
+    // （旧消费端/审计，Task 20 sunset 一并删）。段恒存在：cost 缺 key=false 全掩方向。
+    fields: { cost: perms.can_see_cost === true },
     scope: {
       // 兼容保留（新消费端以顶层为准）
       brands: perms.brands,

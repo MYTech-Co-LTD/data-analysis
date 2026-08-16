@@ -94,8 +94,8 @@ describe('权限收口：tier1 行级过滤注入', () => {
     expect(sql).toContain(`t.branch_num = 'ALL'`);
   });
 
-  it('cost_sensitive 指标脱敏 CASE 仍在', () => {
-    expect(sql).toContain(`current_setting('request.jwt.claims.can_see_cost', true)`);
+  it('cost_sensitive 指标脱敏 CASE 仍在（182 形状鉴别 can_cost_visible）', () => {
+    expect(sql).toContain(`CASE WHEN can_cost_visible() THEN`);
   });
 });
 

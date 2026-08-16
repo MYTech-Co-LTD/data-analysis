@@ -66,7 +66,7 @@ FROM targets t
 ),
 outbound_profit AS (
   SELECT t.id AS target_id,
-  (SELECT CASE WHEN COALESCE(current_setting('request.jwt.claims.can_see_cost', true)::boolean, false)
+  (SELECT CASE WHEN can_cost_visible()
      THEN COALESCE(SUM(COALESCE(d.profit_money, 0) + COALESCE(w.wholesale_profit, 0)), 0) ELSE NULL END
    FROM report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
      ON d.system_book_code = w.system_book_code AND d.biz_date = w.biz_date AND d.branch_num = w.branch_num AND d.category_group = w.category_group
