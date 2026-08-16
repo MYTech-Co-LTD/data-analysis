@@ -2489,3 +2489,12 @@ COMMIT;
 4. **Task 4 契约勘误**（跟踪#4，可选）：casdoorFetch 真实契约「不抛异常、失败 `{ok:false}`」（适配：`res?.ok === false → throw` 归一）；plan 测试 mock 链漏算 retry 重读（worker 已按真实调用序补齐）。
 5. **集成正本指令**：casdoor-client.ts 以 **T9 版为统一正本**（export + 绝对 URL 直传=功能超集）；三分支 export 行冲突秒解；合入后跑 `lib/sync/` 全量回归 + tsc。
 6. **Task 11 断言数**：plan 写 9 实为 10（测试块实数）；atob latin-1 mojibake 真 bug 已由 worker 以 TextDecoder 修复（CJK 组名 503 根因）。
+
+---
+
+## DW2 实施勘误记录（2026-08-16，review 后回写）
+
+1. **Task 5 四处勘误**：① E-deprecated 改以废弃 key 为轴心合并三源持有者（直接引用∪命名空间通配∪全局 `*`，plan 原循环产不出测试 3 红条目）；② CLI catalog 抽取正则放宽 + KEY_NS_RE 命名空间过滤（原两段冒号必漏 `data-analysis:admin`）；③ 对账红区 = `data-analysis:*` + 全局 `*`（push:* 引擎裸 key 仅入通配审计不计红）；④ perUser 加 `offending` 字段（keys 语义不变）。另 `--sync-failures` 显式 flag 防 ssh/cron stdin 挂死。
+2. **Task 10 期望源落地形态**：库内确无独立人→门店 HR 源（dim_branch/org_users/dim_war_zone 落库核实），按 plan 允许的第二形态落地 = **岗位×考核门店覆盖语义**（期望=dim_war_zone(is_assessed) ⋈ dim_branch(first_level_region)，纯 dim 数据不经 Group 树——H10 底线保住；弱化=只检覆盖不检 per-user 错配，升级路径 HR 源已在 manifest 标注）。触碰面超 brief 4 文件 = 08-15 cron 框架硬要求（manifest 不登记则 cron 不存在，M16）。
+3. **Task 13 跟踪**：CATALOG_V 为构建期内联 env——**Task 6 GHA 钩子必须注入**（未注入恒快路径不锁死但 bump 机制惰性）。middleware `/reports*` view 快判为净新增（基线原无，legacy 页为重定向页无锁死风险）。
+4. **Task 16 信息差记录**：视图层 `claim_match_or_star` 残留（perm.ts 产物 + 9 个 generated/*.sql）——179 注释指 T16 而 brief 只令掩码位。**语义**：新令牌顶层键缺失 → 视图层过滤惰性放行，行级实际由 RLS scope_match_v2 执行（179 已断言策略无残留）——**非安全洞**。归属待人裁：后续切 scope_match_v2 或声明 RLS 足够删之（候选：T19/T20 或独立小任务）。
