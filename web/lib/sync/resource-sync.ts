@@ -32,7 +32,16 @@ type FetchResult = { ok?: boolean; data?: unknown; error?: string };
 
 async function fetchRemoteKeys(owner: string): Promise<Set<string>> {
   const resp = (await casdoorFetch('/api/get-resources?owner=' + encodeURIComponent(owner), {})) as FetchResult | undefined;
-  const rows = (Array.isArray(resp?.data) ? resp.data : []) as ResourceRow[];
+  // 2026-08-17 勘误（casdoorFetch data=body 解包坑，与 assignRoles 同源）：casdoorFetch 返回的
+  //   data 是完整 response body {status, data:[...]}，不是直接数组。旧实现 Array.isArray(resp.data)
+  //   恒 false → 空集 → 全量 add → 首次插入成功（掩盖 bug），表已有后重复 add 撞 resource_pkey 主键
+  //   （能力页面全红 C-sync-failed）。兼容两形态：body 直接数组（mock/旧响应）或 body.data 数组。
+  const body = resp?.data as { data?: unknown } | null | unknown[] | undefined;
+  const rows = (Array.isArray(body)
+    ? body
+    : Array.isArray((body as { data?: unknown } | null)?.data)
+      ? (body as { data: ResourceRow[] }).data
+      : []) as ResourceRow[];
   // description 存 catalog key 原文（权威）；老数据无 description 时回退 decode(name)
   return new Set(rows.map((r) => r.description || dec(r.name ?? '')));
 }
