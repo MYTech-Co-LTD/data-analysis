@@ -165,3 +165,86 @@ full 档 3 个在以上基础上加一行 `"data-analysis:field:cost",` 到 reso
 3. 验证：该账号登录后能进 `/admin/permissions`（middleware + 路由内 `requireAdmin` 双层门禁）。
 
 【截图位】admin 能力勾选 / 管理台可达
+
+## 6. 数据范围确认（门店=组挂载、品牌品类成本=角色档位）
+
+数据范围是「能看到哪些门店/品牌/字段」的载体，**初始化后一般自动成立**，本步多数人只需确认：
+
+- **门店 = 部门组挂载**：用户所在 Casdoor Group（部门组，由企微部门树自动同步）→
+  groups claim → `data_scope.branch_nums` → RLS 行过滤。**挂对组 = 看对门店**，随组织架构自动成立。
+  - 异常补挂：Casdoor → 组织架构 → 目标组 → 编辑成员。
+- **品牌 / 品类 / 成本 = 角色档位**：5 角色 permission 已在 §3 配好——
+  full 档 3 角色（boss / zone_manager / finance）含 `field:cost`，basic 档 2 角色
+  （manager / buyer）不含。一般不用再手动勾。
+- ⚠️ 只有**收窄 / 特殊放开**才去动 permission Resources——那时**必须整表单提交或直接删建**
+  （防 AllCols 清空，见附录 D）。
+
+【截图位】组编辑成员 / permission Resources 列表（full vs basic 差异）
+
+## 7. 日常运维：单人开通 / 转岗 / 离职收权
+
+系统初始化完成后，日常按本节操作（命令均已核对代码）。
+
+### 7.1 单人开通（新人入职）
+
+1. **企微后台加人**（源操作，不在平台内）。
+2. **触发通讯录同步**（每日 03:17 有自动全量兜底，但等不及可手动）：
+   ```bash
+   curl -s -X POST https://data.shanhaiyiguo.com/functions/wecom-sync-contacts
+   ```
+3. **核对已入 org_users**：
+   ```sql
+   SELECT wecom_id,name,department_ids,is_active FROM org_users WHERE wecom_id='<工号>';
+   -- name=中文名、department_ids 非空 → 同步成功
+   ```
+4. **薄同步 JIT 建户挂组（≤30min，无手动触发）**：`name`=工号、`displayName`=企微中文名、
+   挂部门组。核对两途径：
+   - Casdoor 控制台用户列表按工号（name）搜索
+   - `GET https://sso.shanhaiyiguo.com/api/get-user?id=shanhai/<工号>`
+5. **角色自动推导**（§4 自动路径），推导结果即想要的角色时什么都不用做。
+
+### 7.2 验证三步（每次配完必做）
+
+1. **DB 视角（合成）**：
+   ```sql
+   SELECT * FROM get_user_perms('<工号>');
+   ```
+   看角色、`data_scope.branch_nums`、`fields.cost` 各段是否符合预期。
+2. **claims 视角（管理员预览）**：`GET /api/admin/permissions/preview?wecom_id=<工号>`——
+   看 groups / data_scope / fields.cost 各段（新开会话将拿到的 claims）。
+3. **真实会话视角**：退出登录、重新登录实际看板，确认门店行范围 / 成本列掩码 / 看板卡片可见性。
+
+### 7.3 转岗换角色
+
+改部门（企微 + 同步）→ 薄同步按新部门**重新推导角色并写 Casdoor**；
+无附加角色时旧角色自动摘除（有附加角色则受 §4 覆盖规则保护，需手动清）。
+
+### 7.4 离职收权（软删除源）
+
+1. **企微停用 / 删除**该用户（源操作）
+2. 通讯录同步写 `is_active=false`
+3. 薄同步 **actionDisable**（≤30min）四连收权：Casdoor disable + `casdoor_writer='disabled'`
+   + `token_blacklist` 拉黑（7 天窗口内旧 JWT 即刻拒）→ outbox 重试直到成功
+4. 核对：
+   ```sql
+   SELECT wecom_id,casdoor_writer,is_active FROM org_users WHERE wecom_id='<工号>';
+   -- casdoor_writer='disabled' 且 Casdoor 用户状态为禁用 → 收权完成
+   ```
+
+### 7.5 例外回收
+
+`/admin/permissions` →「例外」tab 撤销临时授权（到期自动失效，无需手动）。
+例外通道明细见 §8。
+
+## 8. 临时例外（本系统唯一权限写入口）
+
+常规权限（角色/组）都走 Casdoor；**本系统 `/admin/permissions` 的「例外」tab 是唯一的权限写入口**，
+只做临时放开 / 临时收窄：
+
+- 页面：本系统 `/admin/permissions` →「例外」tab（管理员登录）
+- 维度与限制：门店（`branch_number` 复合键，形如 `3120-0027`）/ 品牌（`system_book_code`）/
+  品类 / 字段 cost；单维 ≤50 条、到期 ≤90 天
+- 生效：RLS 每请求实查，**即时生效 / 即时收口**（撤销 ≤5min 生效）
+- API 形式（管理员脚本用）：`POST/DELETE /api/admin/permissions/grants`；审计 `GET .../audit`
+
+【截图位】单人开通后 preview 响应 / 看板实际可见 / 例外撤销 / 离职用户状态
