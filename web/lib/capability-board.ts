@@ -93,7 +93,7 @@ export const KPI_CARD_CAPABILITIES: readonly KpiCardCapability[] = Object.freeze
   {
     key: 'data-analysis:view-kpi:outbound_amt',
     code: 'outbound_amt',
-    name: '供应链出库',
+    name: '供应链出库金额',
     description: '供应链出库目标完成率',
   },
   {
@@ -134,3 +134,28 @@ export const KPI_CARD_CAPABILITY_BY_KEY: ReadonlyMap<string, KpiCardCapability> 
 export const KPI_CARD_CAPABILITY_BY_CODE: ReadonlyMap<string, KpiCardCapability> = new Map(
   KPI_CARD_CAPABILITIES.map((k) => [k.code, k]),
 );
+
+// ============ 通俗名 → 能力（方案甲：Casdoor resource.name 用通俗名，管理员从下拉选中通俗名写进
+// permission.resources → 消费侧按通俗名反查 key。BY_NAME 反向映射即归一查找表。兼容能力页展示） ============
+
+/** 通俗名 → BoardCapability 反查（归一：Casdoor 下拉选中的通俗名 → 能力 key） */
+export const BOARD_CAPABILITY_BY_NAME: ReadonlyMap<string, BoardCapability> = new Map(
+  BOARD_CAPABILITIES.map((b) => [b.name, b]),
+);
+/** 通俗名 → KpiCardCapability 反查（归一：Casdoor 下拉选中的通俗名 → 能力 key） */
+export const KPI_CARD_CAPABILITY_BY_NAME: ReadonlyMap<string, KpiCardCapability> = new Map(
+  KPI_CARD_CAPABILITIES.map((k) => [k.name, k]),
+);
+
+// 通俗名唯一性断言（防重名破坏反查 / Casdoor resource name 主键）：重名 = 模块加载即抛错。
+// 2026-08-17：看板「供应链出库」与 KPI 卡「供应链出库」曾重名 → KPI 卡改名「供应链出库金额」消歧。
+{
+  const all = [...BOARD_CAPABILITIES, ...KPI_CARD_CAPABILITIES];
+  const seen = new Set<string>();
+  for (const c of all) {
+    if (seen.has(c.name)) {
+      throw new Error(`[capability-board] 通俗名重复（破坏 Casdoor resource name 主键 + BY_NAME 反查）：${c.name}`);
+    }
+    seen.add(c.name);
+  }
+}

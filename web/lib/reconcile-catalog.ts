@@ -6,6 +6,7 @@
 // 与 scripts 侧的分工：CLI 版 = CI/SSH 门禁（exit 1）；本模块 = 运行时在线对账（页面 + 告警）。
 import { casdoorFetch } from './sync/casdoor-client';
 import { CATALOG_KEYS, DEPRECATED_KEYS } from './capability-catalog';
+import { BOARD_CAPABILITY_BY_NAME, KPI_CARD_CAPABILITY_BY_NAME } from './capability-board';
 
 export interface CasdoorPermission {
   name: string;
@@ -48,12 +49,17 @@ export function classifyCatalogReconcile({
 
   // 引用并集：key → holders[]（持有全局 '*' 的 permission 标注 (*)）
   const referenced = new Map<string, string[]>();
+  // 归一（方案甲）：Casdoor 下拉选中通俗名写进 permission.resources 时，先把通俗名还原成
+  //   能力 key 再进 referenced（否则 E-unknown-key 误报 / M-unreferenced 漏报）。
+  const normKey = (r: string): string =>
+    BOARD_CAPABILITY_BY_NAME.get(r)?.key ?? KPI_CARD_CAPABILITY_BY_NAME.get(r)?.key ?? r;
   for (const p of permissions) {
     // H3：get-resources 系名恒带 "/" 前缀，permission.resources 同源勾选面——比对前统一剥离
     const rs = (p.resources ?? []).map((r) => String(r).replace(/^\//, ''));
     for (const r of rs) {
-      if (!referenced.has(r)) referenced.set(r, []);
-      referenced.get(r)!.push(rs.includes('*') ? `${p.name}(*)` : p.name);
+      const key = normKey(r);
+      if (!referenced.has(key)) referenced.set(key, []);
+      referenced.get(key)!.push(rs.includes('*') ? `${p.name}(*)` : p.name);
     }
     for (const w of rs.filter((r) => r === '*' || r.endsWith(':*')))
       wildcardHolders.push({ user: p.name, wildcard: w });

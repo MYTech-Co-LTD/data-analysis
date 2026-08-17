@@ -11,11 +11,17 @@
 //   写原文 → name 用合法映射名（":"→"_"；当前 catalog 无 "_"，映射无歧义）+ description 存
 //   catalog key 原文（权威可逆：即使推导歧义，description 是可信源）。Casdoor 管理面显示映射名，
 //   主管理面在 /admin/capabilities（catalog 原文）。约束：catalog key 不得含 "_"（scan 纪律）。
+// 2026-08-17 方案甲（Casdoor 下拉显示通俗名）：看板/KPI 能力（capability-board 单真相有通俗名）的
+//   resource.name 直接用通俗名（人类可读，Casdoor 下拉框显示的就是它）；无通俗名的（view:*/brand:*等）
+//   仍用映射名。description 恒存 key 原文（权威可逆，fetchRemoteKeys/对账照旧）。
+//   ⚠ 约束：通俗名必须全局唯一（capability-board 加载时断言防重名——Casdoor resource name 主键），
+//   否则 add-resource 撞 PK / BY_NAME 反查歧义。
 // 契约适配（T4 实施取证，2026-08-16）：casdoor-client 的 casdoorFetch 不抛异常，失败返回
 //   { ok: false, error }——plan 原文的 try/catch 只覆盖 reject 形态；此处把 ok === false 归一为
 //   同一失败路径（throw 进 catch），mock 测试返回体无 ok 字段不受影响（undefined !== false）。
 import { casdoorFetch } from './casdoor-client';
 import { CATALOG_KEYS, DEPRECATED_KEYS } from '../capability-catalog';
+import { BOARD_CAPABILITY_BY_KEY, KPI_CARD_CAPABILITY_BY_KEY } from '../capability-board';
 
 export interface SyncReport {
   added: string[]; skippedExisting: string[]; failed: { key: string; error: string }[];
@@ -25,6 +31,16 @@ export interface SyncReport {
 // （/?:#&%=+;），":" 是 catalog 三段式分隔 → 映射为 "_"。description 存 key 原文（权威）。
 const enc = (key: string): string => key.replace(/:/g, '_');
 const dec = (name: string): string => name.replace(/_/g, ':');   // 仅老数据/兜底；新数据走 description
+
+// 通俗名 → Casdoor resource.name（方案甲）：有通俗名的能力（看板/KPI）用通俗名做展示名，
+// 无通俗名的退回映射名。
+function displayName(key: string): string {
+  return (
+    BOARD_CAPABILITY_BY_KEY.get(key)?.name ??
+    KPI_CARD_CAPABILITY_BY_KEY.get(key)?.name ??
+    enc(key)
+  );
+}
 
 type ResourceRow = { name?: string; description?: string };
 
@@ -56,7 +72,7 @@ export async function syncResources(owner: string, keys?: readonly string[]): Pr
     try {
       const res = (await casdoorFetch('/api/add-resource', {
         method: 'POST',
-        body: JSON.stringify({ owner, name: enc(key), description: key }),   // 映射名 + 原文 description
+        body: JSON.stringify({ owner, name: displayName(key), description: key }),   // 通俗名 + 原文 description
       })) as FetchResult | undefined;
       if (res?.ok === false) throw new Error(res.error ?? 'add-resource failed');   // 真实通道失败归一（L2）
       // ★Casdoor body 级失败（生产实测 2026-08-17）：add-resource 可能 HTTP 200 但 body

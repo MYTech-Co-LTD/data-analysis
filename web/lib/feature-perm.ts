@@ -6,7 +6,12 @@
 // 两者皆无 → false（fail-close）。BREAKGLASS 默认空 = 兜底关闭。
 import { CATALOG_KEYS, DEPRECATED_KEYS } from './capability-catalog';
 import { expandViewGroups } from './view-groups';
-import { BOARD_CAPABILITY_BY_KEY, KPI_CARD_CAPABILITY_BY_KEY } from './capability-board';
+import {
+  BOARD_CAPABILITY_BY_KEY,
+  BOARD_CAPABILITY_BY_NAME,
+  KPI_CARD_CAPABILITY_BY_KEY,
+  KPI_CARD_CAPABILITY_BY_NAME,
+} from './capability-board';
 
 export async function checkFeaturePerm(
   userId: string,
@@ -115,12 +120,26 @@ function namespaceConfigured(pool: ReadonlySet<string>, prefix: string): boolean
   return false;
 }
 
+/** 判定池：把 perms 中的通俗名还原为能力 key（方案甲：Casdoor 下拉选中通俗名写进 permission.resources）
+ *  后，claims/前端收到的权限串里可能直接是通俗名（如「指标概览」）——判定前统一归一回 key，
+ *  保证「管理员选了通俗名」也能正确命中具名能力。 */
+export function buildPermPool(perms: readonly string[] | undefined): Set<string> {
+  const pool = new Set(expandViewGroups(perms ?? []));
+  for (const p of perms ?? []) {
+    const b = BOARD_CAPABILITY_BY_NAME.get(p);
+    if (b) pool.add(b.key);
+    const k = KPI_CARD_CAPABILITY_BY_NAME.get(p);
+    if (k) pool.add(k.key);
+  }
+  return pool;
+}
+
 /** 看板级能力：用户能否看到某个看板模块（boardId = BOARDS registry id，如 'kpi'/'region'） */
 export function hasBoardPerm(perms: readonly string[] | undefined, boardId: string): boolean {
   if (!perms) return true;                                               // 无权限信息（未登录/缺省）→ 全开
   const key = `data-analysis:view-board:${boardId}`;
   if (!BOARD_CAPABILITY_BY_KEY.has(key)) return false;                  // 未知 boardId（防御）
-  const pool = new Set(expandViewGroups(perms));
+  const pool = buildPermPool(perms);
   if (pool.has(key)) return true;
   if (pool.has('data-analysis:view-board:*')) return true;              // 命名空间通配
   if (pool.has('*')) return true;                                       // 全局通配
@@ -133,7 +152,7 @@ export function hasKpiPerm(perms: readonly string[] | undefined, code: string): 
   if (!perms) return true;                                              // 无权限信息（未登录/缺省）→ 全开
   const key = `data-analysis:view-kpi:${code}`;
   if (!KPI_CARD_CAPABILITY_BY_KEY.has(key)) return false;               // 未知 code（防御）
-  const pool = new Set(expandViewGroups(perms));
+  const pool = buildPermPool(perms);
   if (pool.has(key)) return true;
   if (pool.has('data-analysis:view-kpi:*')) return true;                // 命名空间通配
   if (pool.has('*')) return true;                                       // 全局通配

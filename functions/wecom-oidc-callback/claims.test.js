@@ -109,3 +109,46 @@ eq(R(resolveGroupBranches(['shanhai/东部一区', 'shanhai/总经办'], [
 ])), R({ branch_nums: ['3120-0001', '3120-0002'], ok: true }), '多组并集（兼职多挂）');
 
 console.log('resolveGroupBranches assertions passed');
+
+// ============ 方案甲：通俗名 → 能力 key 归一（2026-08-17，Casdoor resource.name=通俗名）============
+// 管理员在 Casdoor 下拉框选中通俗名（如「指标概览」）→ 写进 permission.resources 的是通俗名 →
+// claims B2 过滤前必须还原成 key，否则通俗名被 startsWith('data-analysis:') 丢弃 → 权限静默丢失。
+const { normalizeFriendlyPerm } = require('./claims.js');
+
+// 1. 13 个看板/KPI 通俗名全部映射到正确 key（与 capability-board.ts 单真相同步）
+const friendly = {
+  '指标概览': 'data-analysis:view-board:kpi',
+  '品牌×指标': 'data-analysis:view-board:brand',
+  '门店战区': 'data-analysis:view-board:region',
+  '商品 TOP': 'data-analysis:view-board:item-top',
+  '类别出库': 'data-analysis:view-board:category',
+  '供应链出库': 'data-analysis:view-board:supply-chain',
+  '外部批发': 'data-analysis:view-board:wholesale',
+  '门店零售': 'data-analysis:view-kpi:sale',
+  '门店配送': 'data-analysis:view-kpi:delivery',
+  '供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
+  '供应链毛利': 'data-analysis:view-kpi:outbound_profit',
+  '总配销比': 'data-analysis:view-kpi:delivery_sale_ratio',
+  '毛利率': 'data-analysis:view-kpi:outbound_margin',
+};
+for (const [f, key] of Object.entries(friendly)) {
+  eq(normalizeFriendlyPerm(f), key, `通俗名归一：${f} → ${key}`);
+}
+
+// 2. 未命中的值原样返回（key / 通配 / push 裸 key / 未知串都不动）
+eq(normalizeFriendlyPerm('data-analysis:view-board:*'), 'data-analysis:view-board:*', '通配原样透传');
+eq(normalizeFriendlyPerm('push:broadcast'), 'push:broadcast', 'push 裸 key 原样透传');
+eq(normalizeFriendlyPerm('data-analysis:view:reports'), 'data-analysis:view:reports', '完整 key 原样透传');
+eq(normalizeFriendlyPerm('未知通俗名'), '未知通俗名', '未知串原样透传（不误伤）');
+
+// 3. buildClaims 集成：reachable 里含通俗名 → permissions 里还原成 key（B2 过滤前归一）
+const friendlyCtx = {
+  ...okCtx,
+  reachable: ['data-analysis:view:reports', '指标概览', '门店零售', 'push:broadcast'],
+};
+const fc = buildClaims(friendlyCtx);
+eq(fc.permissions.includes('data-analysis:view-board:kpi'), true, '通俗名「指标概览」归一回 key 进 permissions');
+eq(fc.permissions.includes('data-analysis:view-kpi:sale'), true, '通俗名「门店零售」归一回 key 进 permissions');
+eq(fc.permissions.includes('指标概览'), false, '通俗名本身不进 permissions（已归一）');
+
+console.log('方案甲 通俗名归一 assertions passed');

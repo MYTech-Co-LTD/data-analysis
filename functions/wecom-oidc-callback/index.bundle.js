@@ -61,7 +61,8 @@ var require_claims = __commonJS({
       if (!Array.isArray(ctx.reachable)) return null;
       const expanded = ctx.expandResult;
       if (!expanded || expanded.ok !== true) return null;
-      const permissions = [...new Set(ctx.reachable.filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:")))];
+      const normReach = ctx.reachable.map((k) => FRIENDLY_TO_KEY[k] ?? k);
+      const permissions = [...new Set(normReach.filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:")))];
       const brands = permissions.filter((k) => k.startsWith("data-analysis:brand:")).map((k) => k.slice("data-analysis:brand:".length));
       const categories = permissions.filter((k) => k.startsWith("data-analysis:category:")).map((k) => k.slice("data-analysis:category:".length));
       const data_scope = { brands, categories, branch_nums: [...expanded.branch_nums ?? []] };
@@ -80,6 +81,25 @@ var require_claims = __commonJS({
       };
     }
     module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2 };
+    var FRIENDLY_TO_KEY = {
+      "\u6307\u6807\u6982\u89C8": "data-analysis:view-board:kpi",
+      "\u54C1\u724C\xD7\u6307\u6807": "data-analysis:view-board:brand",
+      "\u95E8\u5E97\u6218\u533A": "data-analysis:view-board:region",
+      "\u5546\u54C1 TOP": "data-analysis:view-board:item-top",
+      "\u7C7B\u522B\u51FA\u5E93": "data-analysis:view-board:category",
+      "\u4F9B\u5E94\u94FE\u51FA\u5E93": "data-analysis:view-board:supply-chain",
+      "\u5916\u90E8\u6279\u53D1": "data-analysis:view-board:wholesale",
+      "\u95E8\u5E97\u96F6\u552E": "data-analysis:view-kpi:sale",
+      "\u95E8\u5E97\u914D\u9001": "data-analysis:view-kpi:delivery",
+      "\u4F9B\u5E94\u94FE\u51FA\u5E93\u91D1\u989D": "data-analysis:view-kpi:outbound_amt",
+      "\u4F9B\u5E94\u94FE\u6BDB\u5229": "data-analysis:view-kpi:outbound_profit",
+      "\u603B\u914D\u9500\u6BD4": "data-analysis:view-kpi:delivery_sale_ratio",
+      "\u6BDB\u5229\u7387": "data-analysis:view-kpi:outbound_margin"
+    };
+    function normalizeFriendlyPerm(value) {
+      return FRIENDLY_TO_KEY[value] ?? value;
+    }
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, FRIENDLY_TO_KEY, normalizeFriendlyPerm };
     function resolveGroupBranches2(groupPaths, maps, knownDepts) {
       const deptSet = knownDepts instanceof Set ? knownDepts : null;
       const results = /* @__PURE__ */ new Set();

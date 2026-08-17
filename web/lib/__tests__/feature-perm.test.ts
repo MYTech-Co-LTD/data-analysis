@@ -65,4 +65,12 @@ describe('hasBoardPerm / hasKpiPerm（看板/KPI 卡片级能力）', () => {
     expect(hasBoardPerm(['data-analysis:view-board:*'], 'nonexistent')).toBe(false);
     expect(hasKpiPerm(['data-analysis:view-kpi:*'], 'nonexistent')).toBe(false);
   });
+  it('方案甲：permissions 含通俗名（Casdoor 下拉选中写入）→ 归一命中（防静默失效）', () => {
+    // 管理员在 Casdoor 下拉选中通俗名 → permission.resources 里是「指标概览」/「门店零售」
+    expect(hasBoardPerm(['指标概览', 'data-analysis:view-board:region'], 'kpi')).toBe(true);
+    expect(hasKpiPerm(['门店零售'], 'sale')).toBe(true);
+    // 通俗名收权：只配通俗名 → 未配的看板仍被收权（归一后命名空间已配置化）
+    expect(hasBoardPerm(['指标概览'], 'brand')).toBe(false);
+    expect(hasKpiPerm(['门店零售'], 'outbound_amt')).toBe(false);
+  });
 });

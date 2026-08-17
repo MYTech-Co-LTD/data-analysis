@@ -12,6 +12,10 @@
 //      scope_match_v2 终版（185 摘回退支）一并退役——旧形状令牌 = deny，不再需要镜像兼容。
 //  C2  三段任一失败（展开 ok:false / groups 段缺失 / 可达对象拉取失败）→ 返回 null = 登录整体失败。
 //  H5  08-15 保留字段（role_code/visible_panels/default_landing/default_metric/departments）全量透传。
+// 方案甲（2026-08-17 通俗名归一）：Casdoor resource.name 用通俗名（如「指标概览」），管理员从
+//     Casdoor 下拉框选中后写进 permission.resources 的是通俗名——本函数在 B2 过滤前先把通俗名
+//     还原成能力 key（FRIENDLY_TO_KEY 内置映射表，与 web/lib/capability-board.ts 单真相同步，
+//     由 claims.test.js 断言防漂移；重名已在单真相加载时断言唯一）。
 function buildClaims(ctx) {
   // --- 三段输入完整性（C2 fail-close）---
   const oidcGroups = ctx.oidcToken?.groups ?? null;
@@ -20,8 +24,11 @@ function buildClaims(ctx) {
   const expanded = ctx.expandResult;                                         // 已由调用方 await（index.js 组装）
   if (!expanded || expanded.ok !== true) return null;                        // 展开失败/未知组 → 整体失败
 
+  // 方案甲：通俗名 → 能力 key 归一（内置映射表见文件底部，与 capability-board.ts 单真相同步）
+  const normReach = ctx.reachable.map((k) => FRIENDLY_TO_KEY[k] ?? k);
+
   // --- permissions（B2）：资源串过滤（去重——get-all-objects 并集路径可能重复，claims 需唯一）---
-  const permissions = [...new Set(ctx.reachable.filter((k) =>
+  const permissions = [...new Set(normReach.filter((k) =>
     k === '*' || k.startsWith('data-analysis:') || k.startsWith('push:')))];
 
   // --- data_scope（B1）三维 ---
@@ -45,6 +52,34 @@ function buildClaims(ctx) {
 }
 
 module.exports = { buildClaims, collapseFullStore, resolveGroupBranches };
+
+// 通俗名 → 能力 key 内置映射（方案甲 2026-08-17）。与 web/lib/capability-board.ts 单真相同步：
+// 看板 7（BOARD_CAPABILITIES）+ KPI 卡 6（KPI_CARD_CAPABILITIES）。
+// ⚠ 保持同步：新增/改名能力必须同步这里 + capability-board.ts + claims.test.js 断言（防漂移）。
+// ⚠ 禁改值语义：key 是 Casdoor permission.resources 的权威授权串，通俗名只是展示层别名。
+// ⚠ 重名已在 capability-board.ts 加载时断言唯一（2026-08-17：KPI「供应链出库」→「供应链出库金额」消歧）。
+const FRIENDLY_TO_KEY = {
+  '指标概览': 'data-analysis:view-board:kpi',
+  '品牌×指标': 'data-analysis:view-board:brand',
+  '门店战区': 'data-analysis:view-board:region',
+  '商品 TOP': 'data-analysis:view-board:item-top',
+  '类别出库': 'data-analysis:view-board:category',
+  '供应链出库': 'data-analysis:view-board:supply-chain',
+  '外部批发': 'data-analysis:view-board:wholesale',
+  '门店零售': 'data-analysis:view-kpi:sale',
+  '门店配送': 'data-analysis:view-kpi:delivery',
+  '供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
+  '供应链毛利': 'data-analysis:view-kpi:outbound_profit',
+  '总配销比': 'data-analysis:view-kpi:delivery_sale_ratio',
+  '毛利率': 'data-analysis:view-kpi:outbound_margin',
+};
+
+// 归一函数（供 index.js 或测试直接调用：通俗名 → key，未命中原样返回）
+function normalizeFriendlyPerm(value) {
+  return FRIENDLY_TO_KEY[value] ?? value;
+}
+
+module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, FRIENDLY_TO_KEY, normalizeFriendlyPerm };
 
 // 组→门店集解析（2026-08-17 组树迁移企微部门树，用户裁定「组织架构严格按企微」）：
 //   新形态（部门组）：maps 行 group_id=部门名 × branch_number 多行——部门→门店集映射
