@@ -91,6 +91,29 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # ---------- 统一推送中心（2026-08-18 生产接线）----------
+    # /api/push：openclaw push-admin 插件 / 内部 job 走容器网 http://web:3000 直连；
+    # 但 Novu 回调与外部验证需公网可达，且统一走 nginx（限速/日志同源）。
+    # /api/wecom-bridge/<token>：Novu worker（novu 服务器）投递回调入口——双层验签在 web 侧，
+    # 此处只透传。两者都必须在 /api 兜底（insforge:7130）之前，否则 404 Cannot POST（接线实测）。
+    location /api/push {
+        proxy_pass http://web:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/wecom-bridge {
+        proxy_pass http://web:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # ---------- InsForge API ----------
     location /api {
         proxy_pass http://insforge:7130;
