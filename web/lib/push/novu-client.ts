@@ -82,6 +82,30 @@ export async function upsertSubscriber(
 
   const data = await resp.json();
 
+  // chat 通道激活（E2E 实测）：send-message-chat 的 legacy 通道发现依赖
+  // subscriber.channels；无 channel → USER_MISSING_CREDENTIALS → chat job canceled
+  // （some_channels_missing_credentials）。v2 create 不支持 channels（源码 TODO），
+  // 须走 deprecated 但可用的 PUT /v1/subscribers/:id 补挂 credentials。
+  // webhookUrl 同时写入 subscriber credentials + triggerBulk overrides（双保险：
+  // legacy 通道发现用前者，发送时凭据合并以 overrides 为末级）。
+  if (bridgeToken) {
+    const webhookUrl = `${bridgeBaseUrl()}/${bridgeToken}`;
+    const credResp = await fetch(`${apiUrl}/v1/subscribers/${encodeURIComponent(subscriber.subscriberId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `ApiKey ${apiKey}`,
+      },
+      body: JSON.stringify({
+        channels: [{ providerId: 'chat-webhook', credentials: { webhookUrl } }],
+      }),
+    });
+    if (!credResp.ok) {
+      const text = await credResp.text();
+      throw new Error(`Novu subscriber channels sync failed: ${credResp.status} ${text}`);
+    }
+  }
+
   // 同步 bridge_token → push_subscriber_tokens
   if (bridgeToken && subscriber.data?.wecom_id) {
     await syncBridgeToken(bridgeToken, subscriber.data.wecom_id as string);
