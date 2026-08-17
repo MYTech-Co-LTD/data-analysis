@@ -6,7 +6,10 @@
 -- 幂等：ON CONFLICT (var_code) DO NOTHING + 末尾验证断言。
 
 INSERT INTO push_variables (var_code, name, metric_code, scope_dim, extra_filter, unit, enabled) VALUES
-  ('achievement_rate', '销售达成率', 'sale_rate', 'total', NULL, '%', true)
+  ('achievement_rate', '销售达成率', 'sale_rate', 'total', NULL, '%', true),
+  -- URL 型变量（render.ts：<code>_url → /report/<view>?…&jwt=<10min 代签>）；
+  -- scheduled_report workflow 模板引用 {{payload.detail_url}}（契约①：模板 ⊆ 白名单）
+  ('detail_url', '明细链接（10min 代签 JWT）', NULL, 'total', NULL, NULL, true)
 ON CONFLICT (var_code) DO NOTHING;
 
 -- 验证断言（重复执行幂等：存在且口径正确即通过）
