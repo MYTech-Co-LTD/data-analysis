@@ -1,6 +1,6 @@
 // web/lib/__tests__/capability-catalog.test.ts
 import { describe, it, expect } from 'vitest';
-import { capabilityCatalog, CATALOG_KEYS, DEPRECATED_KEYS, VIEW_GROUPS, KEY_TO_LABEL, LABEL_TO_KEY } from '../capability-catalog';
+import { capabilityCatalog, CATALOG_KEYS, DEPRECATED_KEYS, VIEW_GROUPS, KEY_TO_LABEL, LABEL_TO_KEY, KEY_TO_DISPLAY_NAME, DISPLAY_NAME_TO_KEY, DISPLAY_SEP, displayNameFor } from '../capability-catalog';
 
 describe('capability-catalog 单真相', () => {
   it('catalog 非空且 key 全局唯一', () => {
@@ -102,5 +102,38 @@ describe('capability-catalog 单真相', () => {
     expect(LABEL_TO_KEY.get('熊喵鲜生')).toBe('data-analysis:brand:3120');
     expect(LABEL_TO_KEY.get('品牌×指标')).toBe('data-analysis:view-board:brand'); // 看板通俗名入册
     expect(LABEL_TO_KEY.get('门店零售')).toBe('data-analysis:view-kpi:sale'); // KPI 通俗名入册
+  });
+});
+
+describe('casdoor 展示名（组|label）', () => {
+  it('分隔符为半角 |', () => {
+    expect(DISPLAY_SEP).toBe('|');
+  });
+  it('KEY_TO_DISPLAY_NAME 全量覆盖 catalog（每个 key 都有展示名）', () => {
+    for (const e of capabilityCatalog) {
+      expect(KEY_TO_DISPLAY_NAME.has(e.key), `${e.key} 缺展示名`).toBe(true);
+      expect(KEY_TO_DISPLAY_NAME.get(e.key)).toMatch(/^.+\|.+$/);
+    }
+  });
+  it('有 label → 组|label；group 来自 merged 后的最终值', () => {
+    expect(KEY_TO_DISPLAY_NAME.get('data-analysis:view:reports')).toBe('看板|经营总览');
+    expect(KEY_TO_DISPLAY_NAME.get('data-analysis:brand:3120')).toBe('品牌|熊喵鲜生');
+    expect(KEY_TO_DISPLAY_NAME.get('data-analysis:admin')).toBe('门禁|管理台');
+    expect(KEY_TO_DISPLAY_NAME.get('data-analysis:view-board:brand')).toBe('看板|品牌×指标');
+    expect(KEY_TO_DISPLAY_NAME.get('data-analysis:view-kpi:sale')).toBe('看板|门店零售');
+  });
+  it('DISPLAY_NAME_TO_KEY 双向一致（全量反查）', () => {
+    expect(DISPLAY_NAME_TO_KEY.get('看板|经营总览')).toBe('data-analysis:view:reports');
+    expect(DISPLAY_NAME_TO_KEY.get('品牌|熊喵鲜生')).toBe('data-analysis:brand:3120');
+    expect(DISPLAY_NAME_TO_KEY.get('看板|品牌×指标')).toBe('data-analysis:view-board:brand');
+    expect(DISPLAY_NAME_TO_KEY.get('看板|门店零售')).toBe('data-analysis:view-kpi:sale');
+  });
+  it('展示名全局唯一（Casdoor resource.name 主键 + 反查不可歧义）', () => {
+    const names = [...KEY_TO_DISPLAY_NAME.values()];
+    expect(new Set(names).size).toBe(names.length);
+  });
+  it('displayNameFor 单 key 查询', () => {
+    expect(displayNameFor('data-analysis:view:reports')).toBe('看板|经营总览');
+    expect(displayNameFor('data-analysis:brand:3120')).toBe('品牌|熊喵鲜生');
   });
 });

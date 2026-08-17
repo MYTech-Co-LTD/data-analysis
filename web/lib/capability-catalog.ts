@@ -97,6 +97,38 @@ export const LABEL_TO_KEY: ReadonlyMap<string, string> = new Map(
   deduped.filter((e) => e.label).map((e) => [e.label, e.key]),
 );
 
+// ============ Casdoor 展示名（2026-08-17：功能点显示加「组|」前缀）============
+// Casdoor 管理端下拉框显示 resource.name，管理员无法区分功能点归属组 → 统一显示 `组|label`
+// （无 label 的 scan 自动发现兜底 `组|映射名`）。半角 `|`（生产实测 add-resource 接受）。
+// 设计取舍：保留 KEY_TO_LABEL/LABEL_TO_KEY（前端能力页纯 label 展示），新增本双映射供 Casdoor 侧。
+export const DISPLAY_SEP = '|' as const;
+
+// key → `组|label`（无 label 时 `组|映射名`，与 resource-sync enc 同规则：`:`→`_`）
+const displayEnc = (key: string): string => key.replace(/:/g, '_');
+export function displayNameFor(key: string): string {
+  const e = capabilityCatalog.find((x) => x.key === key);
+  if (!e) return `${DISPLAY_SEP}${displayEnc(key)}`;   // 防御：未知名 → `|映射名`（消费侧反查原样透传兜底）
+  return e.label ? `${e.group}${DISPLAY_SEP}${e.label}` : `${e.group}${DISPLAY_SEP}${displayEnc(key)}`;
+}
+
+export const KEY_TO_DISPLAY_NAME: ReadonlyMap<string, string> = new Map(
+  deduped.map((e) => [e.key, displayNameFor(e.key)]),
+);
+export const DISPLAY_NAME_TO_KEY: ReadonlyMap<string, string> = new Map(
+  [...KEY_TO_DISPLAY_NAME].map(([k, d]) => [d, k]),
+);
+
+// 展示名唯一性断言（Casdoor resource.name 主键 + 反查不可歧义；与 label 断言同模式）
+{
+  const seen = new Set<string>();
+  for (const d of KEY_TO_DISPLAY_NAME.values()) {
+    if (seen.has(d)) {
+      throw new Error(`[capability-catalog] Casdoor 展示名重复（破坏 resource.name 主键 + DISPLAY_NAME_TO_KEY 反查）：${d}`);
+    }
+    seen.add(d);
+  }
+}
+
 // 授权组（spec §5.5）：映射在 catalog（app 侧），不复制进 Casdoor policy
 export const VIEW_GROUPS = Object.freeze({
   'data-analysis:view-group:reports-all': {
