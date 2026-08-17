@@ -248,3 +248,63 @@ full 档 3 个在以上基础上加一行 `"data-analysis:field:cost",` 到 reso
 - API 形式（管理员脚本用）：`POST/DELETE /api/admin/permissions/grants`；审计 `GET .../audit`
 
 【截图位】单人开通后 preview 响应 / 看板实际可见 / 例外撤销 / 离职用户状态
+
+---
+
+## 附录 A：角色/权限速查表
+
+| 角色码 | 档位 | cost 字段 | 部门名派生来源 | 对应 permission |
+|---|---|---|---|---|
+| boss | full | 含 | 总经办 / 运营总 / 老板 | role-boss |
+| zone_manager | full | 含 | 战区 / 区域 / 大区 | role-zone_manager |
+| finance | full | 含 | 财务 | role-finance |
+| manager | basic | 不含 | 店长 / 门店 / 无匹配默认 | role-manager |
+| buyer | basic | 不含 | 采购 / 业务 / 品类 | role-buyer |
+
+派生规则 = 部门名正则匹配（`web/lib/sync/derive-roles.ts`，与 152 迁移逐行等价）；
+初始化照上表建 5 角色 + 5 权限，薄同步自动维护 Role.Users。
+
+**管理台能力单列**：`data-analysis:admin` 不随档位派生，单独手动授（§5）。
+
+## 附录 B：能力清单（Resources 勾选依据）
+
+> **单真相**：能力全集在 `web/lib/capability-board.ts`（看板/KPI）+ `web/lib/capability-catalog.ts`
+> （视图/品牌/品类/字段/门禁），新增看板/卡片按单真相同步。本表是快照，以单真相为准。
+
+| 分组 | 能力 key | 说明 |
+|---|---|---|
+| 视图（页面级） | `data-analysis:view:reports` / `reports-items` / `reports-targets` / `wholesale-customers` | 4 个报表页入口 |
+| 看板（7） | `data-analysis:view-board:kpi` / `brand` / `region` / `item-top` / `category` / `supply-chain` / `wholesale` | 指标概览/品牌×指标/门店战区/商品TOP/类别出库/供应链出库/外部批发 |
+| KPI 卡（6） | `data-analysis:view-kpi:sale` / `delivery` / `outbound_amt` / `outbound_profit` / `delivery_sale_ratio` / `outbound_margin` | 4 金额卡 + 2 派生比率卡 |
+| 品牌 | `data-analysis:brand:3120`（熊喵鲜生）/ `brand:64188`（品品甜） | 按品牌拆分可见 |
+| 品类 | `data-analysis:category:水果` / `标品` / `耗材` | 按品类可见 |
+| 字段 | `data-analysis:field:cost` | 成本列可见（**仅 full 档**，sensitive） |
+| 门禁 | `data-analysis:admin` | 管理台（§5 单独授） |
+
+安全语义：claims 里 data_scope 空段 = 授权确定为 ∅（deny），**禁止收敛通配 `["*"]`**。
+
+## 附录 C：截图落位表
+
+> 截图由管理员日后按本表补齐；正文各步的 `【截图位】` 即对应下表行，补完贴到 `docs/ops/screenshots/`
+> 并把正文标记替换为图片。
+
+| 正文步骤 | 截哪个界面 | 圈哪里 | 建议文件名 |
+|---|---|---|---|
+| §1 前置 | org_users 查询结果 + Casdoor Roles 空列表 | 计数>0；Roles 为空 | `b00-front-check.png` |
+| §2 建角色 | Casdoor Roles 添加页 | 5 角色建完列表（name 逐字一致） | `b01-roles.png` |
+| §3 建权限 | Permissions 添加页 / Resources 勾选态 | full vs basic 差异（cost） | `b02-permissions.png` |
+| §4 进角色 | Sub users 编辑态 | 下拉显示工号（无中文名） | `b03-subusers.png` |
+| §5 管理台 | admin 能力勾选 / 管理台可达 | `data-analysis:admin` 勾上；能进 /admin/permissions | `b04-admin-cap.png` |
+| §6 数据范围 | 组编辑成员 / permission Resources | 组下成员；full 含 cost | `b05-scope.png` |
+| §7 运维 | preview 响应 / 看板实际可见 / 例外撤销 / 离职用户状态 | groups、data_scope、fields.cost；门店行/成本掩码；撤销提示；casdoor_writer 状态 | `b06-ops.png` |
+
+## 附录 D：排障与坑
+
+| 症状 | 先看 | 跳转 |
+|---|---|---|
+| Casdoor 无户 / 拒建（非法用户名如 `YiBeiMeiShi.` 带点号） | `docker logs deploy-web-1 --since 48h 2>&1 \| grep -iE "provision\|outbox"`；企微侧修正 userid 后同步自愈 | §7.1 第 4 步 |
+| 角色推导 vs 手动不一致 | `SELECT wecom_id,role_codes,casdoor_writer FROM org_users WHERE wecom_id='<工号>';` 看 role_source | §4 覆盖规则（手动受保护）|
+| 门店范围 / 成本列不对 | `SELECT * FROM get_user_perms('<工号>');` 逐段判断 groups ↔ branch_nums ↔ fields | §6（组挂载 / 角色档位）|
+| get_user_perms 与 preview 不一致 | 重开会话再试（缓存/会话残留） | §8 例外即时收口 ≤5min |
+| **Permissions 页空白 / 某权限字段被清空** | 是否 API 局部 PATCH 过 update-permission（isEnabled 等）——AllCols 全列更新把 users/groups/roles/resources/actions 洗成 NULL | 整表单提交或删建（§3 编辑须知）；机制文档 §3.3 |
+| 授权不生效 | 直接 INSERT Casdoor DB 的 permission？→ 不触发 addPolicies，p 策略不生成 | 走 add-permission API（§3 API 备选）|
