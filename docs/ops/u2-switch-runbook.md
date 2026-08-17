@@ -1,6 +1,6 @@
 # U2 登录输入源切换 runbook（T5 / plan Task 13 / spec U2 挂钩）
 
-> 状态：**成文 2026-08-16；未执行**（当前 `system_flags.perms_input = 'legacy'`，U2 未切换）。切换日单人执行。
+> 状态：**已执行（2026-08-16 切换完成）**——`system_flags.perms_input = 'casdoor'`、`data_permissions_sunset = 'done'`；回滚演练留痕 `docs/ops/iam-sunset-rollback-drill.md`（167_reverse 全循环 23/23 测试绿）。本文档留档供未来同类切换参考。
 > 就绪判据（spec S1）：连续 ≥7 天白名单外 shadow diff=0 + outbox 清空 + manual 集稳定。
 > 切换约束：**非周五非月初**（spec）；秒回滚保证 = `UPDATE system_flags` 一行 + 回放脚本。
 
