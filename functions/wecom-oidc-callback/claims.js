@@ -20,9 +20,9 @@ function buildClaims(ctx) {
   const expanded = ctx.expandResult;                                         // 已由调用方 await（index.js 组装）
   if (!expanded || expanded.ok !== true) return null;                        // 展开失败/未知组 → 整体失败
 
-  // --- permissions（B2）：资源串过滤 ---
-  const permissions = ctx.reachable.filter((k) =>
-    k === '*' || k.startsWith('data-analysis:') || k.startsWith('push:'));
+  // --- permissions（B2）：资源串过滤（去重——get-all-objects 并集路径可能重复，claims 需唯一）---
+  const permissions = [...new Set(ctx.reachable.filter((k) =>
+    k === '*' || k.startsWith('data-analysis:') || k.startsWith('push:')))];
 
   // --- data_scope（B1）三维 ---
   const brands     = permissions.filter((k) => k.startsWith('data-analysis:brand:')).map((k) => k.slice('data-analysis:brand:'.length));

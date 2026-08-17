@@ -149,53 +149,76 @@ export async function provisionUser(user: CasdoorUser): Promise<{ ok: boolean; e
 /**
  * 写角色：设置用户的 Casdoor 角色（Casdoor-first）
  * 幂等：先查当前角色，diff 后批量增删
+ *
+ * 2026-08-17（T6 真机 + 源码 v3.150.0 双证据）：本版本 Casdoor 无 add-role-for-user /
+ *   delete-role-for-user API（routers 只注册 get/add/update/delete-role），旧实现调它恒 404。
+ *   源码确认（object/role.go getRolesByUserInternal + permission_enforcer.go
+ *   getRuntimeGroupingPolicies）：角色-用户绑定存 **Role.Users**（角色下挂用户），casbin g 策略
+ *   运行时从 Role.Users 实时读。因此正确姿势 = update-role 全量写 Role.Users（merge/remove），
+ *   改后立即生效（已真机验证：Role.Users 挂人 → get-all-objects 并集即变）。
  */
 export async function assignRoles(
   wecomId: string,
   roleCodes: string[],
 ): Promise<{ ok: boolean; error?: string; changed?: boolean }> {
-  // 查当前角色（get-user 解包——旧代码把 {status,data} 外壳当 user，roles 恒空致 diff 恒全量）
-  const user = await getUserObj(wecomId);
-  if (user === 'fetch_error') return { ok: false, error: 'get_user_failed' };
-  if (!user) {
-    return { ok: false, error: 'user_not_found' };
-  }
-  const rolesArr = Array.isArray(user.roles) ? user.roles : [];
-  const currentRoles: string[] = rolesArr.map((r: unknown) =>
-    typeof r === 'object' && r !== null ? String((r as Record<string, unknown>).name ?? '') : String(r),
-  );
+  const target = new Set(roleCodes);
+  const errors: string[] = [];
+  let changed = false;
 
-  // diff
-  const toAdd = roleCodes.filter(r => !currentRoles.includes(r));
-  const toRemove = currentRoles.filter(r => !roleCodes.includes(r));
+  // 拿到该用户当前所在角色：遍历 get-roles 检查 Role.Users（与 getRolesByUserInternal 同源）
+  const rolesResp = await casdoorFetch(`/api/get-roles?owner=${encodeURIComponent(CASDOOR_ORG)}`, {});
+  const rolesBody = rolesResp?.data as { data?: unknown } | null;
+  const roles = Array.isArray(rolesBody?.data) ? (rolesBody.data as Array<{
+    name?: string; users?: unknown; isEnabled?: boolean;
+  }>) : [];
+  const currentMembership: string[] = [];
+  const rolesById = new Map<string, { name: string; users: string[] }>();
+  for (const r of roles) {
+    const name = String(r.name ?? '');
+    if (!name) continue;
+    const users = Array.isArray(r.users)
+      ? r.users.map((x: unknown) => String(x)).filter(Boolean)
+      : [];
+    rolesById.set(name, { name, users });
+    const memberId = `${CASDOOR_ORG}/${wecomId}`;
+    if (users.some((u) => u === memberId || u === wecomId)) currentMembership.push(name);
+  }
+
+  // diff：目标角色集 vs 当前所在角色集
+  const toAdd = [...target].filter((r) => !currentMembership.includes(r));
+  const toRemove = currentMembership.filter((r) => !target.has(r));
 
   if (toAdd.length === 0 && toRemove.length === 0) {
     return { ok: true, changed: false }; // 无变化，幂等
   }
 
-  // 批量操作
-  const errors: string[] = [];
-
-  for (const role of toAdd) {
-    const r = await casdoorWrite('/api/add-role-for-user', {
+  // 逐角色 update-role 全量 Users（每次 update 前重读该角色，降低竞态）
+  for (const role of [...toAdd, ...toRemove]) {
+    const roleResp = await casdoorFetch(`/api/get-role?id=${encodeURIComponent(`${CASDOOR_ORG}/${role}`)}`, {});
+    const roleBody = roleResp?.data as { data?: { name?: string; users?: unknown; owner?: string } | null } | null;
+    const rObj = roleBody?.data as { name?: string; users?: unknown; owner?: string } | null;
+    const name = String(rObj?.name ?? role);
+    const cur = Array.isArray(rObj?.users)
+      ? (rObj!.users as unknown[]).map((x) => String(x)).filter(Boolean)
+      : [];
+    const memberId = `${CASDOOR_ORG}/${wecomId}`;
+    let next: string[];
+    if (toAdd.includes(role)) {
+      next = cur.includes(memberId) ? cur : [...cur, memberId];
+    } else {
+      next = cur.filter((u) => u !== memberId && u !== wecomId);
+    }
+    const wr = await casdoorWrite('/api/update-role?id=' + encodeURIComponent(`${CASDOOR_ORG}/${role}`), {
       method: 'POST',
       body: JSON.stringify({
-        user: `${CASDOOR_ORG}/${wecomId}`,
-        role: `${CASDOOR_ORG}/${role}`,
+        owner: CASDOOR_ORG,
+        name,
+        users: next,
+        isEnabled: true,
       }),
     });
-    if (!r.ok) errors.push(`add_${role}: ${r.error}`);
-  }
-
-  for (const role of toRemove) {
-    const r = await casdoorWrite('/api/delete-role-for-user', {
-      method: 'POST',
-      body: JSON.stringify({
-        user: `${CASDOOR_ORG}/${wecomId}`,
-        role: `${CASDOOR_ORG}/${role}`,
-      }),
-    });
-    if (!r.ok) errors.push(`remove_${role}: ${r.error}`);
+    if (!wr.ok) errors.push(`${role}: ${wr.error}`);
+    else changed = true;
   }
 
   if (errors.length) {
@@ -203,7 +226,7 @@ export async function assignRoles(
     return { ok: false, error: errors.join('; ') };
   }
 
-  return { ok: true, changed: true };
+  return { ok: true, changed };
 }
 
 /**
