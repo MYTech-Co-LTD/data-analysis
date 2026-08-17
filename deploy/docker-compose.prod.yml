@@ -54,6 +54,20 @@ services:
       - CASDOOR_CLIENT_ID=${CASDOOR_CLIENT_ID:-}
       - CASDOOR_CLIENT_SECRET=${CASDOOR_CLIENT_SECRET:-}
       - CASDOOR_ORG=${CASDOOR_ORG:-shanhai}
+      # ── 统一推送中心（spec 2026-08-15 §5/§8.2）──
+      # 引擎三处 fail-close 均依赖这些 env；此前 compose 未传递 = 引擎在生产恒拒（2026-08-17 排查）
+      # NOVU_API_URL/KEY：run_push 触发 + admin-service 建 workflow（值在 .env，runbook §4.7）
+      - NOVU_API_URL=${NOVU_API_URL:-}
+      - NOVU_API_KEY=${NOVU_API_KEY:-}
+      # 双层验签第二层（bridge-verify.ts / engine-sig.ts）——两把密钥只存 web/bridge 侧，Novu 不知 ENGINE 侧
+      - NOVU_BRIDGE_SECRET=${NOVU_BRIDGE_SECRET:-}
+      - ENGINE_BRIDGE_SECRET=${ENGINE_BRIDGE_SECRET:-}
+      # push 引擎 PostgREST 直连（web/lib/push getConfig 无默认值 → 空串 = strict RPC 恒 NULL 全员 skipped）
+      - POSTGREST_URL=http://postgrest:3000
+      # 与 INSFORGE_API_KEY 同源（anon JWT，PostgREST anon role 走 push 表/RPC GRANT）
+      - POSTGREST_ANON_KEY=${ANON_KEY}
+      # 引擎逐 subscriber 拼 webhookUrl 的公网基址（Novu worker 回调 bridge 路由用）
+      - PUSH_BRIDGE_BASE_URL=${PUSH_BRIDGE_BASE_URL:-https://data.shanhaiyiguo.com/api/wecom-bridge}
     depends_on:
       - insforge
     networks:

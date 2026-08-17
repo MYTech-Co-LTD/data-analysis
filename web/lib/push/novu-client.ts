@@ -38,11 +38,19 @@ export interface NovuSubscriber {
   data?: Record<string, unknown>;
 }
 
-export interface NovuBulkTrigger {
-  name: string; // workflowId
-  to: Array<{ subscriberId: string }>;
-  payload: Record<string, unknown>;
-  overrides?: Record<string, unknown>;
+/**
+ * Novu 逐收件人 webhookUrl 基址（chat-webhook 路由 = bridge 路由路径段）
+ *
+ * Novu 3.19 投递契约（源码 send-message-chat.usecase.ts:533 + base.provider.ts transform，
+ * 详见 docs/ops/novu-bridge-signature-verification.md §6）：
+ *   webhookUrl = overrides.providers['chat-webhook'].webhookUrl（逐 event 传入）
+ *   送达 body 字段（engine_sig/txn_id/subscriber_id/engine_content）须经
+ *   overrides.providers['chat-webhook']._passthrough.body 透传（_passthrough 不走 camelCase
+ *   变换，snake_case 原样保留；直接放顶层会被 casingTransform 改成 engineSig）。
+ */
+function bridgeBaseUrl(): string {
+  return (process.env.PUSH_BRIDGE_BASE_URL || 'https://data.shanhaiyiguo.com/api/wecom-bridge')
+    .replace(/\/+$/, '');
 }
 
 /**
@@ -113,19 +121,27 @@ export function newBridgeToken(): string {
   return randomBytes(32).toString('hex');
 }
 
+/** trigger overrides 入参形状（只用到 providers 层，其余原样透传） */
+export interface NovuTriggerOverrides {
+  providers?: Record<string, Record<string, unknown>>;
+  [k: string]: unknown;
+}
+
 /**
  * 触发 Novu bulk 消息
  *
  * - 每批 ≤100 人
  * - 每个 event 带 transactionId = txnId（Novu 原生事件级字段）
- * - payload 含 engine_sig / engine_content / txn_id / subscriber_id（bridge 验签依据）
+ * - payload 含 engine_sig / engine_content / txn_id / subscriber_id（审计/调试）
+ * - 逐 event overrides.providers['chat-webhook']：webhookUrl（逐人 bridge 路由）
+ *   + _passthrough.body 上述四字段（bridge 双层验签的送达层来源）
  * - 返回批量结果 + 失败批次内的 subscriberId（供 fallback 只补失败者，Review M8 修复）
  */
 export async function triggerBulk(
   workflowId: string,
-  subscribers: Array<{ subscriberId: string; payload: Record<string, unknown> }>,
+  subscribers: Array<{ subscriberId: string; payload: Record<string, unknown>; bridgeToken?: string }>,
   txnId?: string,
-  overrides?: Record<string, unknown>
+  overrides?: NovuTriggerOverrides
 ): Promise<{ total: number; batches: number; errors: string[]; failedSubscribers: string[] }> {
   const { apiUrl, apiKey } = getNovuConfig();
   if (!apiUrl || !apiKey) throw new Error('Novu API config missing');
@@ -142,18 +158,40 @@ export async function triggerBulk(
     const engineContent = JSON.stringify({ subscriberId: s.subscriberId, payload: s.payload });
     const digest = contentDigest(engineContent);
     const sig = generateEngineSig(eventTxnId, s.subscriberId, digest);
+    const engineFields = {
+      engine_sig: sig,
+      engine_content: engineContent,
+      txn_id: eventTxnId,
+      subscriber_id: s.subscriberId,
+    };
     return {
       name: workflowId,
       to: [{ subscriberId: s.subscriberId }],
       transactionId: eventTxnId,
       payload: {
         ...s.payload,
-        engine_sig: sig,
-        engine_content: engineContent,
-        txn_id: eventTxnId,
-        subscriber_id: s.subscriberId,
+        ...engineFields,
       },
-      ...(overrides ? { overrides } : {}),
+      // 逐 event overrides：webhookUrl 路由 + 送达 body 验签字段（见 bridgeBaseUrl 注释契约）
+      ...(s.bridgeToken
+        ? {
+            overrides: {
+              ...(overrides ?? {}),
+              providers: {
+                ...(overrides?.providers ?? {}),
+                'chat-webhook': {
+                  ...(overrides?.providers?.['chat-webhook'] ?? {}),
+                  webhookUrl: `${bridgeBaseUrl()}/${s.bridgeToken}`,
+                  _passthrough: {
+                    body: engineFields,
+                  },
+                },
+              },
+            },
+          }
+        : overrides
+          ? { overrides }
+          : {}),
     };
   });
 

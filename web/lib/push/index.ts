@@ -51,6 +51,13 @@ export interface RunPushResult {
   mode: 'shadow' | 'live';
   fallbackUsed: boolean;
   error?: string;
+  /** 逐组渲染产物（shadow.ts 消费：deliver=false 干跑落盘；live 模式亦返回供调试/审计页） */
+  renderedGroups?: Array<{
+    signature: string;
+    members: string[];
+    perms: Perms;
+    rendered: Record<string, string>;
+  }>;
 }
 
 /**
@@ -351,6 +358,7 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       subscriberId: string;
       payload: Record<string, unknown>;
       wecomId: string;
+      bridgeToken: string;
     }> = [];
 
     for (const group of renderedGroups) {
@@ -373,6 +381,8 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
           subscriberId: wecomId,
           payload: group.rendered,
           wecomId: info.wecomId,
+          // 逐人 bridge 路由：triggerBulk 据此拼 overrides.providers['chat-webhook'].webhookUrl
+          bridgeToken: info.bridgeToken,
         });
       }
     }
@@ -416,5 +426,6 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
     skipped,
     mode,
     fallbackUsed,
+    renderedGroups,
   };
 }
