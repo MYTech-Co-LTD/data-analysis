@@ -7,8 +7,7 @@ import { BOARD_CAPABILITIES, KPI_CARD_CAPABILITIES } from './capability-board';
 export interface CatalogEntry {
   key: string;            // data-analysis:view:reports / field:cost / brand:3120 / view-board:kpi / view-kpi:sale / ...
   group: string;          // 辅助页分组：看板 / 字段 / 品牌 / 品类 / 门禁
-  label: string;          // 展示名（人工 override 可改）
-  name?: string;          // 通俗命名（看板/KPI 能力等；能力页「通俗命名」列）
+  label: string;          // 展示名/通俗名（唯一真相：驱动 Casdoor resource.name + KEY_TO_LABEL/LABEL_TO_KEY）
   description?: string;   // 一句话描述（能力页「描述」列）
   sensitive?: boolean;    // 敏感标记（field 类默认 true）
   source: 'auto' | 'manual';
@@ -36,10 +35,10 @@ const MANUAL: CatalogEntry[] = [
   { key: 'data-analysis:category:耗材', group: '品类', label: '耗材', source: 'manual' },
   // 看板/KPI 能力（单真相在 capability-board.ts，此处只做 catalog 合并——H12：不复制定义）
   ...BOARD_CAPABILITIES.map((b) => ({
-    key: b.key, group: '看板', label: b.name, name: b.name, description: b.description, source: 'manual' as const,
+    key: b.key, group: '看板', label: b.name, description: b.description, source: 'manual' as const,
   })),
   ...KPI_CARD_CAPABILITIES.map((k) => ({
-    key: k.key, group: '看板', label: k.name, name: k.name, description: k.description, source: 'manual' as const,
+    key: k.key, group: '看板', label: k.name, description: k.description, source: 'manual' as const,
   })),
 ];
 

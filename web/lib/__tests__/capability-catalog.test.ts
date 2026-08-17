@@ -39,10 +39,10 @@ describe('capability-catalog 单真相', () => {
       const key = `data-analysis:view-kpi:${code}`;
       expect(CATALOG_KEYS.has(key), `KPI 能力缺: ${key}`).toBe(true);
     }
-    // 带 name/description
+    // 带 label（通俗名）/description
     for (const e of capabilityCatalog) {
       if (e.key.startsWith('data-analysis:view-board:') || e.key.startsWith('data-analysis:view-kpi:')) {
-        expect(e.name, `${e.key} 缺通俗命名`).toBeTruthy();
+        expect(e.label, `${e.key} 缺通俗名`).toBeTruthy();
         expect(e.description, `${e.key} 缺描述`).toBeTruthy();
       }
     }
