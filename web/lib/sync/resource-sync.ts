@@ -16,11 +16,13 @@
 //   仍用映射名。description 恒存 key 原文（权威可逆，fetchRemoteKeys/对账照旧）。
 //   ⚠ 约束：通俗名必须全局唯一（capability-board 加载时断言防重名——Casdoor resource name 主键），
 //   否则 add-resource 撞 PK / BY_NAME 反查歧义。
+// 2026-08-17 方案C（组|label 展示名）：resource.name 统一用 `组|label`（Casdoor 下拉框同时显示归属组
+//   与通俗名，管理员可区分功能点归属）；displayName 委托 displayNameFor，无 label 兜底 `组|映射名`。
 // 契约适配（T4 实施取证，2026-08-16）：casdoor-client 的 casdoorFetch 不抛异常，失败返回
 //   { ok: false, error }——plan 原文的 try/catch 只覆盖 reject 形态；此处把 ok === false 归一为
 //   同一失败路径（throw 进 catch），mock 测试返回体无 ok 字段不受影响（undefined !== false）。
 import { casdoorFetch } from './casdoor-client';
-import { CATALOG_KEYS, DEPRECATED_KEYS, KEY_TO_LABEL } from '../capability-catalog';
+import { CATALOG_KEYS, DEPRECATED_KEYS, displayNameFor } from '../capability-catalog';
 
 export interface SyncReport {
   added: string[]; skippedExisting: string[]; failed: { key: string; error: string }[];
@@ -31,10 +33,10 @@ export interface SyncReport {
 const enc = (key: string): string => key.replace(/:/g, '_');
 const dec = (name: string): string => name.replace(/_/g, ':');   // 仅老数据/兜底；新数据走 description
 
-// 通俗名 → Casdoor resource.name（方案甲/方案C）：有通俗名的能力用通俗名做展示名（catalog KEY_TO_LABEL
-//   ——含看板/KPI，因为 catalog 嵌入了 board/KPI 条目的 label），无通俗名的退回映射名（enc）。
+// 展示名 → Casdoor resource.name（2026-08-17 组|label 格式）：有通俗名（catalog label）用 `组|label`，
+// 无通俗名退回 `组|映射名`（displayNameFor 内置兜底，与 resource-sync enc 同规则）。
 function displayName(key: string): string {
-  return KEY_TO_LABEL.get(key) ?? enc(key);
+  return displayNameFor(key);
 }
 
 type ResourceRow = { name?: string; description?: string };

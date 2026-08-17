@@ -29,7 +29,7 @@ describe('resource 同步 adapter（spec §5.1 ③，fork 裸 name 语义）', (
     expect(r.skippedExisting).toEqual(['data-analysis:view:reports']);
     expect(mockFetch).toHaveBeenLastCalledWith('/api/add-resource', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ owner: 'shanhai', name: 'data-analysis_view_x', description: 'data-analysis:view:x' }),
+      body: JSON.stringify({ owner: 'shanhai', name: '|data-analysis_view_x', description: 'data-analysis:view:x' }),
     }));
   });
   it('撞 PK（重复插入）→ 吞 duplicate 继续（幂等重跑 no-op）', async () => {
@@ -52,7 +52,7 @@ describe('resource 同步 adapter（spec §5.1 ③，fork 裸 name 语义）', (
     const r = await syncResources('shanhai', ['data-analysis:category:水果', 'data-analysis:view:z']);
     expect(r.failed.map((f) => f.key)).toEqual(['data-analysis:category:水果', 'data-analysis:view:z']);
   });
-  it('方案C：resource.name 用通俗名（全量 catalog KEY_TO_LABEL）——页面级/字段级也有通俗名', async () => {
+  it('方案C：resource.name 用组|label（全量 catalog KEY_TO_DISPLAY_NAME）', async () => {
     mockFetch.mockClear();                                                 // 隔离前序测试的 mock 调用记录
     mockFetch.mockResolvedValueOnce(remoteHas([]));                        // 全缺
     mockFetch.mockResolvedValueOnce(addOk);                                // add view:reports
@@ -66,10 +66,10 @@ describe('resource 同步 adapter（spec §5.1 ③，fork 裸 name 语义）', (
     expect(r.added).toEqual([
       'data-analysis:view:reports', 'data-analysis:field:cost', 'data-analysis:view-board:brand',
     ]);
-    // name 用通俗名（Casdoor 下拉显示）：经营总览 / 成本可见 / 品牌×指标；description 恒存 key 原文
+    // name 用组|label（Casdoor 下拉显示）：看板|经营总览 / 字段|成本可见 / 看板|品牌×指标；description 恒存 key 原文
     const calls = mockFetch.mock.calls.filter((c) => c[0] === '/api/add-resource').map((c) => c[1].body);
-    expect(JSON.parse(calls[0])).toMatchObject({ name: '经营总览', description: 'data-analysis:view:reports' });
-    expect(JSON.parse(calls[1])).toMatchObject({ name: '成本可见', description: 'data-analysis:field:cost' });
-    expect(JSON.parse(calls[2])).toMatchObject({ name: '品牌×指标', description: 'data-analysis:view-board:brand' });
+    expect(JSON.parse(calls[0])).toMatchObject({ name: '看板|经营总览', description: 'data-analysis:view:reports' });
+    expect(JSON.parse(calls[1])).toMatchObject({ name: '字段|成本可见', description: 'data-analysis:field:cost' });
+    expect(JSON.parse(calls[2])).toMatchObject({ name: '看板|品牌×指标', description: 'data-analysis:view-board:brand' });
   });
 });
