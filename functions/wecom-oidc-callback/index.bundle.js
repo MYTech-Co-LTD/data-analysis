@@ -61,7 +61,7 @@ var require_claims = __commonJS({
       if (!Array.isArray(ctx.reachable)) return null;
       const expanded = ctx.expandResult;
       if (!expanded || expanded.ok !== true) return null;
-      const permissions = ctx.reachable.filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:"));
+      const permissions = [...new Set(ctx.reachable.filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:")))];
       const brands = permissions.filter((k) => k.startsWith("data-analysis:brand:")).map((k) => k.slice("data-analysis:brand:".length));
       const categories = permissions.filter((k) => k.startsWith("data-analysis:category:")).map((k) => k.slice("data-analysis:category:".length));
       const data_scope = { brands, categories, branch_nums: [...expanded.branch_nums ?? []] };

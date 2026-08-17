@@ -93,15 +93,72 @@ describe('disableUser — sink③ 唯可用形态（get-user 解包 merge + upda
   });
 });
 
-describe('assignRoles — get-user 解包修复（外壳当 user 的 roles 恒空 bug）', () => {
-  it('当前角色从 data.roles 正确读取，无 diff → 幂等无写', async () => {
-    let writes = 0;
+describe('assignRoles — 角色绑定在 Role.Users 侧（update-role 全量写，源码 v3.150.0 机制）', () => {
+  // 构造 get-roles 返回（当前 U1 在 r1，不在 r2）
+  const rolesData = () => [
+    { owner: 'shanhai', name: 'r1', users: ['shanhai/U1'] },
+    { owner: 'shanhai', name: 'r2', users: [] },
+  ];
+
+  it('已在目标角色（Role.Users 含 U1）→ 幂等无写', async () => {
+    const writes = 0;
     mockFetchSeq([
-      () => mkResp(200, { status: 'ok', data: { ...USER, roles: ['r1'] } }),
-      () => { writes++; return mkResp(200, { status: 'ok' }); },
+      () => mkResp(200, { status: 'ok', data: rolesData() }),       // get-roles
     ]);
     const r = await assignRoles('U1', ['r1']);
     expect(r).toEqual({ ok: true, changed: false });
     expect(writes).toBe(0);
+  });
+
+  it('目标角色缺 U1 → update-role 全量 merge Users（带 memberId）', async () => {
+    const calls: string[] = [];
+    mockFetchSeq([
+      () => mkResp(200, { status: 'ok', data: rolesData() }),               // get-roles（U1 在 r1）
+      () => mkResp(200, { status: 'ok', data: { owner: 'shanhai', name: 'r2', users: [] } }),  // get-role r2
+      (u, init) => {
+        calls.push(u);
+        expect(u).toContain('/api/update-role?id=shanhai%2Fr2');
+        const body = JSON.parse(String(init?.body));
+        expect(body.users).toEqual(['shanhai/U1']);
+        return mkResp(200, { status: 'ok', data: 'Affected' });
+      },
+    ]);
+    const r = await assignRoles('U1', ['r1', 'r2']);
+    expect(r).toEqual({ ok: true, changed: true });
+    expect(calls[0]).toContain('/api/update-role');
+  });
+
+  it('移出非目标角色 → update-role 从 Users 移除 memberId', async () => {
+    const calls: string[] = [];
+    mockFetchSeq([
+      () => mkResp(200, { status: 'ok', data: rolesData() }),               // get-roles（U1 在 r1）
+      () => mkResp(200, { status: 'ok', data: { owner: 'shanhai', name: 'r2', users: [] } }),  // get-role r2（目标，空）
+      (u) => {
+        calls.push(String(u));
+        return mkResp(200, { status: 'ok', data: 'Affected' });
+      },  // update-role r2（加 U1）
+      () => mkResp(200, { status: 'ok', data: { owner: 'shanhai', name: 'r1', users: ['shanhai/U1', 'shanhai/X'] } }),  // get-role r1
+      (u, init) => {
+        calls.push(String(u));
+        expect(String(u)).toContain('/api/update-role?id=shanhai%2Fr1');
+        const body = JSON.parse(String(init?.body));
+        expect(body.users).toEqual(['shanhai/X']);
+        return mkResp(200, { status: 'ok', data: 'Affected' });
+      },
+    ]);
+    const r = await assignRoles('U1', ['r2']);
+    expect(r).toEqual({ ok: true, changed: true });
+    expect(calls[0]).toContain('/api/update-role?id=shanhai%2Fr2');
+  });
+
+  it('update-role body error → ok:false（入 outbox 重试，不再假成功）', async () => {
+    mockFetchSeq([
+      () => mkResp(200, { status: 'ok', data: rolesData() }),
+      () => mkResp(200, { status: 'ok', data: { owner: 'shanhai', name: 'r2', users: [] } }),
+      () => mkResp(200, { status: 'error', msg: 'Forbidden characters' }),
+    ]);
+    const r = await assignRoles('U1', ['r1', 'r2']);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('r2');
   });
 });
