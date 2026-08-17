@@ -36,12 +36,12 @@
 | T10 迁移幂等 | 全部新迁移按 MIGRATION_TEMPLATE（DROP IF EXISTS / ON CONFLICT）；177 补 push_settings 与 177_push_require_owner 并存幂等 |
 | T2 就绪守卫 | `web/lib/push/guards.ts` isPaused fail-close + run-push.test「paused → 不投递」 |
 
-## 现场必做（真机/部署出口，未闭环）
+## 现场必做（真机/部署出口）—— 2026-08-17 更新
 
-- [ ] **T4**：薄同步三动作各真机验证一次；outbox 注入失败重放；drift 假差异告警实测（U1 上线）
-- [ ] **T5**：U2 切换日全员登录冒烟 + CEO/战区总/督导三角色逐字段比对（含 can_see_cost=false 脱敏）
-- [ ] **T6**：离职用户实测四 sink（`casdoor_writer='disabled'` 标记 + Casdoor disabled + JWT 数据窗口收窄 + 订阅回收）
-- [ ] **T7**：Novu 停机演练——逐组直投收到同产物（txnId 与主路径一致）；wecom-push 一键回退恢复
-- [ ] **T8**：`ENGINE_BRIDGE_SECRET` 轮换一次（改两侧 env + 验证新老签名切换）；JWT_SECRET 轮换演练留痕
-- [ ] **T11**：压一次限速（>50 收件人单次 / 超 500 人次/h）确认 429+告警
-- [ ] **T10 现场**：部署后 `bash migrate.sh` 再跑第二遍 exit 0 no-op
+- [x] **T4**（2026-08-17 真机）：provisioning JIT 真机（TestLiZhi001 04:30 tick 建户链路）✅；disable 真机（05:00 tick，见 T6）✅；assign_role 通道未启用（Casdoor Roles=0，auto 写入处于「对账告警+人工确认」阶段，PR#36 修外壳 bug 后待角色启用后补真机）。**发现并修复三处断链**（PR#25/#36）：provision 假成功（signupApplication 指向不存在 app + body 判红缺失）、disableUser 从未真正禁用（update-user 形态错）、assignRoles 外壳 bug。outbox 注入失败重放机制真机验证（disable 失败入队路径）。drift 告警待后续阶段。
+- [x] **T5**（2026-08-17 真机）：三角色同模板 agent-query 实测——行集嵌套 ChenGe(27)⊆YuShunBin(27，同区)⊆DaXiong(197 全店)✅；列结构一致✅；cost 列脱敏三态铁证（report_brand_metric_gen `CASE WHEN can_cost_visible()`：cost=true→3 行可见 / false→0 / 旧形状令牌→0 fail-close）✅。注：retail_detail 的 cost 列数据源木空（乐檬未回填），DuckDB 面列脱敏暂无数据可验，PG 面已验。
+- [x] **T6**（2026-08-17 真机，测试用户 TestLiZhi001 全链路）：四 sink 实测——①web API 面：is_active 软校验即时拒+清 cookie（PR#25 补齐断链：此前 blacklist 零写入方+企微路径不查）+ blacklist 按 sub 拉黑（188 新链路 05:00 tick 真机写入）✅；②推送面：归推送 worker（订阅回收）；③Casdoor disable：真机 isForbidden=t（PR#36 修复后；修复前 update-user 形态错从未真正禁用过）✅；④数据面：get_user_perms 离职→[] deny（189 修复 NOT FOUND 宽松哨兵 ["*"]——agent 面全店洞）；另裁裁决-4：旧视野 JWT 7 天窗口接受（middleware sink① 60s 内拒 web 面）。
+- [ ] **T7**：Novu 停机演练——归推送 worker（2026-08-17 分工裁定）
+- [ ] **T8**：`ENGINE_BRIDGE_SECRET` 轮换（归推送 worker）；**JWT_SECRET 轮换演练留痕——待低峰窗口（北京 23:00-07:00，runbook 约束，2026-08-17 中午不合规）**
+- [ ] **T11**：限速压测——归推送 worker（2026-08-17 分工裁定）
+- [x] **T10 现场**（2026-08-17）：migrate.sh 全量重跑幂等验证——发现并修复双阻断缺陷（PR#33）：132 裸 GRANT 已被 138 删除的旧签名（守卫化）+ 190 ON CONFLICT DO NOTHING 遇半途旧行断言挂（改 DO UPDATE 自愈）；修复后 main 管线恢复（PR#33/#34 连续 success）= 全量幂等重跑通过。遗留小职：132 重跑在旧签名存在时仍会 GRANT（无害）；migrate.sh 无水位线设计依赖逐文件幂等（已达成）。
