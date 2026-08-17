@@ -1,310 +1,102 @@
-# 权限体系配置手册（管理员从空系统初始化与日常维护）
+# 权限日常维护手册（管理员操作指南）
 
-> 成文 2026-08-17（v2 重写：定位从「单个人开通」改为「管理员从空系统初始化权限体系」）。
-> 给运维/管理员本人：新环境组织架构已同步、Casdoor 组织/应用已就绪、但角色/权限还全空时，
-> 按本手册从头把权限体系搭起来，并覆盖日常的单人开通/转岗/离职收权。
-> 模型总览 / 职责边界 / Casdoor 机制分别见
-> [permission-maintenance.md](./permission-maintenance.md) ·
-> [permission-boundary.md](./permission-boundary.md) ·
-> [casdoor-role-permission-mechanism.md](./casdoor-role-permission-mechanism.md)。
-> 设计文档：docs/superpowers/specs/2026-08-17-permission-onboarding-design.md（v2）。
+> 成文 2026-08-18（v3 简化：只讲管理员日常维护，不涉及初始化/原理；原理见
+> [casdoor-role-permission-mechanism.md](./casdoor-role-permission-mechanism.md)）。
+> 给管理员本人用。日常就三件事：**加角色、配权限、挂人**，全在 Casdoor 管理台点几下。
+> 入口：`https://sso.shanhaiyiguo.com/login/shanhai`（⚠️ 默认 `/login` 是全局管理员页，
+> 组织管理员要在那是登不进的，必须用上面这个带 `/shanhai` 的入口）。
 
-> ⚠️ **本手册的初始状态**：`org_users`/`org_departments` 已有数据（组织架构同步完成）、
-> Casdoor 组织管理入口可登录，但 **Roles 列表为空、Permissions 列表为空**——这正是我们要补的。
-> 已配好系统的日常单人开通/收权直接看 §7。
+## 一、先认识：角色 → 权限 → 人（30 秒看懂）
 
-## 0. 一句话流程 + 开局速查
-
-> 前置就绪 → 建 5 角色 → 建 5 权限 → 用户进角色（薄同步 auto）→ 管理台账号 → 数据范围确认 → 例外(可选) → 验证
-
-**记住一句话**：**先角色、再权限、挂人靠薄同步自动、管理台单独授、范围随组织架构自动成立。**
-
-| 步骤 | 做什么 | 去哪个系统 | 首次初始化必需 |
-|---|---|---|---|
-| 1 | 确认前置（组织架构已同步、Casdoor 可登录） | 本系统 + Casdoor | ✅ |
-| 2 | 建 5 角色（boss/zone_manager/finance/manager/buyer） | Casdoor → Roles | ✅ |
-| 3 | 建 5 权限（role-*）+ 勾资源（full 含 cost） | Casdoor → Permissions | ✅ |
-| 4 | 用户进角色（薄同步自动，存量补挂） | Casdoor → Roles → Sub users | ✅（仅首次补存量） |
-| 5 | 管理台账号（data-analysis:admin） | Casdoor permission | ✅ |
-| 6 | 数据范围确认（门店=组、品牌品类成本=角色档位） | 一般自动成立，核对即可 | 核对即可 |
-| 7 | 日常运维：单人开通 / 转岗 / 离职收权 | 企微 + 本系统 + Casdoor | 按需 |
-| 8 | 例外通道（临时放开/收窄） | 本系统 `/admin/permissions` | 按需 |
-
-**顺序铁律（防窗口期权限归零）**：先建角色（并挂人）→ 再建 permission 绑 Roles。
-禁止先清 permission.Users 再挂角色。
-
-## 1. 前置条件确认（组织架构已同步、Casdoor 就绪）
-
-起点三查，缺一不可：
-
-1. **组织架构已同步**：
-   ```sql
-   SELECT count(*) AS users FROM org_users WHERE is_active=true;
-   SELECT count(*) AS depts FROM org_departments WHERE is_active=true;
-   -- 两数都 > 0 → 组织架构 OK
-   ```
-2. **Casdoor 组织管理入口可登录**：`https://sso.shanhaiyiguo.com/login/shanhai`
-   （⚠️ 默认 `/login` 是 built-in 全局管理员登录页，组织管理员在那里登不进；
-   必须用带组织 pin 的 `/login/shanhai` 入口）。
-3. **Roles / Permissions 为空是正确起点**：左侧 Roles、Permissions 列表应为空
-   ——这正是本手册后面要补的。若已有内容，跳到 §7 日常运维。
-
-【截图位】org_users 查询结果 / Casdoor Roles 空列表
-
-## 2. 建 5 角色（Casdoor Roles）
-
-1. Casdoor 组织管理入口 → **Roles** → 逐一添加 **5 个角色**：
-   `boss` / `zone_manager` / `finance` / `manager` / `buyer`。
-   > ⚠️ **名字必须与模板逐字一致**（小写下划线）——薄同步按推导码逐字写入 `Role.Users`，
-   > 改名/换命名风格会让自动挂人全部落空。
-2. 档位含义（full 含成本 / basic 不含）见附录 A；本步只建角色定义，不配权限。
-
-| Role 名 | 档位 | 部门名派生来源 | 说明 |
-|---|---|---|---|
-| boss | full（含成本） | 总经办 / 运营总 / 老板 | 最高职权 |
-| zone_manager | full（含成本） | 战区 / 区域 / 大区 | 战区负责人 |
-| finance | full（含成本） | 财务 | 财务可见成本 |
-| manager | basic（不含成本） | 店长 / 门店 / 无匹配默认 | 默认档 |
-| buyer | basic（不含成本） | 采购 / 业务 / 品类 | 采销档 |
-
-**API 备选**（脚本化初始化时）：
-```bash
-# 每个角色一次；name 即角色码，展示名可写中文
-curl -s -X POST -H "Authorization: Bearer $CASDOOR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"owner":"shanhai","name":"manager","displayName":"店长/门店","description":"basic 档默认角色"}' \
-  https://sso.shanhaiyiguo.com/api/add-role
 ```
-> ⚠️ Casdoor **没有 add-role-for-user 路由（404）**——后续挂人只能走
-> `update-role` 全量 `Users`（见 §4），别去踩不存在的接口。
-
-【截图位】Casdoor Roles 添加页（boss/zone_manager/finance/manager/buyer 五条建完态）
-
-## 3. 建 5 权限（Casdoor Permissions，role-*）+ 资源勾选
-
-权限（permission）=「这个角色能看到什么能力」的载体。5 个权限**与 5 角色同名前缀**：
-
-| permission 名 | 绑角色 | 档位 | Resources 差异 |
-|---|---|---|---|
-| role-boss | boss | full | = basic 档资源 + `data-analysis:field:cost` |
-| role-zone_manager | zone_manager | full | = basic 档资源 + `data-analysis:field:cost` |
-| role-finance | finance | full | = basic 档资源 + `data-analysis:field:cost` |
-| role-manager | manager | basic | 能力清单（见附录 B）不含 cost |
-| role-buyer | buyer | basic | 能力清单（见附录 B）不含 cost |
-
-1. Casdoor 组织管理入口 → **Permissions** → 逐一添加 5 个。
-2. 每个 permission 两件事：
-   - **Roles**：绑对应角色（`role-boss` 绑 `boss`……）← 授权来源（Role.Users 权威）
-   - **Resources**：勾选能力，勾选依据 = **附录 B 能力清单**（full 档多加一个
-     `data-analysis:field:cost`）
-3. 提交后底层自动生成 p 策略（addPolicies，重开登录即可见）。
-
-> ⚠️ **顺序铁律（防窗口期权限归零）**：本步在角色建好之后做；
-> 若同一迁移里先清了 permission.Users 再挂角色，中间窗口 get-all-objects 为空 = 全员权限归零。
-> 核心顺序：**先建角色+挂人 → 再建 permission 绑 Roles → 验证 → 最后才清 Users 双保险**。
-
-> ⚠️ **编辑须知（AllCols 清空坑）**：改 Resources 必须**整表单提交**（控制台 UI 天然整表单，安全）；
-> **严禁在 API 侧做局部 PATCH**（如只传 `isEnabled:false`）——Casdoor `update-permission` 是全列更新，
-> 未传字段（users/groups/roles/resources/actions）会被清空为 NULL，权限列表页直接空白
-> （`actions null.map()`），历史教训见附录 D / 机制文档 §3.3。
-
-**API 备选**（`add-permission`；**直接 INSERT 数据库不生效**，必须走 API 触发 addPolicies）：
-```bash
-curl -s -X POST -H "Authorization: Bearer $CASDOOR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "owner":"shanhai","name":"role-manager",
-    "displayName":"basic 档：店长/门店",
-    "roles":["manager"],
-    "resources":["data-analysis:view:reports","data-analysis:view:reports-items",
-                 "data-analysis:view:reports-targets","data-analysis:view:wholesale-customers",
-                 "data-analysis:view-board:kpi","data-analysis:view-board:brand",
-                 "data-analysis:view-board:region","data-analysis:view-board:item-top",
-                 "data-analysis:view-board:category","data-analysis:view-board:supply-chain",
-                 "data-analysis:view-board:wholesale",
-                 "data-analysis:view-kpi:sale","data-analysis:view-kpi:delivery",
-                 "data-analysis:view-kpi:outbound_amt","data-analysis:view-kpi:outbound_profit",
-                 "data-analysis:view-kpi:delivery_sale_ratio","data-analysis:view-kpi:outbound_margin",
-                 "data-analysis:brand:3120","data-analysis:brand:64188",
-                 "data-analysis:category:水果","data-analysis:category:标品","data-analysis:category:耗材"],
-    "actions":["*"],"effect":"Allow"
-  }' https://sso.shanhaiyiguo.com/api/add-permission
+角色（岗位）        权限（能看什么）             人（谁在岗位上）
+boss ────────── role-boss   （含金额成本）   ├─ 张总数总经理
+zone_manager ── role-zone_manager（含成本） ├─ 各战区负责人
+finance ──────  role-finance （含成本）      └─ 财务
+manager ──────  role-manager （不含成本）
+buyer ────────  role-buyer   （不含成本）
 ```
-full 档 3 个在以上基础上加一行 `"data-analysis:field:cost",` 到 resources 数组。
 
-【截图位】Permissions 添加页 / Resources 勾选态（full vs basic 差异处圈出 cost）
+- 一共 **5 个固定角色**，一角色对应一权限。**人挂到角色下 = 自动获得该角色的全部权限**。
+- **能看哪个门店不用配**：人属于哪个部门组（企微同步自动来的），就能看那个范围；
+  特殊放开/收窄才走「例外」（第六节）。
+- 角色/权限**初始化时已建好**，日常大多是**给人调角色**（第三节）和**改某角色能看什么**（第四节）。
 
-## 4. 用户进角色（薄同步 auto 为主）
+## 二、新增角色（新岗位时才用）
 
-建好角色定义后，**挂人基本是自动的**：
+很少用；真出现新岗位才加：
 
-1. **自动（日常路径）**：薄同步每 30 分钟一轮（`*/30 * * * *`），按部门名派生规则
-   （见附录 A）把用户写进对应 `Role.Users`。第 2 步建好角色定义即自动开跑，**无需手动**。
-2. **存量用户补挂（首次初始化，可选，不用等 30 分钟）**：Casdoor → 组织管理入口 → **Roles** →
-   目标角色 → **Sub users** → 加人；或 API `update-role` **全量 Users**（Casdoor 无 add-role-for-user）。
-   - 多部门用户：取 priority 最高（总经办类最高），与自动推导一致。
+1. 管理台入口 → **Roles** → **+ 添加**
+2. **名字**填小写下划线英文（如 `partner`），**显示名**填中文
+3. 建好后为它建权限并配能力（见第四节），再把人挂进去（见第三节）
 
-> ⚠️ **Sub users 下拉只显示「工号」**（Casdoor 前端写死只渲染 `owner/name`，中文名永远不出现，
-> 非配置项）。认人请对照本系统 `/admin/permissions` 用户列表（中文名 + 工号两列），别靠猜。
+> ⚠️ 名字定下就别改了：自动同步按名字把员工写进角色，改名会导致挂人全落空。
+> 建角色不做权限配置，权限是另一张表（permission），见第四节。
 
-> **覆盖规则（防橡皮擦）**：本系统 `role_codes` 镜像里含推导码之外的「附加角色」时，
-> 薄同步会**跳过写入**，交给 drift 对比后把该用户翻成 `manual` 保护——手动改过的角色
-> 在后续轮询里不会被打回默认推导。
+## 三、给人设置角色 / 摘下角色（最常用）
 
-【截图位】Sub users 编辑态（下拉显示工号）
+**给人一个岗位的权限 = 把他加进那个角色**：
 
-## 5. 管理台账号（data-analysis:admin）
+1. 管理台入口 → **Roles** → 点目标角色 → **Sub users** → **+ 添加用户**
+2. 搜索框输**工号**，选中加入 → 保存
 
-管理台（`/admin/permissions` 等 `/api/admin/**`）判定链：
-**token claims 的 permissions 数组命中 `data-analysis:admin`** →
-放行；否则看 `BREAKGLASS_ADMINS` env 兜底名单。此能力**不随角色档位派生**，单独手动授。
+**摘角色**：同一个界面，把该用户从列表里移除 → 保存。
 
-1. 建议建一个**专职运维账号**（不用业务角色兼任，便于收权审计）。
-2. Casdoor → 组织管理入口 → **Permissions**（role-* 之外的独立 permission，或加在某角色的
-   Resources）→ Resources 勾选 `data-analysis:admin`。
-3. 验证：该账号登录后能进 `/admin/permissions`（middleware + 路由内 `requireAdmin` 双层门禁）。
+> ⚠️ **下拉框只显示工号**（不显示中文名）——认人先到本系统 `/admin/permissions`
+> 用户列表看「中文名 + 工号」对照，别猜。
+>
+> 自动同步：员工转了部门，30 分钟内系统会按新部门自动重挂角色；
+> 你**手动加过人**的角色不会被自动覆盖（防误删）。
+> 离职员工不用手动摘：企微停用 → 同步 → 自动禁用+收权。
 
-【截图位】admin 能力勾选 / 管理台可达
+## 四、给角色配权限（改「这个角色能看什么」）
 
-## 6. 数据范围确认（门店=组挂载、品牌品类成本=角色档位）
+1. 管理台入口 → **Permissions** → 打开对应权限（`role-xxx`）
+2. 确认 **Roles** 里绑的是对应角色
+3. **Resources** 里勾能力（照文末速查勾）
+4. 右上角**保存**
 
-数据范围是「能看到哪些门店/品牌/字段」的载体，**初始化后一般自动成立**，本步多数人只需确认：
+> ⚠️ **改权限务必整张表单改完再保存**（页面上天然如此，安全）；
+> **绝对不要拿接口单独改**（比如只改启用状态）——会把这张权限的其他设置清空，
+> 造成权限页直接空白。改权限永远在页面上整表单保存。
 
-- **门店 = 部门组挂载**：用户所在 Casdoor Group（部门组，由企微部门树自动同步）→
-  groups claim → `data_scope.branch_nums` → RLS 行过滤。**挂对组 = 看对门店**，随组织架构自动成立。
-  - 异常补挂：Casdoor → 组织架构 → 目标组 → 编辑成员。
-- **品牌 / 品类 / 成本 = 角色档位**：5 角色 permission 已在 §3 配好——
-  full 档 3 角色（boss / zone_manager / finance）含 `field:cost`，basic 档 2 角色
-  （manager / buyer）不含。一般不用再手动勾。
-- ⚠️ 只有**收窄 / 特殊放开**才去动 permission Resources——那时**必须整表单提交或直接删建**
-  （防 AllCols 清空，见附录 D）。
+## 五、验证某人的权限（每次配完看一眼）
 
-【截图位】组编辑成员 / permission Resources 列表（full vs basic 差异）
+- 本系统 `/admin/permissions` → 搜工号 → **生效预览**：看门店范围 / 成本列 / 功能勾选
+- 或直接问库：`SELECT * FROM get_user_perms('<工号>');`
 
-## 7. 日常运维：单人开通 / 转岗 / 离职收权
+## 六、临时放开 / 收窄（例外，带到期）
 
-系统初始化完成后，日常按本节操作（命令均已核对代码）。
+特殊场景（临时看某门店、临时看成本、临时收窄）不走角色，走**例外**：
 
-### 7.1 单人开通（新人入职）
+- 本系统 `/admin/permissions` → **例外** tab → 授权（门店/品牌/品类/成本，**带到期 ≤90 天**）
+- 撤销即时生效；到期自动失效
 
-1. **企微后台加人**（源操作，不在平台内）。
-2. **触发通讯录同步**（每日 03:17 有自动全量兜底，但等不及可手动）：
-   ```bash
-   curl -s -X POST https://data.shanhaiyiguo.com/functions/wecom-sync-contacts
-   ```
-3. **核对已入 org_users**：
-   ```sql
-   SELECT wecom_id,name,department_ids,is_active FROM org_users WHERE wecom_id='<工号>';
-   -- name=中文名、department_ids 非空 → 同步成功
-   ```
-4. **薄同步 JIT 建户挂组（≤30min，无手动触发）**：`name`=工号、`displayName`=企微中文名、
-   挂部门组。核对两途径：
-   - Casdoor 控制台用户列表按工号（name）搜索
-   - `GET https://sso.shanhaiyiguo.com/api/get-user?id=shanhai/<工号>`
-5. **角色自动推导**（§4 自动路径），推导结果即想要的角色时什么都不用做。
+## 七、容易踩的坑（对照自查）
 
-### 7.2 验证三步（每次配完必做）
-
-1. **DB 视角（合成）**：
-   ```sql
-   SELECT * FROM get_user_perms('<工号>');
-   ```
-   看角色、`data_scope.branch_nums`、`fields.cost` 各段是否符合预期。
-2. **claims 视角（管理员预览）**：`GET /api/admin/permissions/preview?wecom_id=<工号>`——
-   看 groups / data_scope / fields.cost 各段（新开会话将拿到的 claims）。
-3. **真实会话视角**：退出登录、重新登录实际看板，确认门店行范围 / 成本列掩码 / 看板卡片可见性。
-
-### 7.3 转岗换角色
-
-改部门（企微 + 同步）→ 薄同步按新部门**重新推导角色并写 Casdoor**；
-无附加角色时旧角色自动摘除（有附加角色则受 §4 覆盖规则保护，需手动清）。
-
-### 7.4 离职收权（软删除源）
-
-1. **企微停用 / 删除**该用户（源操作）
-2. 通讯录同步写 `is_active=false`
-3. 薄同步 **actionDisable**（≤30min）四连收权：Casdoor disable + `casdoor_writer='disabled'`
-   + `token_blacklist` 拉黑（7 天窗口内旧 JWT 即刻拒）→ outbox 重试直到成功
-4. 核对：
-   ```sql
-   SELECT wecom_id,casdoor_writer,is_active FROM org_users WHERE wecom_id='<工号>';
-   -- casdoor_writer='disabled' 且 Casdoor 用户状态为禁用 → 收权完成
-   ```
-
-### 7.5 例外回收
-
-`/admin/permissions` →「例外」tab 撤销临时授权（到期自动失效，无需手动）。
-例外通道明细见 §8。
-
-## 8. 临时例外（本系统唯一权限写入口）
-
-常规权限（角色/组）都走 Casdoor；**本系统 `/admin/permissions` 的「例外」tab 是唯一的权限写入口**，
-只做临时放开 / 临时收窄：
-
-- 页面：本系统 `/admin/permissions` →「例外」tab（管理员登录）
-- 维度与限制：门店（`branch_number` 复合键，形如 `3120-0027`）/ 品牌（`system_book_code`）/
-  品类 / 字段 cost；单维 ≤50 条、到期 ≤90 天
-- 生效：RLS 每请求实查，**即时生效 / 即时收口**（撤销 ≤5min 生效）
-- API 形式（管理员脚本用）：`POST/DELETE /api/admin/permissions/grants`；审计 `GET .../audit`
-
-【截图位】单人开通后 preview 响应 / 看板实际可见 / 例外撤销 / 离职用户状态
+| 现象 | 原因 | 怎么办 |
+|---|---|---|
+| Casdoor 权限页整页空白 | 有人用接口单独改过权限（如只改启用）把其他设置清空 | 改权限永远整表单保存（第四节）；已清空的权限删掉重建 |
+| 员工加不进 Casdoor（outbox 报错） | 企微工号含点号等特殊字符（如 `YiBeiMeiShi.`），Casdoor 拒绝建户 | 企微侧修正 userid → 重新同步自动重试 |
+| 员工没自动挂上角色 | 角色名拼写与模板不一致（自动同步按名写） | 角色名必须照第一节五个名字逐字一致 |
+| 门店不对 / 成本列空了 | 门店=部门组挂载；成本=角色档位 | 按第五节验证，定位是哪层再补 |
 
 ---
 
-## 附录 A：角色/权限速查表
+## 附录：Resources 速查（第四节勾选时照着勾）
 
-| 角色码 | 档位 | cost 字段 | 部门名派生来源 | 对应 permission |
-|---|---|---|---|---|
-| boss | full | 含 | 总经办 / 运营总 / 老板 | role-boss |
-| zone_manager | full | 含 | 战区 / 区域 / 大区 | role-zone_manager |
-| finance | full | 含 | 财务 | role-finance |
-| manager | basic | 不含 | 店长 / 门店 / 无匹配默认 | role-manager |
-| buyer | basic | 不含 | 采购 / 业务 / 品类 | role-buyer |
+**基本套餐**（manager / buyer 用，不含成本）：
 
-派生规则 = 部门名正则匹配（`web/lib/sync/derive-roles.ts`，与 152 迁移逐行等价）；
-初始化照上表建 5 角色 + 5 权限，薄同步自动维护 Role.Users。
-
-**管理台能力单列**：`data-analysis:admin` 不随档位派生，单独手动授（§5）。
-
-## 附录 B：能力清单（Resources 勾选依据）
-
-> **单真相**：能力全集在 `web/lib/capability-board.ts`（看板/KPI）+ `web/lib/capability-catalog.ts`
-> （视图/品牌/品类/字段/门禁），新增看板/卡片按单真相同步。本表是快照，以单真相为准。
-
-| 分组 | 能力 key | 说明 |
+| 组 | 勾哪些 | 说明 |
 |---|---|---|
-| 视图（页面级） | `data-analysis:view:reports` / `reports-items` / `reports-targets` / `wholesale-customers` | 4 个报表页入口 |
-| 看板（7） | `data-analysis:view-board:kpi` / `brand` / `region` / `item-top` / `category` / `supply-chain` / `wholesale` | 指标概览/品牌×指标/门店战区/商品TOP/类别出库/供应链出库/外部批发 |
-| KPI 卡（6） | `data-analysis:view-kpi:sale` / `delivery` / `outbound_amt` / `outbound_profit` / `delivery_sale_ratio` / `outbound_margin` | 4 金额卡 + 2 派生比率卡 |
-| 品牌 | `data-analysis:brand:3120`（熊喵鲜生）/ `brand:64188`（品品甜） | 按品牌拆分可见 |
-| 品类 | `data-analysis:category:水果` / `标品` / `耗材` | 按品类可见 |
-| 字段 | `data-analysis:field:cost` | 成本列可见（**仅 full 档**，sensitive） |
-| 门禁 | `data-analysis:admin` | 管理台（§5 单独授） |
+| 视图 | `view:reports` `view:reports-items` `view:reports-targets` `view:wholesale-customers` 4 个 | 报表页入口 |
+| 看板 | `view-board:kpi` `view-board:brand` `view-board:region` `view-board:item-top` `view-board:category` `view-board:supply-chain` `view-board:wholesale` 7 个 | 各看板模块 |
+| KPI 卡 | `view-kpi:sale` `view-kpi:delivery` `view-kpi:outbound_amt` `view-kpi:outbound_profit` `view-kpi:delivery_sale_ratio` `view-kpi:outbound_margin` 6 个 | 指标卡 |
+| 品牌 | `brand:3120` `brand:64188` 2 个 | 两个品牌（熊喵/品品甜） |
+| 品类 | `category:水果` `category:标品` `category:耗材` 3 个 | 三个品类 |
 
-安全语义：claims 里 data_scope 空段 = 授权确定为 ∅（deny），**禁止收敛通配 `["*"]`**。
+**full 档**（boss / zone_manager / finance）＝ 基本套餐 **+ `field:cost`**（成本字段，sensitive）。
 
-## 附录 C：截图落位表
-
-> 截图由管理员日后按本表补齐；正文各步的 `【截图位】` 即对应下表行，补完贴到 `docs/ops/screenshots/`
-> 并把正文标记替换为图片。
-
-| 正文步骤 | 截哪个界面 | 圈哪里 | 建议文件名 |
-|---|---|---|---|
-| §1 前置 | org_users 查询结果 + Casdoor Roles 空列表 | 计数>0；Roles 为空 | `b00-front-check.png` |
-| §2 建角色 | Casdoor Roles 添加页 | 5 角色建完列表（name 逐字一致） | `b01-roles.png` |
-| §3 建权限 | Permissions 添加页 / Resources 勾选态 | full vs basic 差异（cost） | `b02-permissions.png` |
-| §4 进角色 | Sub users 编辑态 | 下拉显示工号（无中文名） | `b03-subusers.png` |
-| §5 管理台 | admin 能力勾选 / 管理台可达 | `data-analysis:admin` 勾上；能进 /admin/permissions | `b04-admin-cap.png` |
-| §6 数据范围 | 组编辑成员 / permission Resources | 组下成员；full 含 cost | `b05-scope.png` |
-| §7 运维 | preview 响应 / 看板实际可见 / 例外撤销 / 离职用户状态 | groups、data_scope、fields.cost；门店行/成本掩码；撤销提示；casdoor_writer 状态 | `b06-ops.png` |
-
-## 附录 D：排障与坑
-
-| 症状 | 先看 | 跳转 |
-|---|---|---|
-| Casdoor 无户 / 拒建（非法用户名如 `YiBeiMeiShi.` 带点号） | `docker logs deploy-web-1 --since 48h 2>&1 \| grep -iE "provision\|outbox"`；企微侧修正 userid 后同步自愈 | §7.1 第 4 步 |
-| 角色推导 vs 手动不一致 | `SELECT wecom_id,role_codes,casdoor_writer FROM org_users WHERE wecom_id='<工号>';` 看 role_source | §4 覆盖规则（手动受保护）|
-| 门店范围 / 成本列不对 | `SELECT * FROM get_user_perms('<工号>');` 逐段判断 groups ↔ branch_nums ↔ fields | §6（组挂载 / 角色档位）|
-| get_user_perms 与 preview 不一致 | 重开会话再试（缓存/会话残留） | §8 例外即时收口 ≤5min |
-| **Permissions 页空白 / 某权限字段被清空** | 是否 API 局部 PATCH 过 update-permission（isEnabled 等）——AllCols 全列更新把 users/groups/roles/resources/actions 洗成 NULL | 整表单提交或删建（§3 编辑须知）；机制文档 §3.3 |
-| 授权不生效 | 直接 INSERT Casdoor DB 的 permission？→ 不触发 addPolicies，p 策略不生成 | 走 add-permission API（§3 API 备选）|
+> 前缀统一 `data-analysis:`，勾选时按上面的 key 值原样勾。
+> 管理台（`data-analysis:admin`）不随角色走，需谁进管理台单独授。
+> 能力全集随新增看板/卡片会更新，本表是快照，勾选时若页面上出现新能力按需加勾。
