@@ -59,3 +59,46 @@ docker logs deploy-web-1 --since 48h 2>&1 | grep -iE "provision|outbox"
 ```
 
 【截图位】Casdoor 用户列表搜索产物
+
+## 3. 角色：确认 / 修改
+
+**自动推导（多数人跳过此步）**：薄同步按部门名自动推导角色并已写进 Casdoor Role.Users——
+推导结果即想要的角色时**什么都不用做**，第 3 步直接跳过。推导规则（`web/lib/sync/derive-roles.ts`，
+与 152 迁移 `refresh_role_assignments` 逐行等价）：
+
+| 部门名含 | 角色码 | 档位 |
+|---|---|---|
+| 总经办 / 运营总 / 老板 | boss | full（含成本） |
+| 战区 / 区域 / 大区 | zone_manager | full（含成本） |
+| 店长 / 门店 | manager | basic（不含成本） |
+| 采购 / 业务 / 品类 | buyer | basic（不含成本） |
+| 财务 | finance | full（含成本） |
+| 无匹配 | manager（默认） | basic |
+
+**推导不符要改角色**：Casdoor → 控制台 → 组织管理入口
+（`https://sso.shanhaiyiguo.com/login/shanhai`）→ **Roles** → 目标角色 → **Sub users** → 加人。
+
+- ⚠️ **Sub users 下拉只显示「工号」**（Casdoor 前端写死只渲染 `owner/name`，中文名永远不出现，
+  非配置项）。认人请对照本系统 `/admin/permissions` 用户列表（中文名 + 工号两列），别靠猜。
+- **覆盖规则（防橡皮擦）**：本系统 `role_codes` 镜像里含推导码之外的「附加角色」时，
+  薄同步会**跳过写入**，交给 drift 对比后把该用户翻成 `manual` 保护——
+  手动改过的角色在后续轮询里不会被打回默认推导。
+- 推导/手动归属口径详见 `casdoor-role-permission-mechanism.md` §二（Role.Users 权威）。
+
+【截图位】Casdoor 角色页 Sub users 编辑态
+
+## 4. 数据范围：门店 / 品牌品类 / 成本
+
+数据范围是「怎么走」的，一般随第 2 步自动成立，第 4 步多数人只需**确认挂对了组**：
+
+- **门店 = 组挂载**：用户所在 Casdoor Group（部门组，由企微部门树自动同步）→ groups claim →
+  `data_scope.branch_nums` → RLS 行过滤。一般随组织架构自动成立；
+  异常补挂：Casdoor → 组织架构 → 目标组 → 编辑成员。
+- **品牌 / 品类 / 成本 = 角色内置**：5 个角色 permission 已按档位配好
+  ——full 档 3 角色（boss / zone_manager / finance）含 `field:cost`，
+  basic 档 2 角色（manager / buyer）不含。**一般不用手动勾**。
+- ⚠️ 只在**收窄 / 特殊放开**时才去动 Casdoor permission 的 Resources——
+  那时**必须整字段 update 或直接删建**，禁止点加字段局部保存
+  （会按 AllCols 生成的空字段把权限洗白，教训见 `casdoor-role-permission-mechanism.md` §3.3）。
+
+【截图位】Casdoor permission Resources 列表 / 组编辑成员
