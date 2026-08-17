@@ -10,11 +10,13 @@ const REAL_FETCH = global.fetch;
 process.env.POSTGREST_URL = 'http://postgrest-test:3000';
 process.env.INSFORGE_API_KEY = 'test-key';
 
-// mock casdoor-client（disableUser / provisionUser / assignRoles）
+// mock casdoor-client（disableUser / provisionUser / assignRoles / syncUserGroups）
 vi.mock('../../../sync/casdoor-client', () => ({
   disableUser: vi.fn(async () => ({ ok: true })),
   provisionUser: vi.fn(async () => ({ ok: true })),
   assignRoles: vi.fn(async () => ({ ok: true })),
+  syncUserGroups: vi.fn(async () => ({ ok: true, changed: false })),
+  casdoorGroupsFromDepts: (names: string[]) => names.map((n) => `shanhai/${n}`),
 }));
 
 import { thinSyncManifest } from '../manifest';
@@ -81,7 +83,76 @@ describe('thin-sync actionDisable — 离职四 sink', () => {
   });
 });
 
+// ---- 2026-08-17 陈润补挂：provision 传组 + 组对账 ----
+import { provisionUser as mockProvision, syncUserGroups as mockSyncGroups } from '../../../sync/casdoor-client';
+
+describe('thin-sync provision — 带部门组建户（2026-08-17 陈润根因修复）', () => {
+  it('provisionUser 收到 department_ids 映射出的 groups（运营→shanhai/运营）', async () => {
+    const provisionUsers = [{ wecom_id: 'YiBeiMeiShi.', name: '陈润', department_ids: ['63'] }];
+    global.fetch = vi.fn(async (input: string | URL | RequestInfo, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('sync_outbox')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_writer=neq.disabled')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_writer=eq.auto')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_synced_at=is.null')) return new Response(JSON.stringify(provisionUsers), { status: 200 });
+      if (url.includes('org_departments')) return new Response(JSON.stringify([{ id: '63', name: '运营' }]), { status: 200 });
+      if (url.includes('org_users') && init?.method === 'PATCH') return new Response('[]', { status: 200 });
+      if (url.includes('org_users')) return new Response('[]', { status: 200 });
+      return new Response('[]', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await thinSyncManifest.run!({} as never);
+
+    expect(mockProvision).toHaveBeenCalledWith({
+      name: 'YiBeiMeiShi.',
+      displayName: '陈润',
+      groups: ['shanhai/运营'],
+    });
+  });
+});
+
+describe('thin-sync 组对账 actionSyncGroups — 存量空组补挂（2026-08-17 陈润自愈）', () => {
+  it('active 且有部门用户 → syncUserGroups 补挂期望组', async () => {
+    const syncUsers = [{ wecom_id: 'YiBeiMeiShi.', name: '陈润', department_ids: ['63'] }];
+    global.fetch = vi.fn(async (input: string | URL | RequestInfo, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('sync_outbox')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_writer=neq.disabled')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_writer=eq.auto')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_synced_at=is.null')) return new Response('[]', { status: 200 });
+      if (url.includes('org_departments')) return new Response(JSON.stringify([{ id: '63', name: '运营' }]), { status: 200 });
+      if (url.includes('org_users') && init?.method === 'PATCH') return new Response('[]', { status: 200 });
+      if (url.includes('org_users')) return new Response(JSON.stringify(syncUsers), { status: 200 });
+      return new Response('[]', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await thinSyncManifest.run!({} as never);
+
+    expect(mockSyncGroups).toHaveBeenCalledWith('YiBeiMeiShi.', ['shanhai/运营']);
+  });
+
+  it('无部门用户跳过（department_ids 空不触发 syncUserGroups）', async () => {
+    const syncUsers = [{ wecom_id: 'NoDeptUser', name: '无部门', department_ids: [] }];
+    global.fetch = vi.fn(async (input: string | URL | RequestInfo, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('sync_outbox')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_writer=neq.disabled')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_writer=eq.auto')) return new Response('[]', { status: 200 });
+      if (url.includes('casdoor_synced_at=is.null')) return new Response('[]', { status: 200 });
+      if (url.includes('org_departments')) return new Response(JSON.stringify([{ id: '63', name: '运营' }]), { status: 200 });
+      if (url.includes('org_users') && init?.method === 'PATCH') return new Response('[]', { status: 200 });
+      if (url.includes('org_users')) return new Response(JSON.stringify(syncUsers), { status: 200 });
+      return new Response('[]', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await thinSyncManifest.run!({} as never);
+
+    expect(mockSyncGroups).not.toHaveBeenCalled();
+  });
+});
+
 import { afterEach } from 'vitest';
 afterEach(() => {
   global.fetch = REAL_FETCH;
+  vi.clearAllMocks();
 });

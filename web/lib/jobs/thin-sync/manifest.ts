@@ -10,7 +10,7 @@ import { tryAcquireLock } from '../../scheduler-lock';
 import { POSTGREST_URL, INSFORGE_API_KEY } from '../env';
 import { runningTasks } from '../state';
 import { deriveRoleForUser } from '../../sync/derive-roles';
-import { provisionUser, assignRoles, disableUser } from '../../sync/casdoor-client';
+import { provisionUser, assignRoles, disableUser, syncUserGroups, casdoorGroupsFromDepts } from '../../sync/casdoor-client';
 import { enqueue, drain, type DrainResult } from '../../sync/outbox';
 
 const PG_H = (): Record<string, string> => ({
@@ -119,6 +119,21 @@ async function actionAssignRoles(): Promise<{ processed: number; changed: number
   return { processed: autoUsers.length, changed, enqueued };
 }
 
+// ---- 部门 id → 名称 映射（组对账/建户共用） ----
+// org_departments.id 是企微部门 id（varchar，如 '63'），name 与 Casdoor 组名同源（企微部门树）。
+async function fetchDeptNameMap(): Promise<Map<string, string>> {
+  try {
+    const depts: Array<{ id?: string; name?: string }> = await fetch(
+      `${POSTGREST_URL}/org_departments?select=id,name&is_active=eq.true`,
+      { headers: PG_H(), cache: 'no-store' },
+    ).then(r => r.json()).catch(() => []);
+    if (!Array.isArray(depts)) return new Map();
+    return new Map(depts.map((d) => [String(d.id ?? ''), String(d.name ?? '')]));
+  } catch {
+    return new Map();
+  }
+}
+
 // ---- provisioning JIT（Casdoor 建户） ----
 // 对 active 但从未同步过的用户（casdoor_synced_at IS NULL）→ provision
 async function actionProvision(): Promise<{ processed: number; enqueued: number }> {
@@ -130,11 +145,21 @@ async function actionProvision(): Promise<{ processed: number; enqueued: number 
     { headers: PG_H(), cache: 'no-store' },
   ).then(r => r.json()).catch(() => []);
 
+  // 2026-08-17（陈润补挂根因）：曾只传 name/displayName 不传 groups → 新用户 Casdoor 全空组 →
+  // 登录 C2 fail-close 拒绝。department_ids 查出来了但没用上——现在映射成组随建户写入。
+  const deptNames = await fetchDeptNameMap();
+
   let enqueued = 0;
   for (const user of unsynced) {
+    const groups = casdoorGroupsFromDepts(
+      (Array.isArray(user.department_ids) ? user.department_ids : [])
+        .map((id) => deptNames.get(String(id)))
+        .filter((n): n is string => !!n),
+    );
     const result = await provisionUser({
       name: user.wecom_id,
       displayName: user.name ?? user.wecom_id,
+      groups,
     });
 
     // B5（review 修复）：synced_at 只在「有重试路径」时标记——成功，或失败但已入 outbox。
@@ -157,6 +182,40 @@ async function actionProvision(): Promise<{ processed: number; enqueued: number 
   }
 
   return { processed: unsynced.length, enqueued };
+}
+
+// ---- 组对账（2026-08-17 陈润补挂自愈） ----
+// 对 active 且有 department_ids 的用户，确保 Casdoor groups 含期望组（只补缺失，不删手配）。
+// 逐轮重跑幂等：已含则零改动；不依赖 outbox（失败下轮自愈），不新增 outbox 动作类型。
+async function actionSyncGroups(): Promise<{ processed: number; changed: number }> {
+  const users: Array<{ wecom_id: string; name: string | null; department_ids: string[] }> = await fetch(
+    `${POSTGREST_URL}/org_users?select=wecom_id,name,department_ids&is_active=eq.true`,
+    { headers: PG_H(), cache: 'no-store' },
+  ).then(r => r.json()).catch(() => []);
+  const deptNames = await fetchDeptNameMap();
+
+  let changed = 0;
+  for (const user of (Array.isArray(users) ? users : [])) {
+    const deptIds = Array.isArray(user.department_ids) ? user.department_ids : [];
+    if (deptIds.length === 0) continue;
+    const groups = casdoorGroupsFromDepts(
+      deptIds.map((id) => deptNames.get(String(id))).filter((n): n is string => !!n),
+    );
+    if (groups.length === 0) continue; // 部门都查不到名 → 跳过（不误写空组）
+
+    const result = await syncUserGroups(user.wecom_id, groups);
+    if (!result.ok) {
+      // 仅记录：user_not_found 归 provision 管，API 故障下轮自愈，均不入 outbox
+      console.error('[thin-sync] sync_groups failed:', user.wecom_id, result.error);
+      continue;
+    }
+    if (result.changed) {
+      changed++;
+      console.log(`[thin-sync] sync_groups 补挂 ${user.wecom_id}: ${groups.join(',')}`);
+    }
+  }
+
+  return { processed: (Array.isArray(users) ? users : []).length, changed };
 }
 
 // ---- main manifest ----
@@ -206,6 +265,14 @@ export const thinSyncManifest: JobManifest = {
         console.error('[thin-sync] provision action error:', (e as Error).message);
       }
 
+      // ⑤ 组对账（2026-08-17 陈润补挂：provision 漏组自愈 + 存量空组补挂）
+      let groupsResult = { processed: 0, changed: 0 };
+      try {
+        groupsResult = await actionSyncGroups();
+      } catch (e) {
+        console.error('[thin-sync] sync_groups action error:', (e as Error).message);
+      }
+
       // 汇总
       const totalEnqueued = disableResult.enqueued + assignResult.enqueued + provisionResult.enqueued;
       const summary = [
@@ -213,6 +280,7 @@ export const thinSyncManifest: JobManifest = {
         `disable=${disableResult.processed}(fail=${disableResult.enqueued})`,
         `assign=${assignResult.processed}/changed=${assignResult.changed}(fail=${assignResult.enqueued})`,
         `provision=${provisionResult.processed}(fail=${provisionResult.enqueued})`,
+        `groups=${groupsResult.changed}/${groupsResult.processed}`,
       ].join(' | ');
 
       console.log(`[thin-sync] cycle 完成: ${summary}`);

@@ -146,6 +146,43 @@ export async function provisionUser(user: CasdoorUser): Promise<{ ok: boolean; e
   return { ok: true, created: true };
 }
 
+// 部门名 → Casdoor groups 全标识（owner/组名，如 shanhai/运营）。
+// 2026-08-17（陈润补挂根因）：thin-sync actionProvision 曾只传 name/displayName 不传 groups，
+// 新用户 Casdoor 全空组 → 登录 C2 fail-close 拒绝。组前缀构造收敛到本模块（唯一 CASDOOR_ORG 真相）。
+export function casdoorGroupsFromDepts(deptNames: string[]): string[] {
+  return [...new Set(deptNames.map((n) => `${CASDOOR_ORG}/${n}`).filter((g) => g.length > CASDOOR_ORG.length + 1))];
+}
+
+/**
+ * 组对账：确保用户在 Casdoor 的 groups 包含期望组（只补缺失，不删手配组）。
+ * 幂等：当前组已含全部期望组 → 不改；否则 update-user 合并写入。
+ * 2026-08-17 陈润案例：provision 漏组后此处自愈；薄同步每轮重跑，失败无须入 outbox（下轮自愈）。
+ */
+export async function syncUserGroups(
+  wecomId: string,
+  expectedGroups: string[],
+): Promise<{ ok: boolean; changed?: boolean; error?: string }> {
+  const user = await getUserObj(wecomId);
+  if (user === 'fetch_error') return { ok: false, error: 'get_user_failed' };
+  if (!user) return { ok: false, error: 'user_not_found_in_casdoor' };
+
+  const current = Array.isArray(user.groups)
+    ? (user.groups as unknown[]).map((g) => String(g)).filter(Boolean)
+    : [];
+  const missing = expectedGroups.filter((g) => !current.includes(g));
+  if (missing.length === 0) return { ok: true, changed: false };
+
+  const next = [...current, ...missing]; // 只增不删（保留 Casdoor 侧手配组，assignRoles 同款保护哲学）
+  const result = await casdoorWrite(
+    `/api/update-user?id=${CASDOOR_ORG}/${encodeURIComponent(wecomId)}`,
+    { method: 'POST', body: JSON.stringify({ ...user, groups: next }) },
+  );
+  if (!result.ok) {
+    console.error('[casdoor-client] syncUserGroups failed:', wecomId, result.error);
+  }
+  return { ok: result.ok, changed: true, error: result.error };
+}
+
 /**
  * 写角色：设置用户的 Casdoor 角色（Casdoor-first）
  * 幂等：先查当前角色，diff 后批量增删
