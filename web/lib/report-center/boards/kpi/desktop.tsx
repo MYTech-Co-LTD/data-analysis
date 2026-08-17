@@ -7,14 +7,14 @@ import { KpiCards } from "@/components/report-center/kpi-cards";
 import type { BoardProps } from "@/lib/contracts";
 import type { TargetKpiRow } from "@/lib/report-center/targets";
 
-export function KpiBoard({ result, isMobile }: BoardProps<TargetKpiRow>) {
+export function KpiBoard({ result, isMobile, permissions }: BoardProps<TargetKpiRow>) {
   return isMobile ? (
     <div>
-      <KpiCards result={result} isMobile />
+      <KpiCards result={result} isMobile permissions={permissions} />
     </div>
   ) : (
     <div className="md:col-span-2">
-      <KpiCards result={result} />
+      <KpiCards result={result} permissions={permissions} />
     </div>
   );
 }

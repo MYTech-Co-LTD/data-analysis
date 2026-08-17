@@ -2,11 +2,14 @@
 // 能力点 catalog 单真相（spec §5.1，H12 纪律：唯一副本，function 只消费不复制）。
 // 组成 = generated（scan 自动发现，scripts/scan-capabilities.mjs 产出）+ overrides（人工层）+ manual（手工清单）。
 import { GENERATED_CATALOG } from './capability-catalog.generated';
+import { BOARD_CAPABILITIES, KPI_CARD_CAPABILITIES } from './capability-board';
 
 export interface CatalogEntry {
-  key: string;            // data-analysis:view:reports / field:cost / brand:3120 / ...
+  key: string;            // data-analysis:view:reports / field:cost / brand:3120 / view-board:kpi / view-kpi:sale / ...
   group: string;          // 辅助页分组：看板 / 字段 / 品牌 / 品类 / 门禁
   label: string;          // 展示名（人工 override 可改）
+  name?: string;          // 通俗命名（看板/KPI 能力等；能力页「通俗命名」列）
+  description?: string;   // 一句话描述（能力页「描述」列）
   sensitive?: boolean;    // 敏感标记（field 类默认 true）
   source: 'auto' | 'manual';
 }
@@ -31,6 +34,13 @@ const MANUAL: CatalogEntry[] = [
   { key: 'data-analysis:category:水果', group: '品类', label: '水果', source: 'manual' },
   { key: 'data-analysis:category:标品', group: '品类', label: '标品', source: 'manual' },
   { key: 'data-analysis:category:耗材', group: '品类', label: '耗材', source: 'manual' },
+  // 看板/KPI 能力（单真相在 capability-board.ts，此处只做 catalog 合并——H12：不复制定义）
+  ...BOARD_CAPABILITIES.map((b) => ({
+    key: b.key, group: '看板', label: b.name, name: b.name, description: b.description, source: 'manual' as const,
+  })),
+  ...KPI_CARD_CAPABILITIES.map((k) => ({
+    key: k.key, group: '看板', label: k.name, name: k.name, description: k.description, source: 'manual' as const,
+  })),
 ];
 
 // 废弃清单（H14/redteam M2）：载体在 app 侧；驱逐判据 = 发布 ≥30 天 ∧ 审计无引用 ∧ 对账红区清零

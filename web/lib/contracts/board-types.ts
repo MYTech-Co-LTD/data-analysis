@@ -34,6 +34,8 @@ export interface BoardProps<TRow> {
   /** 目标月份 1-12 */
   targetMonth: number;
   isMobile?: boolean;
+  /** 当前用户 permissions（看板/KPI 卡片级能力过滤；缺省 undefined = 不过滤——宿主不注入时全显） */
+  permissions?: readonly string[];
 }
 
 /**
