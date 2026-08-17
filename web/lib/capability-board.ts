@@ -15,6 +15,9 @@ export interface BoardCapability {
   name: string;
   /** 一句话描述（能力页展示，说明这看板是干什么的） */
   description: string;
+  /** 方案 C（2026-08-17）：该看板覆盖的底层报表视图名（不含 data-analysis:view: 前缀）。
+   *  报表授权由本看板能力覆盖 → 无需再单独配置 view:*（退役语义）。无底层报表的看板（kpi）省略。 */
+  view?: readonly string[];
 }
 
 export interface KpiCardCapability {
@@ -43,36 +46,44 @@ export const BOARD_CAPABILITIES: readonly BoardCapability[] = Object.freeze([
     id: 'brand',
     name: '品牌×指标',
     description: '品牌维度指标下钻（熊喵鲜生/品品甜）',
+    view: ['report_brand_metric_gen'],
   },
   {
     key: 'data-analysis:view-board:region',
     id: 'region',
     name: '门店战区',
     description: '战区/区域/门店三级下钻（数据按你的门店权限裁剪）',
+    view: ['report_region_breakdown_gen'],
   },
   {
     key: 'data-analysis:view-board:item-top',
     id: 'item-top',
     name: '商品 TOP',
     description: '商品维度 TOP 排行（销售/出库日榜）',
+    view: ['report_item_breakdown_gen'],
   },
   {
     key: 'data-analysis:view-board:category',
     id: 'category',
     name: '类别出库',
     description: '品类维度出库汇总（水果/标品/耗材）',
+    view: ['report_category_summary_gen'],
   },
   {
     key: 'data-analysis:view-board:supply-chain',
     id: 'supply-chain',
     name: '供应链出库',
     description: '供应链出库明细（配送/批发双源）',
+    view: ['report_supply_chain_outbound_gen'],
   },
   {
     key: 'data-analysis:view-board:wholesale',
     id: 'wholesale',
     name: '外部批发',
     description: '外部批发客户明细',
+    view: [
+      'report_wholesale_customer_gen', 'report_wholesale_daily_customer_gen', 'report_wholesale_daily_gen',
+    ],
   },
 ]);
 
@@ -147,6 +158,16 @@ export const KPI_CARD_CAPABILITY_BY_NAME: ReadonlyMap<string, KpiCardCapability>
   KPI_CARD_CAPABILITIES.map((k) => [k.name, k]),
 );
 
+// ============ 方案 C：看板覆盖报表视图（2026-08-17，统一视图/看板） ============
+// board id → 覆盖的底层报表视图名（不含 data-analysis:view: 前缀）。
+// 语义：报表授权由看板能力覆盖（能看板 = 能访问该报表视图），消费侧（buildPermPool / claims.js）
+// 命中看板能力时注入对应 view:* key。一个 view 只被一个看板覆盖（唯一性断言下方钉死）。
+export const BOARD_VIEW_COVERAGE: ReadonlyMap<string, readonly string[]> = new Map(
+  BOARD_CAPABILITIES
+    .filter((b) => b.view && b.view.length > 0)
+    .map((b) => [b.id, b.view!]),
+);
+
 // 通俗名唯一性断言（防重名破坏反查 / Casdoor resource name 主键）：重名 = 模块加载即抛错。
 // 2026-08-17：看板「供应链出库」与 KPI 卡「供应链出库」曾重名 → KPI 卡改名「供应链出库金额」消歧。
 {
@@ -157,5 +178,18 @@ export const KPI_CARD_CAPABILITY_BY_NAME: ReadonlyMap<string, KpiCardCapability>
       throw new Error(`[capability-board] 通俗名重复（破坏 Casdoor resource name 主键 + BY_NAME 反查）：${c.name}`);
     }
     seen.add(c.name);
+  }
+}
+
+// 方案 C：覆盖视图唯一性断言——一个底层报表视图只被一个看板覆盖，否则「报表授权 ⇒ 视图」语义歧义
+{
+  const seen = new Set<string>();
+  for (const views of BOARD_VIEW_COVERAGE.values()) {
+    for (const v of views) {
+      if (seen.has(v)) {
+        throw new Error(`[capability-board] 报表视图被多看板覆盖（方案C覆盖语义歧义）：${v}`);
+      }
+      seen.add(v);
+    }
   }
 }
