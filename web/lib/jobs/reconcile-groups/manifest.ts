@@ -20,7 +20,11 @@ import { buildReconcileRow, classifyMembershipDiff, gate7days, type WhitelistEnt
 
 // 覆盖语义的伪用户（classifyMembershipDiff 契约是 per-user，覆盖矩阵以此行喂入；禁撞真实 wecom_id）
 export const COVERAGE_USER = '__manager_coverage__';
-const POSITION_PATTERN = /店长|督导|主管/;   // 店长/督导岗位清单（spec §5.8「店长/督导岗位清单」形态）
+// 门店责任人岗位正则：企微真实岗位形态 = 区域经理（2026-08-17 实测 46 用户 position 只有
+// 区域经理×10/部门负责人×1/执行副总×1，无店长/督导——店长不在通讯录范围）；
+// 店长/督导/主管保留——未来门店岗上线后自动生效。
+// 不纳入部门负责人/执行副总：职能高管挂总经办=全店视野，纳入会稀释覆盖检查力度（missing 失去拉力）。
+const POSITION_PATTERN = /店长|督导|主管|区域经理/;   // spec §5.8「店长/督导岗位清单」形态 + 实况岗位
 
 interface HistoryRow { whitelist_outside_diff: number; red_count: number; detail?: { whitelist?: WhitelistEntry[] } | null }
 

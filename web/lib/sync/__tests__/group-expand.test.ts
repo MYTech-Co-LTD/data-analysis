@@ -3,7 +3,10 @@
 //   部门组多行映射（新形态）任一命中行贡献门店；旧 store/region 形态保留兼容；未知组 fail-close。
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../casdoor-client', () => ({
-  casdoorFetch: vi.fn(async () => ({ data: [
+  casdoorFetch: vi.fn(async (url: string) => url.includes('org_departments') ? ({ data: [
+    // 合法空辖区部门（企微树有、dim 无店 → maps 无行）
+    { name: '南部五区' }, { name: '总经办' },
+  ] }) : ({ data: [
     // 旧形态（门店组过渡兼容）：region 父 + store 叶子
     { group_id: '熊喵-东区',         group_type: 'region', branch_number: null,     is_active: true },
     { group_id: '熊喵-东区-3120-001', group_type: 'store',  branch_number: '3120-001', is_active: true },
@@ -44,5 +47,13 @@ describe('组→门店展开（2026-08-17 部门组语义 + 旧形态兼容）',
   it('混合：部门组+旧门店叶并集去重', async () => {
     const r = await expandGroupsToBranches(['shanhai/东部战区', '熊喵-东区-3120-001']);
     expect([...new Set(r.branch_nums ?? [])].sort()).toEqual(['3120-001', '64188-001', '64188-002']);
+  });
+  it('合法空辖区（org_departments 有、maps 无行，如南部五区）→ 贡献空集不 fail-close', async () => {
+    const r = await expandGroupsToBranches(['shanhai/山海一果/门店运营中心/南部战区/南部五区']);
+    expect(r).toEqual({ branch_nums: [], ok: true });
+  });
+  it('空辖区与其他组混合 → 空集贡献不拖垮整体（LiuHeFa 形态）', async () => {
+    const r = await expandGroupsToBranches(['shanhai/南部五区', 'shanhai/东部战区']);
+    expect(r).toEqual({ branch_nums: ['64188-001', '64188-002'], ok: true });
   });
 });

@@ -80,7 +80,8 @@ var require_claims = __commonJS({
       };
     }
     module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2 };
-    function resolveGroupBranches2(groupPaths, maps) {
+    function resolveGroupBranches2(groupPaths, maps, knownDepts) {
+      const deptSet = knownDepts instanceof Set ? knownDepts : null;
       const results = /* @__PURE__ */ new Set();
       for (const path of groupPaths ?? []) {
         const g = String(path).split("/").pop();
@@ -96,6 +97,7 @@ var require_claims = __commonJS({
           }
           continue;
         }
+        if (deptSet && deptSet.has(g)) continue;
         return { branch_nums: [], ok: false, error: `unknown group: ${g}` };
       }
       return { branch_nums: [...results].sort(), ok: true };
@@ -161,7 +163,20 @@ async function expandGroupsToBranches(groupPaths, pgrstUrl) {
     if (!Array.isArray(maps)) {
       return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
     }
-    const resolved = resolveGroupBranches(groupPaths, maps);
+    let knownDepts;
+    try {
+      const deptRes = await fetch(
+        `${pgrstUrl}/org_departments?is_active=eq.true&select=name`,
+        { headers: { "Content-Type": "application/json" } }
+      );
+      if (deptRes.ok) {
+        const depts = await deptRes.json();
+        if (Array.isArray(depts)) knownDepts = new Set(depts.map((d) => d.name).filter(Boolean));
+      }
+    } catch (e) {
+      console.error("wecom-oidc-callback: org_departments fetch failed", e);
+    }
+    const resolved = resolveGroupBranches(groupPaths, maps, knownDepts);
     if (resolved.ok !== true) return resolved;
     const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
     return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
