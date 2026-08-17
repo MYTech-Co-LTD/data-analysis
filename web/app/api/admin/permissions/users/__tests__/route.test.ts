@@ -1,9 +1,9 @@
 // web/app/api/admin/permissions/users/__tests__/route.test.ts
-// 权限管理 users 路由：GET 部门列表从 data_permissions(dept 行) 聚合 + PUT 角色指派（assign_role 审计）+ requireAdmin 拒绝。
+// 权限管理 users 路由：GET 部门列表从 data_permissions(dept 行) 聚合 + 仅 GET（2026-08-17 收口：PUT 角色指派随 185 sunset 下线）。
 // mock 全局 fetch（直连 PostgREST）+ 带 cookie 的 NextRequest。
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
-import { GET, PUT } from '../route';
+import { GET } from '../route';
 import { writeAudit } from '@/lib/permission-audit';
 
 vi.mock('@/lib/permission-audit', () => ({ writeAudit: vi.fn() }));
@@ -22,7 +22,7 @@ const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);
 const writeAuditMock = vi.mocked(writeAudit);
 
-function mkReq(method: 'GET' | 'PUT', cookie?: string, body?: unknown) {
+function mkReq(method: 'GET', cookie?: string, body?: unknown) {
   return new NextRequest('http://localhost/api/admin/permissions/users', {
     method,
     headers: {
@@ -74,32 +74,3 @@ describe('GET /users — 列表聚合', () => {
   });
 });
 
-describe('PUT /users — 角色指派（Task 12: role 字段已冻结）', () => {
-  it('role_id 字段冻结 → 409 + 引导文案（spec §4.5a）', async () => {
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: null }));
-    expect(res.status).toBe(409);
-    const body = await res.json();
-    expect(body.error).toBe('role_frozen');
-    expect(body.message).toContain('Casdoor');
-    expect(body.casdoor_url).toBeDefined();
-    expect(writeAuditMock).not.toHaveBeenCalled();
-  });
-
-  it('role_id=number 也冻结 → 409', async () => {
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo', role_id: 2 }));
-    expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe('role_frozen');
-  });
-
-  it('无 role_id 字段 → 200 ok（无变更）', async () => {
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { wecom_id: 'ZhangDuo' }));
-    expect(res.status).toBe(200);
-    expect((await res.json()).ok).toBe(true);
-    expect(fetchMock).not.toHaveBeenCalled(); // 无任何 fetch 调用
-  });
-
-  it('缺 wecom_id → 400', async () => {
-    const res = await PUT(mkReq('PUT', ADMIN_COOKIE, { role_id: 1 }));
-    expect(res.status).toBe(400);
-  });
-});

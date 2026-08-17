@@ -1,22 +1,45 @@
-# 报表权限运维手册（2026-08-13 权限体系重构后）
+# 权限运维手册（2026-08-17 平台级权限标准化后）
 
-## 模型
-生效权限 = 个人 override（按字段覆盖）> 角色∪部门（基底叠加）。合成在 get_user_perms，
-登录时写入 JWT，用户重新登录后生效。行过滤 report_*_gen（claim_match_or_star），列脱敏 can_see_cost CASE。
-权限数据统一存 data_permissions（role/dept/user 三 subject）；变更一律走 /admin/permissions 页面（自动落 permission_audit），
-SQL 直改绕不过审计，禁止。部门权限两维（branch_nums + can_see_cost），品牌/品类仅角色/个人层。
-门店键铁律：branch_num 跨账套重复，最终过滤永远 (brands? sbc) AND (branch_nums? n) 双重组合；
-选择器按品牌分组仅为勾选便利，存储仍只写 branch_nums。
+> 旧版（2026-08-13 data_permissions 四维模型口径）已随 185 sunset 作废。
+> 当前模型：**Casdoor = 管理面真相源，data-analysis = 执行面（合成/缓存/强制）**。
+> 架构真相源总表见 `docs/architecture.md` §6.0。
 
-## 常见操作（全部走页面 /admin/permissions）
-- 收窄某部门可见门店 → 部门 tab → 该部门 → 门店选择器勾选（去勾「全部门(*)」）
-- 放开/收回部门成本 → 部门 tab → 成本开关
-- 个人单独授权 / 临时授权（含到期） → 用户 tab → 单独授权
-- 收回个人单独授权 → 用户 tab → 删除该 override（恢复继承）
-- 调整角色默认范围/参数 → 角色 tab
-- 指派 / 恢复角色 → 用户 tab（manual 不被同步覆盖）
+## 模型（谁管什么）
+
+| 改什么 | 去哪改 | 生效时机 |
+|---|---|---|
+| 组织架构 / 部门组挂载（=门店可见范围） | Casdoor（企微通讯录同步组树，`sso.shanhaiyiguo.com`） | 用户下次登录 |
+| 角色 / 看板-品牌-品类-成本能力勾选 | Casdoor → Permission（data-analysis-full / basic）resources | 用户下次登录 |
+| **带到期临时例外**（≤90 天） | 本系统 `/admin/permissions`「例外」 | RLS 每请求实查，**即时生效/即时收口** |
+| 权限怎么被执行（RLS/视图/过滤逻辑） | data-analysis 代码（architecture.md §6.2） | 发版 |
+
+- 生效权限合成：登录时 callback 产 claims（`permissions` 资源串 + `groups` + `data_scope{brands,categories,branch_nums}` + `fields.cost`）；行过滤 `scope_match_v2`、列脱敏 `can_cost_visible`、能力面 `checkFeaturePerm`。
+- 门店键铁律不变：`branch_num` 跨账套重复，执行面永远用 `branch_number` 复合键（'3120-0027'，尾段前导零归一两侧对称）。
+
+## 例外通道（本系统唯一权限写入口）
+
+- 页面 `/admin/permissions`（管理员）：授予 / 撤销 / 审计，单维 ≤50 条、到期 ≤90 天。
+- API：`POST/DELETE /api/admin/permissions/grants`；`GET .../audit` 留痕。
+- 消费面：`get_user_perms` RPC 实查（agent-query / PG 会话路径）+ `web/lib/exception-grants.ts`（middleware 快判，5min TTL，撤销主动失效）。
+
+## 对账与门禁（自动化，勿手工干预）
+
+- `__reconcile_groups` 每日 03:37 UTC：组→门店投影 vs 期望源（dim 考核门店 × 区域经理覆盖）。红区=未覆盖门店；白名单人工审批在 `group_reconcile_history.detail.whitelist`。
+- `__reconcile_catalog` 每日 03:47 UTC：Casdoor permission.resources vs capability catalog。
+- 7 天门禁（W2 退出判据）：连续 7 行 `whitelist_outside_diff=0 ∧ red=0`。
 
 ## 排障
-SELECT get_user_perms('<wecom_id>');   -- 合成结果
--- 核对迁移（167）后的权限行：
-SELECT subject_type, subject_id, branch_nums, brands, categories, can_see_cost, expires_at FROM data_permissions ORDER BY subject_type, subject_id;
+
+```sql
+-- 生效权限合成（DB 视角；branch_nums=组投影展开，can_see_cost=例外实查）
+SELECT * FROM get_user_perms('<wecom_id>');
+```
+
+- 登录 claims 排障：`GET /api/admin/permissions/preview?wecom_id=<id>`（管理员）。
+- Casdoor 可达对象（登录链路同源）：`GET {sso}/api/get-all-objects?userId=shanhai/<name>`。
+- 管理台门禁 = BREAKGLASS_ADMINS env（当前 ZhangDuo/YangWei）+ `data-analysis:admin` 资源（当前不授予任何 Permission，纯 breakglass）。
+
+## 已下线（勿再引用）
+
+- `data_permissions` 表（已 DROP）/ 个人 override / 部门四维 / 角色默认范围 / `/admin/permissions` 用户-部门-角色三 tab / 对应 PUT API。
+- 旧四维 JWT 顶层 key（B6 摘除；旧形状令牌 = RLS deny）。
