@@ -4,13 +4,12 @@
 // 后续切 casbin 是 1 处切换而非 N 处 hunt-and-replace。
 // P0a 判定链：token claims 命中 → true；BREAKGLASS_ADMINS env 命中 → true（记审计）；
 // 两者皆无 → false（fail-close）。BREAKGLASS 默认空 = 兜底关闭。
-import { CATALOG_KEYS, DEPRECATED_KEYS } from './capability-catalog';
+import { CATALOG_KEYS, DEPRECATED_KEYS, LABEL_TO_KEY } from './capability-catalog';
 import { expandViewGroups } from './view-groups';
 import {
   BOARD_CAPABILITY_BY_KEY,
-  BOARD_CAPABILITY_BY_NAME,
   KPI_CARD_CAPABILITY_BY_KEY,
-  KPI_CARD_CAPABILITY_BY_NAME,
+  BOARD_VIEW_COVERAGE,
 } from './capability-board';
 
 export async function checkFeaturePerm(
@@ -120,16 +119,24 @@ function namespaceConfigured(pool: ReadonlySet<string>, prefix: string): boolean
   return false;
 }
 
-/** 判定池：把 perms 中的通俗名还原为能力 key（方案甲：Casdoor 下拉选中通俗名写进 permission.resources）
- *  后，claims/前端收到的权限串里可能直接是通俗名（如「指标概览」）——判定前统一归一回 key，
- *  保证「管理员选了通俗名」也能正确命中具名能力。 */
+/**
+ * 判定池：把 perms 中的通俗名还原为能力 key（方案甲：Casdoor 下拉选中通俗名写进 permission.resources
+ *  后，claims/前端收到的权限串里可能直接是通俗名——判定前统一归一回 key）。
+ * 方案 C 扩展：① 全量通俗名（catalog LABEL_TO_KEY，覆盖 view 与 brand/category/field/admin/view-group
+ *  等命名空间 + 看板/KPI——catalog 已含 board/KPI 条目的 label）；② 看板能力 → 覆盖的底层报表视图 key 注入
+ *  （报表授权 ⇒ 视图访问，BOARD_VIEW_COVERAGE）。
+ * 实现顺序：反查（通俗名→key）→ 组展开 → 看板覆盖注入。
+ */
 export function buildPermPool(perms: readonly string[] | undefined): Set<string> {
-  const pool = new Set(expandViewGroups(perms ?? []));
-  for (const p of perms ?? []) {
-    const b = BOARD_CAPABILITY_BY_NAME.get(p);
-    if (b) pool.add(b.key);
-    const k = KPI_CARD_CAPABILITY_BY_NAME.get(p);
-    if (k) pool.add(k.key);
+  const src = perms ?? [];
+  // 1) 通俗名 → key 全量反查（含组通俗名「报表看板全组」→ 组 key；看板通俗名 → view-board:<id>）
+  const keys = src.map((p) => LABEL_TO_KEY.get(p) ?? p);
+  // 2) view-group 展开（组 key → 成员 view:* key）；已具名/未知名原样保留
+  const pool = new Set(expandViewGroups(keys));
+  // 3) 看板授权 ⇒ 覆盖报表视图授权（BOARD_CAPABILITY_BY_KEY：从归一后 key 找看板定义）
+  for (const k of keys) {
+    const b = BOARD_CAPABILITY_BY_KEY.get(k);
+    if (b) for (const v of BOARD_VIEW_COVERAGE.get(b.id) ?? []) pool.add(`data-analysis:view:${v}`);
   }
   return pool;
 }

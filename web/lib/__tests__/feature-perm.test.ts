@@ -2,7 +2,7 @@
 // checkFeaturePerm 单模块（plan Task 3 Step 1，spec §6.2）：
 // claims 命中 true / BREAKGLASS 命中 true+审计 / 双无 false。
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { checkFeaturePerm, hasBoardPerm, hasKpiPerm } from '../feature-perm';
+import { checkFeaturePerm, hasBoardPerm, hasKpiPerm, buildPermPool } from '../feature-perm';
 
 afterEach(() => {
   delete process.env.BREAKGLASS_ADMINS;
@@ -72,5 +72,46 @@ describe('hasBoardPerm / hasKpiPerm（看板/KPI 卡片级能力）', () => {
     // 通俗名收权：只配通俗名 → 未配的看板仍被收权（归一后命名空间已配置化）
     expect(hasBoardPerm(['指标概览'], 'brand')).toBe(false);
     expect(hasKpiPerm(['门店零售'], 'outbound_amt')).toBe(false);
+  });
+});
+
+describe('buildPermPool 全量通俗名归一 + 覆盖视图注入（方案 C 统一视图/看板）', () => {
+  it('通俗名 → key：具名能力（含 view:reports/brand/category/field/admin）', () => {
+    const pool = buildPermPool(['经营总览', '目标达成', '熊喵鲜生', '水果', '成本可见', '管理台']);
+    expect(pool.has('data-analysis:view:reports')).toBe(true);
+    expect(pool.has('data-analysis:view:reports-targets')).toBe(true);
+    expect(pool.has('data-analysis:brand:3120')).toBe(true);
+    expect(pool.has('data-analysis:category:水果')).toBe(true);
+    expect(pool.has('data-analysis:field:cost')).toBe(true);
+    expect(pool.has('data-analysis:admin')).toBe(true);
+  });
+
+  it('看板能力通俗名 → 覆盖的报表视图 key 注入（报表授权 ⇒ 视图访问）', () => {
+    const pool = buildPermPool(['品牌×指标', '外部批发']);
+    expect(pool.has('data-analysis:view-board:brand')).toBe(true);
+    expect(pool.has('data-analysis:view:report_brand_metric_gen')).toBe(true);   // 覆盖注入
+    expect(pool.has('data-analysis:view-board:wholesale')).toBe(true);
+    expect(pool.has('data-analysis:view:report_wholesale_customer_gen')).toBe(true);
+    expect(pool.has('data-analysis:view:report_wholesale_daily_gen')).toBe(true);
+    expect(pool.has('data-analysis:view:report_wholesale_daily_customer_gen')).toBe(true);
+  });
+
+  it('覆盖注入幂等：同 key 不重复', () => {
+    const pool = buildPermPool(['品牌×指标', 'data-analysis:view:report_brand_metric_gen']);
+    expect([...pool].filter((k) => k === 'data-analysis:view:report_brand_metric_gen').length).toBe(1);
+  });
+
+  it('组通俗名「报表看板全组」→ 反查组 key → 展开成员', () => {
+    const pool = buildPermPool(['报表看板全组']);
+    expect(pool.has('data-analysis:view:reports')).toBe(true);
+    expect(pool.has('data-analysis:view:reports-targets')).toBe(true);
+    expect(pool.has('data-analysis:view-group:reports-all')).toBe(false); // 组 key 被展开消费
+  });
+
+  it('看板覆盖注入对 hasBoardPerm 语义闭环：配看板即能访问对应报表视图', () => {
+    // 页面级视图解析：permissions 里只有看板通俗名（无 view:reports）→ resolveViewKey 通过覆盖注入命中
+    // （hasBoardPerm 本身看 view-board 命名空间；覆盖注入在 buildPermPool 层，供 resolveViewKey 复用）
+    const pool = buildPermPool(['门店战区']);
+    expect(pool.has('data-analysis:view:report_region_breakdown_gen')).toBe(true);
   });
 });
