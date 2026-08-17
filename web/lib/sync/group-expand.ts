@@ -1,6 +1,11 @@
 // web/lib/sync/group-expand.ts
-// 组→门店三态展开（H13）：store 叶子直映 / region=子孙 store 并集 / dept 不参与。
-// 未知组 fail-close（ok:false）——调用方（claims 构建）按 C2 处理：不产出门店范围或整体失败。
+// 组→门店展开（2026-08-17 组树迁移企微部门树后，与 functions/wecom-oidc-callback/claims.js
+// resolveGroupBranches 同语义）：
+//   新形态（部门组）：maps 行 group_id=部门名 × branch_number 多行——任一命中行即贡献门店
+//   （战区/区部门→辖区门店多行；职能部门→全店 388 行），group_type 不再区分。
+//   旧形态回退（门店组过渡兼容）：store 前缀子孙并集（'熊喵-3120-xxxx' 形态）。
+//   未知组（maps 无精确行亦无前缀子孙）fail-close（ok:false）——调用方按 C2 处理。
+//   入参是全路径（'shanhai/山海一果/总经办'，token/F9 投影同源）——尾段截取后按组名查 maps。
 // ★门店键铁律：输出是 branch_number（全局唯一），RLS 端精确匹配。
 import { casdoorFetch } from './casdoor-client';
 
@@ -22,20 +27,22 @@ export async function expandGroupsToBranches(groups: readonly string[]): Promise
     headers: { apikey: PGRST_KEY, Authorization: `Bearer ${PGRST_KEY}` },   // 覆盖 Casdoor token——PostgREST 鉴权
   });
   const maps = ((mapsResp as { data?: { group_id: string; group_type: string; branch_number: string | null }[] }).data ?? []);
-  const byId = new Map(maps.map((m) => [m.group_id, m]));
-  // 严格判定：组名要么精确命中 maps.group_id，要么作为前缀拥有子孙
+  const byId = new Map<string, { group_id: string; group_type: string; branch_number: string | null }[]>();
+  for (const m of maps) {
+    if (!byId.has(m.group_id)) byId.set(m.group_id, []);
+    byId.get(m.group_id)!.push(m);
+  }
   const results = new Set<string>();
-  for (const g of groups) {
-    const exact = byId.get(g);
-    if (exact) {
-      if (exact.group_type === 'store' && exact.branch_number) results.add(exact.branch_number);
-      else if (exact.group_type === 'region') {
-        for (const m of maps) if (m.group_type === 'store' && m.group_id.startsWith(g + '-') && m.branch_number) results.add(m.branch_number);
-      }
-      // dept：不贡献（H13）
+  for (const path of groups) {
+    const g = String(path).split('/').pop() ?? String(path);      // 全路径 'shanhai/部门名' → 组名（claims.js 同款）
+    // 新形态：部门组多行映射——精确命中的行全部贡献（group_type 不区分）
+    const exact = (byId.get(g) ?? []).filter((m) => m.branch_number);
+    if (exact.length > 0) {
+      for (const m of exact) results.add(m.branch_number!);
       continue;
     }
-    const asRegion = maps.some((m) => m.group_id.startsWith(g + '-'));
+    // 旧形态回退（门店组过渡）：前缀 store 子孙并集
+    const asRegion = maps.some((m) => m.group_type === 'store' && m.group_id.startsWith(g + '-'));
     if (asRegion) {
       for (const m of maps) if (m.group_type === 'store' && m.group_id.startsWith(g + '-') && m.branch_number) results.add(m.branch_number);
       continue;

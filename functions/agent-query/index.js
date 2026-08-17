@@ -109,11 +109,15 @@ function validateSql(raw) {
 }
 
 // ④ DuckDB 路径：拼权限视图（行 branch_nums 过滤 + 列成本组脱敏；成本列/glob 来源 reg=注册表）
+// B1（185 casdoor-only 语义）：branch_nums=[] = authorized ∅ = deny——旧「无 perms=全放」宽松形状
+// 已随 data_permissions sunset 废弃；仅 ["*"]（服务身份宽松形状 / 全店授权）= 不加门店过滤。
 async function runDuckdb(userSelect, perms, reg) {
-  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.length === 0 || perms.branch_nums.includes("*");
+  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.includes("*");
   const branchFilter = allBranches
     ? ""
-    : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
+    : perms.branch_nums.length === 0
+      ? "WHERE 1=0"
+      : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
   const canSee = perms.can_see_cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
   let viewSql =
@@ -139,14 +143,21 @@ async function runDuckdb(userSelect, perms, reg) {
   return body.data;
 }
 
-// ⑤ PG 路径：代签短时 JWT（注入 branch_nums/can_see_cost）→ execute_sql_rls（SECURITY INVOKER，走 RLS）
+// ⑤ PG 路径：代签短时 JWT（185 终版 RLS 只认 data_scope 新形状——旧形状令牌=deny，S4 窗口已关）
+//    → execute_sql_rls（SECURITY INVOKER，走 RLS）。brands/categories 无 DB 镜像（185：deny 方向，
+//    权威源=登录 claims）；服务身份（未知用户）get_user_perms 宽松形状 ["*"] 全维放行。
 async function runPg(userSelect, userId, perms) {
   const now = Math.floor(Date.now() / 1000);
   const token = await signJwt(
     {
       sub: userId,
       role: "authenticated",
-      branch_nums: perms.branch_nums,
+      data_scope: {
+        branch_nums: perms.branch_nums,
+        brands: perms.brands || [],
+        categories: perms.categories || [],
+      },
+      fields: { cost: !!perms.can_see_cost },
       can_see_cost: !!perms.can_see_cost,
       iss: "agent-query",
       iat: now,

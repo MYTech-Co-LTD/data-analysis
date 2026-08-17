@@ -135,8 +135,10 @@ BEGIN
   END IF;
 
   -- 2) branch_nums：groups 投影（F9）× maps_branch_group 展开——
-  --    与 callback expandGroupsToBranches 同语义：store 直映 / region=前缀子孙并集 /
-  --    dept 不贡献 / 未知组 fail-close（整单清空）/ 无组 = []（deny，B1）
+  --    与 callback resolveGroupBranches 同语义（2026-08-17 组树迁移企微部门树后）：
+  --    新形态（部门组）：group_id=部门名 × branch_number 多行，任一命中行即贡献（战区/区部门→
+  --    辖区门店多行；职能部门→全店 388 行，group_type 不再区分）；旧形态兼容（门店组过渡）：
+  --    store 前缀子孙并集；未知组 fail-close（整单清空）/ 无组 = []（deny，B1）
   WITH gs AS (
     SELECT DISTINCT split_part(g, '/', array_length(string_to_array(g, '/'), 1)) AS name
     FROM jsonb_array_elements_text(
@@ -150,8 +152,8 @@ BEGIN
   branch AS (
     SELECT DISTINCT m.branch_number
     FROM maps_branch_group m CROSS JOIN gs l
-    WHERE m.is_active AND m.group_type = 'store' AND m.branch_number IS NOT NULL
-      AND (m.group_id = l.name OR starts_with(m.group_id, l.name || '-'))
+    WHERE m.is_active AND m.branch_number IS NOT NULL
+      AND (m.group_id = l.name OR (m.group_type = 'store' AND starts_with(m.group_id, l.name || '-')))
   )
   SELECT CASE
     WHEN EXISTS (SELECT 1 FROM unknown) THEN '[]'::jsonb
