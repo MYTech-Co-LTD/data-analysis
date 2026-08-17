@@ -93,4 +93,27 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
     expect(d.red.length).toBe(0);   // "/data-analysis:view:reports" 归一后命中 catalog，不算未知
     expect(d.minor.length).toBe(2); // field:cost / admin 未引用
   });
+
+  it('方案C：permission.resources 含通俗名（Casdoor 下拉选中）→ 归一回 key 不误报 E-unknown', () => {
+    const d = classifyCatalogReconcile({
+      permissions: [{ name: 'p1', resources: ['经营总览', '成本可见'] }],
+      catalog: CATALOG, deprecated: DEPRECATED,
+    });
+    expect(d.red.length).toBe(0);   // 「经营总览」→ view:reports、「成本可见」→ field:cost 均命中
+    // 归一后 view:reports / field:cost 已被引用 → 不出现在 M-unreferenced
+    const minorKeys = d.minor.map((m) => m.key);
+    expect(minorKeys).not.toContain('data-analysis:view:reports');
+    expect(minorKeys).not.toContain('data-analysis:field:cost');
+    expect(minorKeys).toContain('data-analysis:admin');   // 只有 admin 未引用
+  });
+
+  it('方案C：退役 key 仍被 permission 引用 → E-deprecated-key 红', () => {
+    const d = classifyCatalogReconcile({
+      permissions: [{ name: 'p1', resources: ['data-analysis:view:mobile'] }],
+      catalog: CATALOG, deprecated: new Set(['data-analysis:view:mobile']),
+    });
+    const gone = d.red.find((r) => r.key === 'data-analysis:view:mobile');
+    expect(gone).toBeDefined();
+    expect(gone!.kind).toBe('E-deprecated-key');
+  });
 });

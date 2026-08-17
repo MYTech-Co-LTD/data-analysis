@@ -32,17 +32,52 @@ const KEY_NS_RE = /^data-analysis:(view|view-group|field|brand|category|admin)(:
 const shortWild = (w) => w.replace(/^data-analysis:/, '');   // holder 展示短格式：view:*（测试基线钉死）
 const byKey = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
+// ---- 通俗名 → 能力 key 静态镜像（方案甲/方案C，与 web/lib/capability-catalog.ts + capability-board.ts 同步）----
+// ⚠ catalog 内看板/KPI 条目的 label 是变量（b.name）无法正则抽取，故本 CLI 静态镜像 23 条（claims.js 同源）；
+//   scripts/tests/reconcile-catalog.test.mjs 断言钉死数量防漂移。
+const FRIENDLY_TO_KEY = {
+  '经营总览': 'data-analysis:view:reports',
+  '目标达成': 'data-analysis:view:reports-targets',
+  '熊喵鲜生': 'data-analysis:brand:3120',
+  '品品甜': 'data-analysis:brand:64188',
+  '水果': 'data-analysis:category:水果',
+  '标品': 'data-analysis:category:标品',
+  '耗材': 'data-analysis:category:耗材',
+  '成本可见': 'data-analysis:field:cost',
+  '管理台': 'data-analysis:admin',
+  '报表看板全组': 'data-analysis:view-group:reports-all',
+  '指标概览': 'data-analysis:view-board:kpi',
+  '品牌×指标': 'data-analysis:view-board:brand',
+  '门店战区': 'data-analysis:view-board:region',
+  '商品 TOP': 'data-analysis:view-board:item-top',
+  '类别出库': 'data-analysis:view-board:category',
+  '供应链出库': 'data-analysis:view-board:supply-chain',
+  '外部批发': 'data-analysis:view-board:wholesale',
+  '门店零售': 'data-analysis:view-kpi:sale',
+  '门店配送': 'data-analysis:view-kpi:delivery',
+  '供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
+  '供应链毛利': 'data-analysis:view-kpi:outbound_profit',
+  '总配销比': 'data-analysis:view-kpi:delivery_sale_ratio',
+  '毛利率': 'data-analysis:view-kpi:outbound_margin',
+};
+// 归一（方案甲/方案C）：Casdoor 下拉选中通俗名写进 permission.resources 时先把通俗名还原成能力 key，
+//   再进分类（否则 E-unknown-key 误报 / M-unreferenced 漏报）。未命中原样返回（key/通配/push 裸 key）。
+const normKey = (r) => FRIENDLY_TO_KEY[r] ?? r;
+export { FRIENDLY_TO_KEY };
+
 // ---- 纯函数（对账分类核心，node:test 直测） ----
 
 export function classifyDiff({ permissions, catalog, deprecated, syncFailures = [] }) {
   const red = [], minor = [], perUser = [], wildcardHolders = [];
 
   // permission.resources 引用并集：key → holders[]（持有全局 '*' 的 permission，其持有形态标注 (*)）
+  //   归一（方案甲/方案C）：通俗名先经 normKey 还原成能力 key 再进 referenced。
   const referenced = new Map();
   for (const p of permissions) {
     for (const r of p.resources ?? []) {
-      if (!referenced.has(r)) referenced.set(r, []);
-      referenced.get(r).push((p.resources ?? []).includes('*') ? `${p.name}(*)` : p.name);
+      const k = normKey(r);
+      if (!referenced.has(k)) referenced.set(k, []);
+      referenced.get(k).push((p.resources ?? []).includes('*') ? `${p.name}(*)` : p.name);
     }
   }
 
@@ -82,12 +117,13 @@ export function classifyDiff({ permissions, catalog, deprecated, syncFailures = 
   // per-user 汇总（对象数粒度会掩盖个别用户缺失）：catalog 内持有 keys + 越界项 offending（catalog 外/废弃）
   for (const p of permissions) {
     const rs = p.resources ?? [];
+    const norm = rs.map(normKey);
     perUser.push({
       user: p.name,
-      keys: rs.filter((r) => catalog.has(r)),
+      keys: norm.filter((r) => catalog.has(r)),
       offending: rs
-        .filter((r) => KEY_NS_RE.test(r) && r !== '*' && !r.endsWith(':*') && !catalog.has(r))
-        .map((r) => ({ key: r, kind: deprecated.has(r) ? 'E-deprecated-key' : 'E-unknown-key' })),
+        .filter((r) => KEY_NS_RE.test(normKey(r)) && r !== '*' && !r.endsWith(':*') && !catalog.has(normKey(r)))
+        .map((r) => ({ key: normKey(r), kind: deprecated.has(normKey(r)) ? 'E-deprecated-key' : 'E-unknown-key' })),
     });
   }
 

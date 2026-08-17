@@ -4,7 +4,7 @@
 // 通配持有者审计（M2/redteam）：废弃 key 被命名空间通配覆盖时，按 key 直接审计显示不出 → holders 必须可见。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyDiff } from '../reconcile-catalog.mjs';
+import { classifyDiff, FRIENDLY_TO_KEY } from '../reconcile-catalog.mjs';
 
 const CATALOG = new Set(['data-analysis:view:reports', 'data-analysis:field:cost', 'data-analysis:admin']);
 const DEPRECATED = new Set([]);
@@ -36,4 +36,32 @@ test('通配持有者出现在废弃审计的 holders 里（M2：按 key 审计�
   const gone = d.red.find((r) => r.key === 'data-analysis:view:gone');
   assert.ok(gone, '废弃 key 引用 = 红');
   assert.deepEqual(gone.holders, ['p-wild(view:*)']);  // 通配持有者必须可见
+});
+
+// 方案甲/方案C：permission.resources 含通俗名（Casdoor 下拉选中写入）→ normKey 归一后不误报 E-unknown
+test('通俗名在 permission.resources → 归一回 key，不误报 E-unknown / 不 M-unreferenced 漏报', () => {
+  const d = classifyDiff({
+    permissions: [{ name: 'p1', resources: ['经营总览', '成本可见'] }],
+    catalog: CATALOG, deprecated: DEPRECATED,
+  });
+  assert.equal(d.red.length, 0, '通俗名归一后命中 catalog → 无红');
+  const referencedKeys = d.perUser.find((u) => u.user === 'p1').keys;
+  assert.ok(referencedKeys.includes('data-analysis:view:reports'), '通俗名「经营总览」归一 → catalog key 进 keys');
+  assert.ok(referencedKeys.includes('data-analysis:field:cost'), '通俗名「成本可见」归一 → catalog key 进 keys');
+});
+
+// 方案C：退役 key 仍被授权语义覆盖 → E-deprecated-key 红
+test('退役 key（如 view:mobile）仍被 permission 引用 → E-deprecated-key 红', () => {
+  const d = classifyDiff({
+    permissions: [{ name: 'p1', resources: ['data-analysis:view:mobile'] }],
+    catalog: CATALOG, deprecated: new Set(['data-analysis:view:mobile']),
+  });
+  const gone = d.red.find((r) => r.key === 'data-analysis:view:mobile');
+  assert.ok(gone, '退役 key 被引用 = 红');
+  assert.equal(gone.kind, 'E-deprecated-key');
+});
+
+// 静态镜像数量钉死（防与 catalog/claims 漂移）：23 条 = 10 catalog + 7 看板 + 6 KPI
+test('通俗名静态镜像恰 23 条（与 catalog/claims 同步防漂移）', () => {
+  assert.equal(Object.keys(FRIENDLY_TO_KEY).length, 23);
 });

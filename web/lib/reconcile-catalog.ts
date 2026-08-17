@@ -5,8 +5,7 @@
 // M-unreferenced 提示、wildcardHolders 单列（M2 通配风险面，含 push:* 引擎裸 key）。
 // 与 scripts 侧的分工：CLI 版 = CI/SSH 门禁（exit 1）；本模块 = 运行时在线对账（页面 + 告警）。
 import { casdoorFetch } from './sync/casdoor-client';
-import { CATALOG_KEYS, DEPRECATED_KEYS } from './capability-catalog';
-import { BOARD_CAPABILITY_BY_NAME, KPI_CARD_CAPABILITY_BY_NAME } from './capability-board';
+import { CATALOG_KEYS, DEPRECATED_KEYS, LABEL_TO_KEY } from './capability-catalog';
 
 export interface CasdoorPermission {
   name: string;
@@ -49,10 +48,10 @@ export function classifyCatalogReconcile({
 
   // 引用并集：key → holders[]（持有全局 '*' 的 permission 标注 (*)）
   const referenced = new Map<string, string[]>();
-  // 归一（方案甲）：Casdoor 下拉选中通俗名写进 permission.resources 时，先把通俗名还原成
-  //   能力 key 再进 referenced（否则 E-unknown-key 误报 / M-unreferenced 漏报）。
-  const normKey = (r: string): string =>
-    BOARD_CAPABILITY_BY_NAME.get(r)?.key ?? KPI_CARD_CAPABILITY_BY_NAME.get(r)?.key ?? r;
+  // 归一（方案甲/方案C）：Casdoor 下拉选中通俗名写进 permission.resources 时，先把通俗名还原成
+  //   能力 key 再进 referenced（否则 E-unknown-key 误报 / M-unreferenced 漏报）。全量 LABEL_TO_KEY
+  //   （catalog 含看板/KPI 条目的 label，看板/KPI 通俗名同此表命中）。
+  const normKey = (r: string): string => LABEL_TO_KEY.get(r) ?? r;
   for (const p of permissions) {
     // H3：get-resources 系名恒带 "/" 前缀，permission.resources 同源勾选面——比对前统一剥离
     const rs = (p.resources ?? []).map((r) => String(r).replace(/^\//, ''));

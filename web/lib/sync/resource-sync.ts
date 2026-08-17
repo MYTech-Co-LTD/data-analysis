@@ -20,8 +20,7 @@
 //   { ok: false, error }——plan 原文的 try/catch 只覆盖 reject 形态；此处把 ok === false 归一为
 //   同一失败路径（throw 进 catch），mock 测试返回体无 ok 字段不受影响（undefined !== false）。
 import { casdoorFetch } from './casdoor-client';
-import { CATALOG_KEYS, DEPRECATED_KEYS } from '../capability-catalog';
-import { BOARD_CAPABILITY_BY_KEY, KPI_CARD_CAPABILITY_BY_KEY } from '../capability-board';
+import { CATALOG_KEYS, DEPRECATED_KEYS, KEY_TO_LABEL } from '../capability-catalog';
 
 export interface SyncReport {
   added: string[]; skippedExisting: string[]; failed: { key: string; error: string }[];
@@ -32,14 +31,10 @@ export interface SyncReport {
 const enc = (key: string): string => key.replace(/:/g, '_');
 const dec = (name: string): string => name.replace(/_/g, ':');   // 仅老数据/兜底；新数据走 description
 
-// 通俗名 → Casdoor resource.name（方案甲）：有通俗名的能力（看板/KPI）用通俗名做展示名，
-// 无通俗名的退回映射名。
+// 通俗名 → Casdoor resource.name（方案甲/方案C）：有通俗名的能力用通俗名做展示名（catalog KEY_TO_LABEL
+//   ——含看板/KPI，因为 catalog 嵌入了 board/KPI 条目的 label），无通俗名的退回映射名（enc）。
 function displayName(key: string): string {
-  return (
-    BOARD_CAPABILITY_BY_KEY.get(key)?.name ??
-    KPI_CARD_CAPABILITY_BY_KEY.get(key)?.name ??
-    enc(key)
-  );
+  return KEY_TO_LABEL.get(key) ?? enc(key);
 }
 
 type ResourceRow = { name?: string; description?: string };
