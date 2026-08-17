@@ -145,3 +145,6 @@ permission_rule p 策略（subject=角色）+ g 策略（运行时 user→role�
 | 直接 DB INSERT permission 不生效（绕过 addPolicies）| ✅ 0 对象 |
 | 改 user.roles 不生效（授权读 Role.Users）| ✅ 无效 |
 | permission.Roles 绑角色 → p 策略 subject=角色 id | ✅ permission_rule 实测 |
+| 角色层落地（方案B）后全量对账 | ✅ 44/45 全等 0 差异（去重集合；YiBeiMeiShi. 例外）|
+| 薄同步 auto 角色写入幂等（改造后 update-role）| ✅ role_codes 镜像 44 人自动补全，Casdoor Role.Users 45 挂载不变 |
+| YiBeiMeiShi.（wecom_id 带点号）JIT 补建 | ⚠️ **Casdoor 拒非法用户名**（add-user：仅允许字母数字/下划线/连字符）；provision 失败入 outbox 重试至 dead-letter（已手动标 done）。**根因：企微账号异常（wecom_id=`YiBeiMeiShi.` 带点号）**，业务侧在企微修正 userid 后同步可解；当前无权限属既成现状（迁移前也无 Casdoor 户，非回归）|
