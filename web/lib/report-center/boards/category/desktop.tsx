@@ -23,7 +23,7 @@ export function CategoryBoard({
     />
   );
   return isMobile ? (
-    <div className="px-4">{table}</div>
+    <div>{table}</div>
   ) : (
     <div className="md:col-span-2">{table}</div>
   );

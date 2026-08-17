@@ -71,7 +71,7 @@ export function ItemTopBoard({
     </>
   );
   return isMobile ? (
-    <div className="space-y-4 px-4">{boards}</div>
+    <div className="space-y-4">{boards}</div>
   ) : (
     <div className="space-y-5 md:col-span-2">{boards}</div>
   );

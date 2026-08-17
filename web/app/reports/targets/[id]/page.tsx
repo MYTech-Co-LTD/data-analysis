@@ -202,7 +202,7 @@ export default async function TargetDashboard({
       <div
         className={`md:col-span-2 ${
           isMobile
-            ? "sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3"
+            ? "sticky top-0 z-20 border-b border-slate-200 bg-white px-4 py-3"
             : ""
         }`}
       >
