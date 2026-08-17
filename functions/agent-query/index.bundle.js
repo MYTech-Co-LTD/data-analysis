@@ -147,8 +147,8 @@ function validateSql(raw) {
   return trimmed + " LIMIT " + MAX_ROWS;
 }
 async function runDuckdb(userSelect, perms, reg) {
-  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.length === 0 || perms.branch_nums.includes("*");
-  const branchFilter = allBranches ? "" : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
+  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.includes("*");
+  const branchFilter = allBranches ? "" : perms.branch_nums.length === 0 ? "WHERE 1=0" : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
   const canSee = perms.can_see_cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
   let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "') " + branchFilter + ";";
@@ -174,7 +174,12 @@ async function runPg(userSelect, userId, perms) {
     {
       sub: userId,
       role: "authenticated",
-      branch_nums: perms.branch_nums,
+      data_scope: {
+        branch_nums: perms.branch_nums,
+        brands: perms.brands || [],
+        categories: perms.categories || []
+      },
+      fields: { cost: !!perms.can_see_cost },
       can_see_cost: !!perms.can_see_cost,
       iss: "agent-query",
       iat: now,
