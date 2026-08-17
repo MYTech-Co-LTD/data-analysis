@@ -10,6 +10,7 @@
 |---|---|---|
 | 组织架构 / 部门组挂载（=门店可见范围） | Casdoor（企微通讯录同步组树，`sso.shanhaiyiguo.com`） | 用户下次登录 |
 | 角色 / 看板-品牌-品类-成本能力勾选 | Casdoor → Permission（role-boss / zone_manager / finance / manager / buyer）resources | 用户下次登录 |
+| **看板模块 / KPI 卡片级能力**（view-board:\*/view-kpi:\*） | Casdoor → Permission resources（默认全开通配，可收权到具名 key） | 用户下次登录 |
 | **带到期临时例外**（≤90 天） | 本系统 `/admin/permissions`「例外」 | RLS 每请求实查，**即时生效/即时收口** |
 | 权限怎么被执行（RLS/视图/过滤逻辑） | data-analysis 代码（architecture.md §6.2） | 发版 |
 
@@ -21,6 +22,24 @@
 - 页面 `/admin/permissions`（管理员）：授予 / 撤销 / 审计，单维 ≤50 条、到期 ≤90 天。
 - API：`POST/DELETE /api/admin/permissions/grants`；`GET .../audit` 留痕。
 - 消费面：`get_user_perms` RPC 实查（agent-query / PG 会话路径）+ `web/lib/exception-grants.ts`（middleware 快判，5min TTL，撤销主动失效）。
+
+## 看板 / KPI 卡片级能力（2026-08-17）
+
+每个看板抽象成能力（`data-analysis:view-board:<id>`，7 个），每个 KPI 指标卡同理
+（`data-analysis:view-kpi:<code>`，6 个含 2 派生比率卡）。单真相在
+`web/lib/capability-board.ts`（纯数据：key/通俗命名/描述）；BOARDS 各 manifest 与
+capability-catalog 都引用它。
+
+- **默认全开（fail-open，用户拍板「避免上线即收权」）**：用户 permissions 未配置任何
+  该命名空间能力（旧 token / 未登录 / 未配置）→ 全部看板/卡片可见；**只有明确配置了
+  「部分具名能力」的角色才裁剪到配置集**。判定实现 `hasBoardPerm` / `hasKpiPerm`
+  （web/lib/feature-perm.ts）。
+- **分层设计**：页面级 `view:*`（页面访问）与看板级 `view-board:*`（看板模块）解耦。
+- **数据范围由 RLS 兜底**：显示层过滤为软门禁，真实行裁剪靠 PostgREST RLS 按
+  branch_nums 实施（战区负责人只看自己战区，天然成立）。
+- **Casdoor 配置**：5 角色 permission 均已追加 `view-board:*` + `view-kpi:*` 通配
+  （默认全开）；收权时改成具名 key 列表即可（update-permission 必须带全字段防
+  AllCols 清空，见 casdoor-role-permission-mechanism.md 教训）。
 
 ## 对账与门禁（自动化，勿手工干预）
 
