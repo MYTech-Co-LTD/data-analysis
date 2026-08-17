@@ -65,8 +65,9 @@ export async function upsertSubscriber(
   const { apiUrl, apiKey } = getNovuConfig();
   if (!apiUrl || !apiKey) throw new Error('Novu API config missing');
 
-  const resp = await fetch(`${apiUrl}/v1/subscribers`, {
-    method: 'PUT',
+  // Novu 3.19 无 PUT /v1/subscribers（404 实测）；upsert = POST /v2/subscribers（createOrUpdate，2026-08-18 接线验证）
+  const resp = await fetch(`${apiUrl}/v2/subscribers`, {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `ApiKey ${apiKey}`,
