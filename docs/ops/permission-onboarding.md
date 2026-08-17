@@ -152,3 +152,40 @@ docker logs deploy-web-1 --since 48h 2>&1 | grep -iE "provision|outbox"
 **例外回收**：`/admin/permissions`「例外」撤销（到期自动失效，无需手动）。
 
 【截图位】例外撤销 / 离职用户状态
+
+---
+
+## 附录 A：5 角色速查表
+
+| 角色码 | 档位 | cost 字段 | 典型人群（部门名推导） | 手册对应步骤 |
+|---|---|---|---|---|
+| boss | full | 含 | 总经办 / 运营总 / 老板 | §2 自动挂载 → §3 确认 |
+| zone_manager | full | 含 | 战区 / 区域 / 大区 | §2 自动挂载 → §3 确认 |
+| manager | basic | 不含 | 店长 / 门店（无匹配默认） | §2 自动挂载 → §3 确认 |
+| buyer | basic | 不含 | 采购 / 业务 / 品类 | §2 自动挂载 → §3 确认 |
+| finance | full | 含 | 财务 | §2 自动挂载 → §3 确认 |
+
+推导规则 = 部门名正则匹配（见 §3 表）；多数人自动推导即目标，无需动手。
+
+## 附录 B：截图落位表
+
+> 截图由管理员日后按本表补齐；正文各步的 `【截图位】` 即对应下表的行，补完贴到 `docs/ops/screenshots/` 并把正文标记替换为图片。
+
+| 正文步骤 | 截哪个界面 | 圈哪里 | 建议文件名 |
+|---|---|---|---|
+| §1 同步 | 通讯录同步触发结果（curl 回显）+ org_users 查询结果 | 同步成功返回 / name、department_ids 非空 | `01-sync-result.png` |
+| §2 JIT 建户 | Casdoor 用户列表（按工号搜索） | 新用户的 name / displayName / 所属组 | `02-casdoor-user.png` |
+| §3 角色 | Casdoor 角色页 Sub users 编辑态 | 下拉里只有工号；目标角色加人后列表 | `03-role-subusers.png` |
+| §4 数据范围 | Casdoor permission Resources 列表 / 组编辑成员 | full/basic 档 resources 差异；组下成员 | `04-permission-resources.png` |
+| §5 例外 | 本系统 `/admin/permissions` 例外 tab 授权表单 | 维度选择 / 期限 / 提交 | `05-exception-form.png` |
+| §6 验证 | preview 响应 / 登录实际看板 | groups、data_scope、fields.cost 各段；门店行 / 成本掩码 | `06-preview-and-dashboard.png` |
+| §7 收权 | 例外撤销 / 离职用户状态 | 撤销成功提示；casdoor_writer 状态 | `07-offboard.png` |
+
+## 附录 C：排障跳转
+
+| 症状 | 先看 | 跳转 |
+|---|---|---|
+| Casdoor 无户 / 拒建 | `docker logs deploy-web-1 --since 48h 2>&1 \| grep -iE "provision\|outbox"` | §2 异常例（非法用户名）|
+| 角色推导 vs 手动不一致 | `SELECT wecom_id,role_codes,casdoor_writer FROM org_users WHERE wecom_id='<工号>';` 看 `role_source` | §3 覆盖规则（手动角色受保护）|
+| 门店范围 / 成本列不对 | `SELECT * FROM get_user_perms('<工号>');` 逐段判断 groups ↔ branch_nums ↔ fields | §4（组挂载 / 角色档位）|
+| get_user_perms 与 preview 不一致 | 重开会话再试（缓存/会话残留） | §5/§6（例外即时收口 ≤5min）|
