@@ -67,3 +67,25 @@ describe('独立期望源成员级对账（Task 10，spec §5.8 H10/M4）——T
     expect(row.detail.whitelistHits).toEqual([]);
   });
 });
+
+describe('classifyMembershipDiff ignoreExtra（覆盖检查语义）', () => {
+  it('覆盖检查：管理者辖区⊇考核集（extra 良性）→ 不红不计 diff', () => {
+    const d = classifyMembershipDiff({
+      expected: [{ user: '__manager_coverage__', branch_numbers: ['3120-001'] }],
+      actual: [{ user: '__manager_coverage__', branch_numbers: ['3120-001', '3120-002', '64188-001'] }],
+      whitelist: [],
+      ignoreExtra: true,
+    });
+    expect(d.red).toEqual([]);
+    expect(d.whitelistHits).toEqual([]);
+  });
+  it('覆盖检查：考核门店未覆盖（missing）→ 仍红（拉力保留）', () => {
+    const d = classifyMembershipDiff({
+      expected: [{ user: '__manager_coverage__', branch_numbers: ['3120-001', '3120-002'] }],
+      actual: [{ user: '__manager_coverage__', branch_numbers: ['3120-001'] }],
+      whitelist: [],
+      ignoreExtra: true,
+    });
+    expect(d.red).toEqual([{ user: '__manager_coverage__', missing: ['3120-002'], extra: [] }]);
+  });
+});
