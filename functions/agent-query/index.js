@@ -108,22 +108,29 @@ function validateSql(raw) {
   return trimmed + " LIMIT " + MAX_ROWS;
 }
 
+// 复合键归一（186 同款）：'3120-0027' → '3120-27'（尾段去前导零，双侧对称）
+const normKey = (s) => String(s).replace(/^([0-9]+)-0+([0-9]+)$/, "$1-$2");
+
 // ④ DuckDB 路径：拼权限视图（行 branch_nums 过滤 + 列成本组脱敏；成本列/glob 来源 reg=注册表）
 // B1（185 casdoor-only 语义）：branch_nums=[] = authorized ∅ = deny——旧「无 perms=全放」宽松形状
 // 已随 data_permissions sunset 废弃；仅 ["*"]（服务身份宽松形状 / 全店授权）= 不加门店过滤。
+// ★门店键铁律 + 键形态（PR#15 家族）：parquet branch_num 是裸编号且无 sbc 列，sbc 只在
+// 文件路径（QA/c1 同款 regexp_extract(filename) 提取）；claims 授权是规范复合键——比较前
+// 双侧归一（186 同款尾段去前导零）。裸授权值（无 '-'）跨账套不唯一不参与匹配（deny 方向）。
 async function runDuckdb(userSelect, perms, reg) {
   const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.includes("*");
+  const authKeys = [...new Set((perms.branch_nums || []).filter((v) => String(v).includes("-")).map(normKey))];
   const branchFilter = allBranches
     ? ""
-    : perms.branch_nums.length === 0
+    : authKeys.length === 0
       ? "WHERE 1=0"
-      : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
+      : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.can_see_cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
   let viewSql =
     "CREATE OR REPLACE TEMP VIEW retail_detail AS " +
     "SELECT * REPLACE (" + replaceList + ") " +
-    "FROM read_parquet('" + reg.retailGlob + "') " + branchFilter + ";";
+    "FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ";";
   // C3: dim_* carry 视图（字典全可见；敏感列如 dim_item.item_cost_price 按 can_see_cost 脱敏，与 retail_detail 同机制）
   for (const d of (reg.dimCarry || [])) {
     const sens = d.sensitiveColumns || [];
