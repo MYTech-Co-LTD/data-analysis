@@ -2,6 +2,7 @@
 
 > 成文 2026-08-16；同日按 IAM 标准化 spec（`docs/superpowers/specs/2026-08-16-platform-iam-standardization-design.md`，revision-2）更新为三分流边界。来源：权限页改造（`fix(permissions): 权限管理页对齐 Casdoor 职责边界`）+ 生产实探。
 > 一句话：**Casdoor 认人授职定范围（你是谁、什么职位、能不能进管理台、看哪些品牌/品类/门店）；本系统只留临时例外与执行（temporary_grants + 行/列过滤）。**
+> 权限体系配置（初始化/维护）：[permission-onboarding.md](./permission-onboarding.md)。
 
 ## 三层职责
 

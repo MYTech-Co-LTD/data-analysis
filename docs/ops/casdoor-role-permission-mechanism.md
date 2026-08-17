@@ -5,6 +5,7 @@
 > 状态：**机制已源码级验证（源码 file:line + 生产真机实测双证据）**。
 > 源码：`~/Documents/mytechcode/source-analysis/casdoor`（master commit `7f622b18`，v3.150.0，2026-08-10，与生产 `casbin/casdoor:latest` 一致）。
 > 验证日期：2026-08-17。生产：opsh `113.249.101.33`（Casdoor + casdoor-postgres）。
+> 权限体系配置（初始化/维护）：[permission-onboarding.md](./permission-onboarding.md)。
 
 ## 一、为什么之前"不通"——三条断链（全源码归因）
 

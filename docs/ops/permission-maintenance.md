@@ -3,6 +3,7 @@
 > 旧版（2026-08-13 data_permissions 四维模型口径）已随 185 sunset 作废。
 > 当前模型：**Casdoor = 管理面真相源，data-analysis = 执行面（合成/缓存/强制）**。
 > 架构真相源总表见 `docs/architecture.md` §6.0。
+> 权限体系配置（初始化/维护）：[permission-onboarding.md](./permission-onboarding.md)。
 
 ## 模型（谁管什么）
 
