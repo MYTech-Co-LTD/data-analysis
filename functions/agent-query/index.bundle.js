@@ -146,12 +146,14 @@ function validateSql(raw) {
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
 }
+var normKey = (s) => String(s).replace(/^([0-9]+)-0+([0-9]+)$/, "$1-$2");
 async function runDuckdb(userSelect, perms, reg) {
   const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.includes("*");
-  const branchFilter = allBranches ? "" : perms.branch_nums.length === 0 ? "WHERE 1=0" : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
+  const authKeys = [...new Set((perms.branch_nums || []).filter((v) => String(v).includes("-")).map(normKey))];
+  const branchFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.can_see_cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
-  let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "') " + branchFilter + ";";
+  let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ";";
   for (const d of reg.dimCarry || []) {
     const sens = d.sensitiveColumns || [];
     const dimReplace = sens.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
