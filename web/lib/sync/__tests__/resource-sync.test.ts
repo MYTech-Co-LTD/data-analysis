@@ -10,14 +10,20 @@ import { casdoorFetch } from '../casdoor-client';
 import { syncResources } from '../resource-sync';
 
 const mockFetch = casdoorFetch as unknown as ReturnType<typeof vi.fn>;
+// 模拟真实 casdoorFetch 返回（完整 body 结构 {status, data:[...]}）——2026-08-17 勘误：
+// 旧 mock 返回 {data:[...]} 让 resp.data=数组 → fetchRemoteKeys 正确，掩盖了真实
+// casdoorFetch 返回 {status,data:[...]}（resp.data=body 对象 → Array.isArray 恒 false → 空集）
+// 的 bug。mock 必须与真实 body 结构一致才能捕获回归。
 function remoteHas(names: string[]) { // get-resources 返回形态（fork 裸 name + description 存 catalog key 原文）
-  return { data: names.map((n) => ({ owner: 'shanhai', name: n.replace(/:/g, '_'), description: n })) };
+  return { status: 'ok', data: names.map((n) => ({ owner: 'shanhai', name: n.replace(/:/g, '_'), description: n })) };
 }
+// add-resource 成功响应（真实 Casdoor：HTTP 200 + body {status:'ok'}）
+const addOk = { status: 'ok', data: 'Affected' };
 
 describe('resource 同步 adapter（spec §5.1 ③，fork 裸 name 语义）', () => {
   it('差集只插缺口 + name 不加 "/" 前缀（fork 裸 name）', async () => {
     mockFetch.mockResolvedValueOnce(remoteHas(['data-analysis:view:reports']));       // 现有
-    mockFetch.mockResolvedValueOnce({ data: [{ owner: 'shanhai', name: 'data-analysis:view:x' }] });    // add 成功
+    mockFetch.mockResolvedValueOnce(addOk);                                           // add 成功
     const r = await syncResources('shanhai', ['data-analysis:view:reports', 'data-analysis:view:x']);
     expect(r.added).toEqual(['data-analysis:view:x']);
     expect(r.skippedExisting).toEqual(['data-analysis:view:reports']);
