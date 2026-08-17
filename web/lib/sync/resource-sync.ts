@@ -29,12 +29,12 @@ export interface SyncReport {
 }
 
 // 资源映射（2026-08-17 打通）：catalog key ↔ Casdoor name。name 须避开 fork 禁字符
-// （/?:#&%=+;），":" 是 catalog 三段式分隔 → 映射为 "_"。description 存 key 原文（权威）。
-const enc = (key: string): string => key.replace(/:/g, '_');
+// （/?:#&%=+;），":" 是 catalog 三段式分隔 → 映射为 "_"（displayNameFor 内置此映射）。
+//   description 存 key 原文（权威）。
 const dec = (name: string): string => name.replace(/_/g, ':');   // 仅老数据/兜底；新数据走 description
 
 // 展示名 → Casdoor resource.name（2026-08-17 组|label 格式）：有通俗名（catalog label）用 `组|label`，
-// 无通俗名退回 `组|映射名`（displayNameFor 内置兜底，与 resource-sync enc 同规则）。
+// 无通俗名退回 `组|映射名`（displayNameFor 内置兜底，映射规则同上）。
 function displayName(key: string): string {
   return displayNameFor(key);
 }

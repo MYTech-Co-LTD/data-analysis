@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // scripts/migrate-resource-display-prefix.mjs —— Casdoor resource.name 加「组|」前缀迁移（2026-08-17）
 // 目标：34 个 resource.name + 5 个 role-* permission.resources 从「裸通俗名/映射名」改为「组|label」。
+//   （34 total resource：23 具名迁移为「组|label」，11 个废弃 key 有意排除保持原样——DISPLAY_NAME_MAP 只含 23）
 // ⚠ 生产 fork 的 update-resource/get-resource 定位不到裸名存储（getResource 强制加 / 前缀）→
 //    resource 表必须 DB 直改（opsh casdoor-postgres）；permission 走 update-permission API（可用）。
 // 用法（--live 才真写入，默认 dry-run 打印 plan）：
