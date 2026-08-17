@@ -98,30 +98,45 @@ export function resolveViewKey(perms: readonly string[], view: string): { ok: bo
 
 // ============ 看板级 / KPI 卡片级能力判定（用户要求：每个看板/KPI 卡抽象成能力，自由配给角色） ============
 // 命名空间：data-analysis:view-board:<id>（看板层）+ data-analysis:view-kpi:<code>（KPI 卡片层）。
-// 判定语义（fail-open 软门禁，对齐功能门禁一贯原则）：
-//   - claims.permissions 直接命中具名 key → true
+// 判定语义（默认全开，用户 2026-08-17 拍板「避免上线即收权」）：
+//   - claims.permissions 命中具名 key → true
 //   - 命中命名空间通配（view-board:* / view-kpi:* / 全局 *）→ true（放行整类）
-//   - 其他 → false（不含具名即默认拒绝——需 Casdoor 配具名能力或通配）
+//   - claims.permissions 不含任何该命名空间能力（未配置/旧 token/无登录）→ **全开**（fail-open：
+//     能力自由配置 = 只裁剪「明确配置了部分能力」的角色；未配置保持现状不主动收权）
+//   - 仅当该命名空间有「部分具名配置」且当前 key 不在其中 → false（收权：只显配置的）
 // 依赖单真相（capability-board.ts）做合法 key 校验：key 不存在于单真相 → false（防御未知 key）。
+// 安全说明：显示层过滤为软门禁（fail-open 默认放行），真实数据安全由 PostgREST RLS 按门店范围
+// 裁剪兜底；本函数只负责「看板/卡片可见性」这一展示层配置。
+
+/** 判定池里是否含某命名空间下任意能力（有任意具名/通配 = 该命名空间已「配置化」，可裁剪） */
+function namespaceConfigured(pool: ReadonlySet<string>, prefix: string): boolean {
+  for (const k of pool) if (k === prefix + '*') return true;
+  for (const k of pool) if (k.startsWith(prefix)) return true;
+  return false;
+}
 
 /** 看板级能力：用户能否看到某个看板模块（boardId = BOARDS registry id，如 'kpi'/'region'） */
 export function hasBoardPerm(perms: readonly string[] | undefined, boardId: string): boolean {
-  if (!perms) return false;
+  if (!perms) return true;                                               // 无权限信息（未登录/缺省）→ 全开
   const key = `data-analysis:view-board:${boardId}`;
-  if (!BOARD_CAPABILITY_BY_KEY.has(key)) return false;            // 未知 boardId（防御）
+  if (!BOARD_CAPABILITY_BY_KEY.has(key)) return false;                  // 未知 boardId（防御）
   const pool = new Set(expandViewGroups(perms));
   if (pool.has(key)) return true;
-  if (pool.has('data-analysis:view-board:*')) return true;         // 命名空间通配
-  return pool.has('*');                                            // 全局通配
+  if (pool.has('data-analysis:view-board:*')) return true;              // 命名空间通配
+  if (pool.has('*')) return true;                                       // 全局通配
+  if (!namespaceConfigured(pool, 'data-analysis:view-board:')) return true; // 未配置任何看板能力 → 全开
+  return false;                                                         // 已配置化但此看板不在 → 收权
 }
 
 /** KPI 卡片级能力：用户能否看到某个 KPI 指标卡（code = metric_code 或派生比率卡 key，如 'sale'/'outbound_margin'） */
 export function hasKpiPerm(perms: readonly string[] | undefined, code: string): boolean {
-  if (!perms) return false;
+  if (!perms) return true;                                              // 无权限信息（未登录/缺省）→ 全开
   const key = `data-analysis:view-kpi:${code}`;
-  if (!KPI_CARD_CAPABILITY_BY_KEY.has(key)) return false;          // 未知 code（防御）
+  if (!KPI_CARD_CAPABILITY_BY_KEY.has(key)) return false;               // 未知 code（防御）
   const pool = new Set(expandViewGroups(perms));
   if (pool.has(key)) return true;
-  if (pool.has('data-analysis:view-kpi:*')) return true;           // 命名空间通配
-  return pool.has('*');
+  if (pool.has('data-analysis:view-kpi:*')) return true;                // 命名空间通配
+  if (pool.has('*')) return true;                                       // 全局通配
+  if (!namespaceConfigured(pool, 'data-analysis:view-kpi:')) return true; // 未配置任何 KPI 能力 → 全开
+  return false;                                                         // 已配置化但此卡不在 → 收权
 }

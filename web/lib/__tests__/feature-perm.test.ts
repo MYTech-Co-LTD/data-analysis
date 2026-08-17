@@ -42,12 +42,24 @@ describe('hasBoardPerm / hasKpiPerm（看板/KPI 卡片级能力）', () => {
     expect(hasBoardPerm(['*'], 'kpi')).toBe(true);
     expect(hasKpiPerm(['*'], 'delivery')).toBe(true);
   });
-  it('无权限 / 无关 key → false', () => {
-    expect(hasBoardPerm(['data-analysis:view:kpi'], 'kpi')).toBe(false); // view:* 不匹配 view-board:*
-    expect(hasBoardPerm([], 'kpi')).toBe(false);
-    expect(hasKpiPerm(['data-analysis:view-board:kpi'], 'sale')).toBe(false);
-    expect(hasKpiPerm(['data-analysis:view-kpi:sale'], 'delivery')).toBe(false);
-    expect(hasBoardPerm(undefined, 'kpi')).toBe(false);
+  it('未配置任何该命名空间能力（旧 token/无登录）→ 默认全开（fail-open，避免上线即收权）', () => {
+    expect(hasBoardPerm(undefined, 'kpi')).toBe(true);
+    expect(hasBoardPerm([], 'kpi')).toBe(true);
+    // 旧 token 有 20 个 view/field 等权限但不含 view-board → 全开（不因旧 token 误伤）
+    expect(hasBoardPerm(['data-analysis:view:reports', 'data-analysis:field:cost'], 'region')).toBe(true);
+    expect(hasKpiPerm(['data-analysis:view:reports'], 'sale')).toBe(true);
+    // view:* 不等于 view-board:*（命名空间隔离）
+    expect(hasBoardPerm(['data-analysis:view:kpi'], 'kpi')).toBe(true); // 但未配置 view-board → 仍全开
+  });
+  it('已配置部分能力 → 只裁剪到配置集（收权生效）', () => {
+    const perms = ['data-analysis:view-board:kpi', 'data-analysis:view-board:region']; // 只配 2 看板
+    expect(hasBoardPerm(perms, 'kpi')).toBe(true);
+    expect(hasBoardPerm(perms, 'region')).toBe(true);
+    expect(hasBoardPerm(perms, 'brand')).toBe(false);   // 未配的看板被收权
+    expect(hasBoardPerm(perms, 'wholesale')).toBe(false);
+    const kperms = ['data-analysis:view-kpi:sale', 'data-analysis:view-kpi:delivery'];
+    expect(hasKpiPerm(kperms, 'sale')).toBe(true);
+    expect(hasKpiPerm(kperms, 'outbound_amt')).toBe(false);
   });
   it('未知 boardId/code（单真相防御）→ false', () => {
     expect(hasBoardPerm(['data-analysis:view-board:*'], 'nonexistent')).toBe(false);
