@@ -118,31 +118,31 @@ const { normalizeFriendlyPerm, FRIENDLY_TO_KEY, BOARD_VIEW_COVERAGE } = require(
 // 1. 23 个通俗名全部映射到正确 key（与 capability-catalog.ts + capability-board.ts 单真相同步）
 const friendly = {
   // catalog 具名 10（页面级 + 品牌/品类/字段/管理台/组）
-  '经营总览': 'data-analysis:view:reports',
-  '目标达成': 'data-analysis:view:reports-targets',
-  '熊喵鲜生': 'data-analysis:brand:3120',
-  '品品甜': 'data-analysis:brand:64188',
-  '水果': 'data-analysis:category:水果',
-  '标品': 'data-analysis:category:标品',
-  '耗材': 'data-analysis:category:耗材',
-  '成本可见': 'data-analysis:field:cost',
-  '管理台': 'data-analysis:admin',
-  '报表看板全组': 'data-analysis:view-group:reports-all',
+  '看板|经营总览': 'data-analysis:view:reports',
+  '看板|目标达成': 'data-analysis:view:reports-targets',
+  '品牌|熊喵鲜生': 'data-analysis:brand:3120',
+  '品牌|品品甜': 'data-analysis:brand:64188',
+  '品类|水果': 'data-analysis:category:水果',
+  '品类|标品': 'data-analysis:category:标品',
+  '品类|耗材': 'data-analysis:category:耗材',
+  '字段|成本可见': 'data-analysis:field:cost',
+  '门禁|管理台': 'data-analysis:admin',
+  '看板|报表看板全组': 'data-analysis:view-group:reports-all',
   // 看板层 7（BOARD_CAPABILITIES）
-  '指标概览': 'data-analysis:view-board:kpi',
-  '品牌×指标': 'data-analysis:view-board:brand',
-  '门店战区': 'data-analysis:view-board:region',
-  '商品 TOP': 'data-analysis:view-board:item-top',
-  '类别出库': 'data-analysis:view-board:category',
-  '供应链出库': 'data-analysis:view-board:supply-chain',
-  '外部批发': 'data-analysis:view-board:wholesale',
+  '看板|指标概览': 'data-analysis:view-board:kpi',
+  '看板|品牌×指标': 'data-analysis:view-board:brand',
+  '看板|门店战区': 'data-analysis:view-board:region',
+  '看板|商品 TOP': 'data-analysis:view-board:item-top',
+  '看板|类别出库': 'data-analysis:view-board:category',
+  '看板|供应链出库': 'data-analysis:view-board:supply-chain',
+  '看板|外部批发': 'data-analysis:view-board:wholesale',
   // KPI 卡层 6（KPI_CARD_CAPABILITIES）
-  '门店零售': 'data-analysis:view-kpi:sale',
-  '门店配送': 'data-analysis:view-kpi:delivery',
-  '供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
-  '供应链毛利': 'data-analysis:view-kpi:outbound_profit',
-  '总配销比': 'data-analysis:view-kpi:delivery_sale_ratio',
-  '毛利率': 'data-analysis:view-kpi:outbound_margin',
+  '看板|门店零售': 'data-analysis:view-kpi:sale',
+  '看板|门店配送': 'data-analysis:view-kpi:delivery',
+  '看板|供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
+  '看板|供应链毛利': 'data-analysis:view-kpi:outbound_profit',
+  '看板|总配销比': 'data-analysis:view-kpi:delivery_sale_ratio',
+  '看板|毛利率': 'data-analysis:view-kpi:outbound_margin',
 };
 for (const [f, key] of Object.entries(friendly)) {
   eq(normalizeFriendlyPerm(f), key, `通俗名归一：${f} → ${key}`);
@@ -159,12 +159,12 @@ eq(normalizeFriendlyPerm('未知通俗名'), '未知通俗名', '未知串原样
 // 3. buildClaims 集成：reachable 里含通俗名 → permissions 里还原成 key（B2 过滤前归一）
 const friendlyCtx = {
   ...okCtx,
-  reachable: ['data-analysis:view:reports', '指标概览', '门店零售', 'push:broadcast'],
+  reachable: ['data-analysis:view:reports', '看板|指标概览', '看板|门店零售', 'push:broadcast'],
 };
 const fc = buildClaims(friendlyCtx);
-eq(fc.permissions.includes('data-analysis:view-board:kpi'), true, '通俗名「指标概览」归一回 key 进 permissions');
-eq(fc.permissions.includes('data-analysis:view-kpi:sale'), true, '通俗名「门店零售」归一回 key 进 permissions');
-eq(fc.permissions.includes('指标概览'), false, '通俗名本身不进 permissions（已归一）');
+eq(fc.permissions.includes('data-analysis:view-board:kpi'), true, '展示名「看板|指标概览」归一回 key 进 permissions');
+eq(fc.permissions.includes('data-analysis:view-kpi:sale'), true, '展示名「看板|门店零售」归一回 key 进 permissions');
+eq(fc.permissions.includes('看板|指标概览'), false, '展示名本身不进 permissions（已归一）');
 
 // 4. 方案 C 覆盖视图注入：reachable 含看板能力 → permissions 含覆盖的报表视图 key（报表授权 ⇒ 视图访问）
 const coverageCtx = {
@@ -189,11 +189,11 @@ eq(ic.permissions.filter((k) => k === 'data-analysis:view:report_brand_metric_ge
 // 4c. 组通俗名「报表看板全组」→ 组 key 归一（claims 不透传组展开——组 key 保留，展开在 web 侧 buildPermPool）
 const groupCtx = {
   ...okCtx,
-  reachable: ['报表看板全组', 'push:broadcast'],
+  reachable: ['看板|报表看板全组', 'push:broadcast'],
 };
 const gc = buildClaims(groupCtx);
 eq(gc.permissions.includes('data-analysis:view-group:reports-all'), true, '组通俗名归一回组 key 进 permissions');
-eq(gc.permissions.includes('报表看板全组'), false, '组通俗名本身不进 permissions');
+eq(gc.permissions.includes('看板|报表看板全组'), false, '组通俗名本身不进 permissions');
 eq(gc.permissions.includes('data-analysis:view:reports'), false, 'claims 不展开 view-group（web 侧 buildPermPool 展开）');
 
 // 4d. 覆盖镜像与单真相同步：BOARD_VIEW_COVERAGE 恰 6 个看板有覆盖（kpi 无）

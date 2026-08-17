@@ -32,33 +32,36 @@ const KEY_NS_RE = /^data-analysis:(view|view-group|field|brand|category|admin)(:
 const shortWild = (w) => w.replace(/^data-analysis:/, '');   // holder 展示短格式：view:*（测试基线钉死）
 const byKey = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
-// ---- 通俗名 → 能力 key 静态镜像（方案甲/方案C，与 web/lib/capability-catalog.ts + capability-board.ts 同步）----
+// ---- 展示名（组|label）→ 能力 key 静态镜像（方案甲/方案C，与 web/lib/capability-catalog.ts + capability-board.ts 同步）----
 // ⚠ catalog 内看板/KPI 条目的 label 是变量（b.name）无法正则抽取，故本 CLI 静态镜像 23 条（claims.js 同源）；
 //   scripts/tests/reconcile-catalog.test.mjs 断言钉死数量防漂移。
 const FRIENDLY_TO_KEY = {
-  '经营总览': 'data-analysis:view:reports',
-  '目标达成': 'data-analysis:view:reports-targets',
-  '熊喵鲜生': 'data-analysis:brand:3120',
-  '品品甜': 'data-analysis:brand:64188',
-  '水果': 'data-analysis:category:水果',
-  '标品': 'data-analysis:category:标品',
-  '耗材': 'data-analysis:category:耗材',
-  '成本可见': 'data-analysis:field:cost',
-  '管理台': 'data-analysis:admin',
-  '报表看板全组': 'data-analysis:view-group:reports-all',
-  '指标概览': 'data-analysis:view-board:kpi',
-  '品牌×指标': 'data-analysis:view-board:brand',
-  '门店战区': 'data-analysis:view-board:region',
-  '商品 TOP': 'data-analysis:view-board:item-top',
-  '类别出库': 'data-analysis:view-board:category',
-  '供应链出库': 'data-analysis:view-board:supply-chain',
-  '外部批发': 'data-analysis:view-board:wholesale',
-  '门店零售': 'data-analysis:view-kpi:sale',
-  '门店配送': 'data-analysis:view-kpi:delivery',
-  '供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
-  '供应链毛利': 'data-analysis:view-kpi:outbound_profit',
-  '总配销比': 'data-analysis:view-kpi:delivery_sale_ratio',
-  '毛利率': 'data-analysis:view-kpi:outbound_margin',
+  // 页面级报表视图（方案 C 保留的 2 个）+ 具名资源
+  '看板|经营总览': 'data-analysis:view:reports',
+  '看板|目标达成': 'data-analysis:view:reports-targets',
+  '品牌|熊喵鲜生': 'data-analysis:brand:3120',
+  '品牌|品品甜': 'data-analysis:brand:64188',
+  '品类|水果': 'data-analysis:category:水果',
+  '品类|标品': 'data-analysis:category:标品',
+  '品类|耗材': 'data-analysis:category:耗材',
+  '字段|成本可见': 'data-analysis:field:cost',
+  '门禁|管理台': 'data-analysis:admin',
+  '看板|报表看板全组': 'data-analysis:view-group:reports-all',
+  // 看板层 7（BOARD_CAPABILITIES）
+  '看板|指标概览': 'data-analysis:view-board:kpi',
+  '看板|品牌×指标': 'data-analysis:view-board:brand',
+  '看板|门店战区': 'data-analysis:view-board:region',
+  '看板|商品 TOP': 'data-analysis:view-board:item-top',
+  '看板|类别出库': 'data-analysis:view-board:category',
+  '看板|供应链出库': 'data-analysis:view-board:supply-chain',
+  '看板|外部批发': 'data-analysis:view-board:wholesale',
+  // KPI 卡层 6（KPI_CARD_CAPABILITIES）
+  '看板|门店零售': 'data-analysis:view-kpi:sale',
+  '看板|门店配送': 'data-analysis:view-kpi:delivery',
+  '看板|供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
+  '看板|供应链毛利': 'data-analysis:view-kpi:outbound_profit',
+  '看板|总配销比': 'data-analysis:view-kpi:delivery_sale_ratio',
+  '看板|毛利率': 'data-analysis:view-kpi:outbound_margin',
 };
 // 归一（方案甲/方案C）：Casdoor 下拉选中通俗名写进 permission.resources 时先把通俗名还原成能力 key，
 //   再进分类（否则 E-unknown-key 误报 / M-unreferenced 漏报）。未命中原样返回（key/通配/push 裸 key）。

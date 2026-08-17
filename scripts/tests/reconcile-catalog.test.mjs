@@ -41,7 +41,7 @@ test('通配持有者出现在废弃审计的 holders 里（M2：按 key 审计�
 // 方案甲/方案C：permission.resources 含通俗名（Casdoor 下拉选中写入）→ normKey 归一后不误报 E-unknown
 test('通俗名在 permission.resources → 归一回 key，不误报 E-unknown / 不 M-unreferenced 漏报', () => {
   const d = classifyDiff({
-    permissions: [{ name: 'p1', resources: ['经营总览', '成本可见'] }],
+    permissions: [{ name: 'p1', resources: ['看板|经营总览', '字段|成本可见'] }],
     catalog: CATALOG, deprecated: DEPRECATED,
   });
   assert.equal(d.red.length, 0, '通俗名归一后命中 catalog → 无红');
