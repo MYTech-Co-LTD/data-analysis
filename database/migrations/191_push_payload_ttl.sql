@@ -1,4 +1,4 @@
--- 189_push_payload_ttl.sql
+-- 191_push_payload_ttl.sql
 -- 生产接线 清理项：push_trigger_payloads / push_trigger_logs TTL 7 天自动清理。
 --   表注释即承诺 7 天 TTL（迁移 173），但从未有清理执行者 → 无限增长。
 --   anon 只有 SELECT/INSERT → 不能直接 GRANT DELETE（anon key 广播面大）。
@@ -24,6 +24,9 @@ BEGIN
 
   DELETE FROM push_trigger_logs WHERE created_at < v_cutoff;
   GET DIAGNOSTICS logs_deleted = ROW_COUNT;
+
+  -- SRF 语义：裸 RETURN;/落尾 END 都是空集；须 RETURN NEXT 显式发射 OUT 变量行
+  RETURN NEXT;
 END;
 $$;
 
@@ -31,4 +34,4 @@ COMMENT ON FUNCTION cleanup_push_audit(INT) IS '推送审计 TTL 清理：删除
 
 GRANT EXECUTE ON FUNCTION cleanup_push_audit(INT) TO anon, authenticated;
 
-DO $$ BEGIN RAISE NOTICE 'Migration 189_push_payload_ttl applied'; END $$;
+DO $$ BEGIN RAISE NOTICE 'Migration 191_push_payload_ttl applied'; END $$;

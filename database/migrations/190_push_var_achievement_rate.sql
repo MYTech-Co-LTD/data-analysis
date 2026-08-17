@@ -1,4 +1,4 @@
--- 188_push_var_achievement_rate.sql
+-- 190_push_var_achievement_rate.sql
 -- 生产接线 修复步骤 4：旗舰场景「销售达成率日报」缺推送变量。
 --   metric_registry 已有比率指标 sale_rate（= sale_amount / sale_target，formula_ast，迁移 173 后补），
 --   但 push_variables 只种了 sale_amount → 模板无法引用达成率。
@@ -15,7 +15,7 @@ DO $$ BEGIN
     SELECT 1 FROM push_variables
     WHERE var_code = 'achievement_rate' AND metric_code = 'sale_rate' AND enabled
   ) THEN
-    RAISE EXCEPTION 'migration 188 failed: achievement_rate not seeded correctly';
+    RAISE EXCEPTION 'migration 190 failed: achievement_rate not seeded correctly';
   END IF;
-  RAISE NOTICE 'Migration 188_push_var_achievement_rate applied';
+  RAISE NOTICE 'Migration 190_push_var_achievement_rate applied';
 END $$;
