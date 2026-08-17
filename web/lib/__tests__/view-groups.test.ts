@@ -10,7 +10,7 @@ describe('view-group 展开（spec §5.5，S1/M1）', () => {
       'data-analysis:view-group:reports-all', 'data-analysis:admin',
     ]);
     expect(out).toContain('data-analysis:view:reports');
-    expect(out).toContain('data-analysis:view:wholesale-customers');
+    expect(out).toContain('data-analysis:view:reports-targets');  // 方案 C：成员收敛为保留页面视图
     expect(out).toContain('data-analysis:admin');
     expect(out).not.toContain('data-analysis:view-group:reports-all');   // 组键被展开消费
   });
@@ -19,10 +19,10 @@ describe('view-group 展开（spec §5.5，S1/M1）', () => {
     // 用注入 groups 参数测嵌套（catalog 真值只有一层，机制须支持嵌套）
     const groups = {
       'g:a': { label: 'A', members: ['g:b', 'data-analysis:view:reports'] },
-      'g:b': { label: 'B', members: ['data-analysis:view:reports-items'] },
+      'g:b': { label: 'B', members: ['data-analysis:view:reports-targets'] },  // 方案 C：用保留成员替代退役的 reports-items
     } as never;
     const { expandViewGroups: exp } = await import('../view-groups');
-    expect(exp(['g:a'], groups)).toContain('data-analysis:view:reports-items');
+    expect(exp(['g:a'], groups)).toContain('data-analysis:view:reports-targets');
   });
 
   it('环引用不死循环（visited 截断；准入门在校验器——此处防御性）', async () => {

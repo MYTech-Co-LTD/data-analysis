@@ -17,9 +17,9 @@ export interface CatalogEntry {
 // 人工覆盖层：只改展示属性与标记，不增删 key（增删走 view-configs/路由 + scan）
 const OVERRIDES: Partial<Record<string, Partial<CatalogEntry>>> = {
   'data-analysis:view:reports':        { group: '看板', label: '经营总览' },
-  'data-analysis:view:reports-items':  { group: '看板', label: '商品下钻' },
+  // 2026-08-17 方案 C 退役：view:reports-items（零消费）——已移入 DEPRECATED，不再由 OVERRIDES 保护
   'data-analysis:view:reports-targets':{ group: '看板', label: '目标达成' },
-  'data-analysis:view:wholesale-customers': { group: '看板', label: '批发客户下钻' },
+  // 2026-08-17 方案 C 退役：view:wholesale-customers（零消费）——已移入 DEPRECATED，不再由 OVERRIDES 保护
   'data-analysis:field:cost':          { group: '字段', label: '成本可见', sensitive: true },
 };
 
@@ -44,7 +44,25 @@ const MANUAL: CatalogEntry[] = [
 ];
 
 // 废弃清单（H14/redteam M2）：载体在 app 侧；驱逐判据 = 发布 ≥30 天 ∧ 审计无引用 ∧ 对账红区清零
-const DEPRECATED: readonly string[] = [];
+// 2026-08-17 方案 C：统一视图/看板——退役 11 个零消费 view:* 死 key（报表授权由 view-board:* 覆盖）。
+//   8 个 report_*_gen 由 scan 从 view-configs 自动发现 → 废弃清单过滤；
+//   view:mobile 由 scan 从路由自动发现 → 废弃清单过滤；
+//   view:reports-items / view:wholesale-customers 已从 OVERRIDES 摘除（不再保护）→ 废弃清单过滤。
+const DEPRECATED: readonly string[] = [
+  // 退役：报表视图 → 由看板能力覆盖（view-board:<id>）
+  'data-analysis:view:report_brand_metric_gen',
+  'data-analysis:view:report_category_summary_gen',
+  'data-analysis:view:report_item_breakdown_gen',
+  'data-analysis:view:report_region_breakdown_gen',
+  'data-analysis:view:report_supply_chain_outbound_gen',
+  'data-analysis:view:report_wholesale_customer_gen',
+  'data-analysis:view:report_wholesale_daily_customer_gen',
+  'data-analysis:view:report_wholesale_daily_gen',
+  // 退役：零消费页面视图
+  'data-analysis:view:mobile',
+  'data-analysis:view:reports-items',
+  'data-analysis:view:wholesale-customers',
+];
 
 const merged: CatalogEntry[] = [...GENERATED_CATALOG, ...MANUAL].map((e) => ({
   ...e, ...OVERRIDES[e.key],
@@ -55,17 +73,38 @@ const seen = new Set<string>();
 const deduped: CatalogEntry[] = [];
 for (const e of [...merged].reverse()) { if (!seen.has(e.key)) { seen.add(e.key); deduped.unshift(e); } }
 
+// 通俗名唯一性断言（方案 C 全量）：label = Casdoor resource.name（主键）+ BY_NAME 反查键，
+// 重名 = 模块加载即抛错（与 capability-board 2026-08-17 模式一致）。
+{
+  const seen = new Set<string>();
+  for (const e of deduped) {
+    if (!e.label) continue;
+    if (seen.has(e.label)) {
+      throw new Error(`[capability-catalog] 通俗名重复（破坏 Casdoor resource name 主键 + BY_NAME 反查）：${e.label}`);
+    }
+    seen.add(e.label);
+  }
+}
+
 export const capabilityCatalog: readonly CatalogEntry[] = Object.freeze(deduped);
 export const CATALOG_KEYS: ReadonlySet<string> = new Set(capabilityCatalog.map((e) => e.key));
 export const DEPRECATED_KEYS: ReadonlySet<string> = new Set(DEPRECATED);
+
+// 通俗名 ↔ key 双向映射（方案 C 全量归一查找表；看板/KPI 的 label 与 capability-board name 一致）
+export const KEY_TO_LABEL: ReadonlyMap<string, string> = new Map(
+  deduped.filter((e) => e.label).map((e) => [e.key, e.label]),
+);
+export const LABEL_TO_KEY: ReadonlyMap<string, string> = new Map(
+  deduped.filter((e) => e.label).map((e) => [e.label, e.key]),
+);
 
 // 授权组（spec §5.5）：映射在 catalog（app 侧），不复制进 Casdoor policy
 export const VIEW_GROUPS = Object.freeze({
   'data-analysis:view-group:reports-all': {
     label: '报表看板全组',
+    // 2026-08-17 方案 C：成员收敛为保留的页面级视图（reports-items/wholesale-customers 已退役）
     members: [
-      'data-analysis:view:reports', 'data-analysis:view:reports-items',
-      'data-analysis:view:reports-targets', 'data-analysis:view:wholesale-customers',
+      'data-analysis:view:reports', 'data-analysis:view:reports-targets',
     ],
   },
 } as const);
