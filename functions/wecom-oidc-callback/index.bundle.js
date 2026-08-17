@@ -79,14 +79,21 @@ var require_claims = __commonJS({
         catalog_v: ctx.catalogV
       };
     }
-    module2.exports = { buildClaims: buildClaims2 };
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2 };
+    function collapseFullStore2(branchNums, allStoreNums) {
+      const uniq = [...new Set(branchNums ?? [])];
+      const universe = new Set(allStoreNums ?? []);
+      if (uniq.length === 0 || universe.size === 0) return [...uniq].sort();
+      const covered = uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
+      return covered ? ["*"] : [...uniq].sort();
+    }
   }
 });
 
 // functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
-var { buildClaims } = require_claims();
+var { buildClaims, collapseFullStore } = require_claims();
 function decodeJwtPayload(token) {
   try {
     const part = String(token).split(".")[1];
@@ -156,7 +163,8 @@ async function expandGroupsToBranches(groupPaths, pgrstUrl) {
       }
       return { branch_nums: [], ok: false, error: `unknown group: ${g}` };
     }
-    return { branch_nums: [...results].sort(), ok: true };
+    const universe = maps.filter((m) => m.group_type === "store" && m.branch_number).map((m) => m.branch_number);
+    return { branch_nums: collapseFullStore([...results], universe), ok: true };
   } catch (e) {
     return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
   }

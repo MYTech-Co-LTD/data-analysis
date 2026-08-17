@@ -44,4 +44,18 @@ function buildClaims(ctx) {
   };
 }
 
-module.exports = { buildClaims };
+module.exports = { buildClaims, collapseFullStore };
+
+// 全店→'*' 收敛（2026-08-17 胖 cookie 修复，用户裁定）：expand 结果与 maps 门店全集**集合相等**时
+// branch_nums 收敛为 ['*']（scope_match_v2 通配=放行，语义=全店授权，与明细清单访问面完全等价）。
+// 动机：388 店清单把 JWT 撑到 8120B，超浏览器 cookie 4096B 上限被静默丢弃 → 登录态存不住（502 修复后
+// 扫码仍循环回登录页的根因）。收敛后全店用户 JWT ≈1.2KB。
+// 边界：集合相等才收敛（超集/子集都保明细——脏数据不放大）；空结果不收敛（B1 空集=deny 语义载体，
+// 禁 ["*"]）；宇宙空（maps 无门店行）→ 明细透传。
+function collapseFullStore(branchNums, allStoreNums) {
+  const uniq = [...new Set(branchNums ?? [])];
+  const universe = new Set(allStoreNums ?? []);
+  if (uniq.length === 0 || universe.size === 0) return [...uniq].sort();
+  const covered = uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
+  return covered ? ['*'] : [...uniq].sort();
+}

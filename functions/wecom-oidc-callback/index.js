@@ -23,7 +23,7 @@
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { corsHeaders, json } = require("../_shared/cors");
-const { buildClaims } = require("./claims");
+const { buildClaims, collapseFullStore } = require("./claims");
 
 // JWT payload 解码（不验签——token 已由 Casdoor 签发且经 client_secret 换取，此处只读 claims；
 // access_token 非 JWT 形态时返回 null，调用方按 C2 处理）。
@@ -107,7 +107,12 @@ async function expandGroupsToBranches(groupPaths, pgrstUrl) {
       }
       return { branch_nums: [], ok: false, error: `unknown group: ${g}` };   // fail-close（H13 未知组）
     }
-    return { branch_nums: [...results].sort(), ok: true };
+    // 全店→'*' 收敛（2026-08-17 胖 cookie 修复）：expand 覆盖 maps 门店全集时输出 ['*']，
+    // 防 388 店清单把 JWT 撑过浏览器 cookie 4096B 上限（Set-Cookie 被静默丢弃 → 登录存不住）。
+    const universe = maps
+      .filter((m) => m.group_type === "store" && m.branch_number)
+      .map((m) => m.branch_number);
+    return { branch_nums: collapseFullStore([...results], universe), ok: true };
   } catch (e) {
     return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
   }
