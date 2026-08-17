@@ -9,7 +9,7 @@
 | 改什么 | 去哪改 | 生效时机 |
 |---|---|---|
 | 组织架构 / 部门组挂载（=门店可见范围） | Casdoor（企微通讯录同步组树，`sso.shanhaiyiguo.com`） | 用户下次登录 |
-| 角色 / 看板-品牌-品类-成本能力勾选 | Casdoor → Permission（data-analysis-full / basic）resources | 用户下次登录 |
+| 角色 / 看板-品牌-品类-成本能力勾选 | Casdoor → Permission（role-boss / zone_manager / finance / manager / buyer）resources | 用户下次登录 |
 | **带到期临时例外**（≤90 天） | 本系统 `/admin/permissions`「例外」 | RLS 每请求实查，**即时生效/即时收口** |
 | 权限怎么被执行（RLS/视图/过滤逻辑） | data-analysis 代码（architecture.md §6.2） | 发版 |
 

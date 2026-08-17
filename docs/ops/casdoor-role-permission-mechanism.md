@@ -117,6 +117,9 @@ permission_rule p 策略（subject=角色）+ g 策略（运行时 user→role�
 2. ✅ **迁移用户**：45 个 active 用户按 derive-roles 规则分桶 → update-role 写 Role.Users（全量，一次性）
 3. ✅ **建 5 permission**（role-*，add-permission 触发 addPolicies）——full 档 3 个（含 cost）/ basic 档 2 个（无 cost）→ permission_rule 生成 98 条角色 p 策略
 4. ✅ **停用旧 basic/full**（isEnabled=false）→ 纯角色权限全量对账 44/45 全等、0 差异（去重后集合；唯一例外 YiBeiMeiShi. Casdoor 无户待 JIT 补建）
+   - ⚠️ **副作用（2026-08-17 发现）**：`update-permission` 用 `.AllCols().Update()`（全列更新，`object/permission.go:175`）——停用时 body 只传 `isEnabled:false` + name/owner，**其余字段（users/groups/roles/resources/actions）被清空为 NULL**。导致 Casdoor 权限列表页 Actions 列 `record.actions.map()` → `null.map()` → **页面空白**（`Cannot read properties of null (reading 'map')`）。
+   - ✅ **修复**：旧 basic/full 已被角色 permission 完全替代（44/45 全等验证）+ 0 策略残留（permission_rule/casbin_rule 均 0 条）→ **直接删除**（`delete-permission` API）。Casdoor 权限页恢复，5 个 role-* permission 正常显示。
+   - 🔒 **教训**：对 Casdoor permission 做任何 `update-permission`，**必须带完整字段**（含 users/groups/roles/resources/actions/effect），否则 AllCols 全列更新会清空其余字段。改 isEnabled 建议直接删除重建，不要局部 update。
 5. ✅ **薄同步 assignRoles 改造**：add-role-for-user → update-role 全量 Users；outbox 46 条积压清理归零（45 条与 Role.Users 一致标 done + ZengWei disabled 标 done）
 6. ✅ **配套修复**：claims.js permissions 去重（get-all-objects 并集路径重复）；YiBeiMeiShi. casdoor_synced_at 置 NULL 待下轮 JIT
 
