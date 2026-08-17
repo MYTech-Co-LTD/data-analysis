@@ -97,13 +97,16 @@ COMMENT ON FUNCTION get_user_perms(VARCHAR) IS '权限合成 RPC（185 casdoor-o
 DO $$
 DECLARE
   v_offboard JSONB; v_svc JSONB;
+  v_off_branch TEXT; v_svc_branch TEXT;
 BEGIN
   SELECT get_user_perms('__189_verify_offboard__') INTO v_offboard;
   SELECT get_user_perms('system:cron') INTO v_svc;
-  IF v_offboard ->> 'branch_nums' <> '[]' THEN
-    RAISE EXCEPTION '189 verification failed: offboard user should deny ([]), got %', v_offboard ->> 'branch_nums';
+  v_off_branch := v_offboard ->> 'branch_nums';
+  v_svc_branch := v_svc ->> 'branch_nums';
+  IF v_off_branch <> '[]' THEN
+    RAISE EXCEPTION '189 verification failed: offboard user should deny ([]), got %', v_off_branch;
   END IF;
-  IF v_svc ->> 'branch_nums' <> '["*"]' THEN
-    RAISE EXCEPTION '189 verification failed: system:% should stay permissive (["*"]), got %', v_svc ->> 'branch_nums';
+  IF v_svc_branch <> '["*"]' THEN
+    RAISE EXCEPTION '189 verification failed: system:% should stay permissive (["*"]), got %', v_svc_branch;
   END IF;
 END $$;
