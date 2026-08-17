@@ -7,6 +7,7 @@ import {
   resolveViewKey,
   type DecodedClaims,
 } from "@/lib/feature-perm";
+import { checkOffboard } from "@/lib/offboard-check";
 
 // Task 13（S4）：旧形状令牌（无 catalog_v）的 48h TTL——超龄 → 302 /login 刷新提示。
 // serverV 与 claims 构建器（functions/wecom-oidc-callback）同源读 CATALOG_V env，缺省 '0'。
@@ -95,6 +96,11 @@ async function handleWecomClient(req: NextRequest) {
 
   if (token) {
     const claim = decodePermissionsClaim(token);
+    // 离职四 sink①（2026-08-17）：企微路径同样接入 is_active 软校验 + blacklist
+    // （此前仅 PC 路径查 blacklist，企微端——大多数用户所在端——完全不查，断链）。
+    if (await checkOffboard(token, claim?.sub)) {
+      return rejectSession(req);
+    }
     // S4 旧形状令牌超龄 → 刷新提示（不清 cookie；重新登录即换新形状 claims）
     if (isRefreshRequired(claim)) {
       return redirectToRefresh(req);
@@ -129,13 +135,9 @@ async function handleRegularBrowser(req: NextRequest) {
     return redirectToCasdoor(req, targetPath);
   }
 
-  const isBlacklisted = await checkTokenBlacklist(token);
-  if (isBlacklisted) {
-    const response = NextResponse.redirect(new URL("/login", req.url));
-    response.cookies.delete("insforge_access_token");
-    response.cookies.delete("wecom_userid");
-    response.cookies.delete("wecom_name");
-    return response;
+  // 离职四 sink①（2026-08-17）：blacklist（token_hash + sub 双维）+ is_active 软校验统一收口 checkOffboard
+  if (await checkOffboard(token, decodePermissionsClaim(token)?.sub)) {
+    return rejectSession(req);
   }
 
   // S4 旧形状令牌超龄 → 刷新提示（不清 cookie；重新登录即换新形状 claims）
@@ -168,38 +170,13 @@ function redirectToRefresh(req: NextRequest): NextResponse {
   return NextResponse.redirect(url);
 }
 
-async function checkTokenBlacklist(token: string): Promise<boolean> {
-  try {
-    const tokenPrefix = token.slice(0, 100);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tokenPrefix));
-    const tokenHash = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-      .slice(0, 16);
-
-    const baseUrl = process.env.NEXT_PUBLIC_INSFORGE_URL || "http://localhost:7130";
-    const response = await fetch(
-      `${baseUrl}/rest/v1/token_blacklist?token_hash=eq.${tokenHash}&select=id`,
-      {
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Accept": "application/json",
-        },
-        signal: AbortSignal.timeout(3000),
-      }
-    );
-
-    if (!response.ok) {
-      console.error("Blacklist query failed:", response.status);
-      return false;
-    }
-
-    const data = await response.json();
-    return data.length > 0;
-  } catch (e) {
-    console.error("Blacklist check failed:", e);
-    return false;
-  }
+// 拒会话：清 cookie + 跳 /login（离职/拉黑用户软着陆到重新登录口，重新登录即被 Casdoor disable 指回）。
+function rejectSession(req: NextRequest): NextResponse {
+  const response = NextResponse.redirect(new URL("/login", req.url));
+  response.cookies.delete("insforge_access_token");
+  response.cookies.delete("wecom_userid");
+  response.cookies.delete("wecom_name");
+  return response;
 }
 
 export const config = {

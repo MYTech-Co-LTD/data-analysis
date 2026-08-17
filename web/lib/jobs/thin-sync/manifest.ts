@@ -37,12 +37,30 @@ async function actionDisable(): Promise<{ processed: number; enqueued: number }>
       if (q.enqueued) enqueued++;
       else console.error('[thin-sync] disable 失败且 outbox 入队失败，下轮重试:', user.wecom_id);
     } else {
-      // 成功 → 标记 casdoor_writer='disabled'
+      // 成功 → 标记 casdoor_writer='disabled' + 写 token_blacklist（离职四 sink①，2026-08-17：
+      // middleware 按 user_id 拉黑，旧 7 天 JWT web API 面即刻拒；expires_at=7 天 JWT 窗口后
+      // 由 cleanup-blacklist 自然清理。select-then-insert 幂等，重跑不重复拉黑。）
       await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(user.wecom_id)}`, {
         method: 'PATCH',
         headers: PG_H(),
         body: JSON.stringify({ casdoor_writer: 'disabled' }),
       }).catch(() => {});
+      const existingBl: Array<{ id: string }> = await fetch(
+        `${POSTGREST_URL}/token_blacklist?user_id=eq.${encodeURIComponent(user.wecom_id)}&select=id`,
+        { headers: PG_H(), cache: 'no-store' },
+      ).then(r => r.json()).catch(() => []);
+      if (existingBl.length === 0) {
+        await fetch(`${POSTGREST_URL}/token_blacklist`, {
+          method: 'POST',
+          headers: PG_H(),
+          body: JSON.stringify({
+            token_hash: `sub:${user.wecom_id}`,
+            user_id: user.wecom_id,
+            expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
+            reason: 'offboard',
+          }),
+        }).catch(e => console.error('[thin-sync] blacklist 写入失败（is_active 软校验仍兑底）:', user.wecom_id, e));
+      }
     }
   }
   return { processed: inactive.length, enqueued };

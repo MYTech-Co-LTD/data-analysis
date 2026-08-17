@@ -37,10 +37,13 @@ export async function checkFeaturePerm(
 // 本函数只服务前者；验签缺失时宁可返回 undefined（fail-close）。
 // Task 13：附带解出 catalog_v / iat（middleware 的 S4 旧形状 48h TTL 判定用），
 // 缺失字段不出现（typeof 守卫），旧调用方形状不变。
+// 2026-08-17 离职四 sink①（web API 面即时收权）：附带解出 sub——middleware
+// 软校验 is_active / blacklist by sub 用，缺 sub 不参与判定（软门禁保守放行）。
 export interface DecodedClaims {
   permissions?: string[];
   catalog_v?: string;
   iat?: number;
+  sub?: string;
 }
 
 export function decodePermissionsClaim(token: string | undefined): DecodedClaims | undefined {
@@ -50,13 +53,14 @@ export function decodePermissionsClaim(token: string | undefined): DecodedClaims
     if (!part) return undefined;
     const b64 = part.replace(/-/g, '+').replace(/_/g, '/');
     const json = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
-    const payload = JSON.parse(json) as { permissions?: unknown; catalog_v?: unknown; iat?: unknown };
+    const payload = JSON.parse(json) as { permissions?: unknown; catalog_v?: unknown; iat?: unknown; sub?: unknown };
     const out: DecodedClaims = {};
     if (Array.isArray(payload.permissions)) {
       out.permissions = payload.permissions.filter((p): p is string => typeof p === 'string');
     }
     if (typeof payload.catalog_v === 'string') out.catalog_v = payload.catalog_v;
     if (typeof payload.iat === 'number') out.iat = payload.iat;
+    if (typeof payload.sub === 'string') out.sub = payload.sub;
     return out;
   } catch {
     return undefined;
