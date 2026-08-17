@@ -41,6 +41,25 @@ capability-catalog 都引用它。
   （默认全开）；收权时改成具名 key 列表即可（update-permission 必须带全字段防
   AllCols 清空，见 casdoor-role-permission-mechanism.md 教训）。
 
+## 方案 C：统一视图/看板 + 全量通俗名（2026-08-17）
+
+**核心语义：报表授权 ⇒ 视图访问（能看板 = 能访问该看板的报表视图）。**
+
+- **退役 11 个零消费 `view:*` 死 key**（8 个 `report_*_gen` + `view:mobile` +
+  `view:reports-items` + `view:wholesale-customers`）：无任何消费面，统一由
+  看板能力覆盖。清单见 `web/lib/capability-catalog.ts` 的 `DEPRECATED`。
+- **看板覆盖视图**：`web/lib/capability-board.ts` 的 `BOARD_VIEW_COVERAGE` 声明
+  每个看板覆盖的底层报表视图名。消费侧（`buildPermPool` / claims.js）命中看板
+  能力时注入对应 `view:*` key → 报表授权闭环。
+- **页面级保留 2 个 `view:*`**：`view:reports`（经营总览）/ `view:reports-targets`
+  （目标达成）仍作页面级 middleware 门禁（`/reports*` 路由）。
+- **permission.resources 存通俗名**：5 角色 permission 的具名资源改写为通俗名
+  （如「经营总览」「成本可见」），get-all-objects 返回通俗名 → claims.js/前端
+  `FRIENDLY_TO_KEY`/`LABEL_TO_KEY` 反查 key。**通配（`view-board:*` / `view-kpi:*`）
+  恒为 key**（无法通俗化）。
+- **迁移脚本**：`scripts/migrate-perms-friendly.mjs`（dry-run 默认，`--live` 写入，
+  update-permission 全字段防 AllCols 清空）。
+
 ## 对账与门禁（自动化，勿手工干预）
 
 - `__reconcile_groups` 每日 03:37 UTC：组→门店投影 vs 期望源（dim 考核门店 × 区域经理覆盖）。红区=未覆盖门店；白名单人工审批在 `group_reconcile_history.detail.whitelist`。
@@ -62,3 +81,6 @@ SELECT * FROM get_user_perms('<wecom_id>');
 
 - `data_permissions` 表（已 DROP）/ 个人 override / 部门四维 / 角色默认范围 / `/admin/permissions` 用户-部门-角色三 tab / 对应 PUT API。
 - 旧四维 JWT 顶层 key（B6 摘除；旧形状令牌 = RLS deny）。
+- **退役 11 个 `view:*` 死 key**（方案 C，2026-08-17）：`view:mobile`、8 个
+  `report_*_gen`、`view:reports-items`、`view:wholesale-customers`——勿再引用，
+  报表授权由对应看板能力覆盖。

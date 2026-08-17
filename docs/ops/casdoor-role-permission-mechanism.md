@@ -122,6 +122,16 @@ permission_rule p 策略（subject=角色）+ g 策略（运行时 user→role�
    - 🔒 **教训**：对 Casdoor permission 做任何 `update-permission`，**必须带完整字段**（含 users/groups/roles/resources/actions/effect），否则 AllCols 全列更新会清空其余字段。改 isEnabled 建议直接删除重建，不要局部 update。
 5. ✅ **薄同步 assignRoles 改造**：add-role-for-user → update-role 全量 Users；outbox 46 条积压清理归零（45 条与 Role.Users 一致标 done + ZengWei disabled 标 done）
 6. ✅ **配套修复**：claims.js permissions 去重（get-all-objects 并集路径重复）；YiBeiMeiShi. casdoor_synced_at 置 NULL 待下轮 JIT
+7. ✅ **方案 C：统一视图/看板 + 全量通俗名**（2026-08-17）：5 角色 permission.resources 具名能力改写为**通俗名**
+   （如「经营总览」「成本可见」），退役 11 个零消费 `view:*` 死 key，看板能力覆盖报表视图
+   （报表授权 ⇒ 视图访问）。迁移脚本 `scripts/migrate-perms-friendly.mjs`（dry-run 默认，`--live` 写入，
+   全字段 update-permission 防 AllCols 清空）。
+   - **permission.resources 存通俗名**：get-all-objects 返回通俗名 → claims.js `FRIENDLY_TO_KEY`
+     / 前端 `LABEL_TO_KEY` 反查 key 归一。**通配（`view-board:*` / `view-kpi:*`）恒为 key**。
+   - **消费侧归一**：`buildPermPool`（web）/ claims.js 在过滤前把通俗名还原成 key；
+     resource-sync 用 `KEY_TO_LABEL` 写通俗名 resource.name；对账 normKey 归一防误报。
+   - **退役 key 清单**：`view:mobile`、8 个 `report_*_gen`、`view:reports-items`、
+     `view:wholesale-customers`（见 capability-catalog.ts DEPRECATED）。
 
 ### 3.4 风险与回滚
 
