@@ -11,18 +11,10 @@
 
 import { POSTGREST_URL, INSFORGE_API_KEY } from '../jobs/env';
 
-// ---- 类型桩（Task 8/9 实现后替换为 import） ----
-// TODO(Task 8): import type { Selector } from './selectors';
-// TODO(Task 9): import type { RunPushResult, RenderedGroup } from './index';
+// ---- 类型（引擎实现后从源模块导入；shadow 仅消费 deliver=false 分支） ----
+import type { Selector } from './selectors';
 
-/** 推送选择器（Task 8 selectors.ts 定义） */
-export type Selector =
-  | { kind: 'dept'; ids: string[] }
-  | { kind: 'person'; ids: string[] }
-  | { kind: 'role'; ids: string[] }
-  | { kind: 'all' };
-
-/** 单组渲染产物（Task 9 render.ts 产出） */
+/** 单组渲染产物（引擎 runPush renderedGroups 元素） */
 export interface RenderedGroup {
   signature: string;
   members: string[];
@@ -32,26 +24,26 @@ export interface RenderedGroup {
     categories?: string[];
     can_see_cost?: boolean;
   };
-  variables: Record<string, string | null>;
+  rendered: Record<string, string>;
 }
 
-/** runPush 返回值（Task 9 index.ts 定义） */
-export interface RunPushResult {
+/** runPush 返回值（web/lib/push/index.ts）—— shadow 只用到子集 */
+interface EngineRunPushResult {
   txnId: string;
   groups: number;
   skipped: string[];
-  /** deliver=false 时 runPush 应返回渲染产物（shadow 消费） */
+  /** deliver=false 时引擎返回逐组渲染产物（shadow 消费落盘） */
   renderedGroups?: RenderedGroup[];
 }
 
-/** runPush 函数签名（Task 9 index.ts 定义） */
+/** runPush 函数签名（web/lib/push/index.ts） */
 export type RunPushFn = (opts: {
   workflowId: string;
   selector: Selector;
   operatorId: string;
   broadcastPerm: boolean;
   deliver?: boolean;
-}) => Promise<RunPushResult>;
+}) => Promise<EngineRunPushResult>;
 
 // ---- runPush 集成 ----
 // Task 9 实现 runPush 后解除桩；shadow 模式仅消费 deliver=false 分支。
@@ -144,7 +136,7 @@ export async function shadowRun(opts: ShadowRunOpts): Promise<ShadowRunResult> {
   const runPush = await getRunPush();
 
   // deliver=false: 渲染但不投递（Novu trigger 跳过）
-  const result: RunPushResult = await runPush({
+  const result = await runPush({
     workflowId: opts.workflowId,
     selector: opts.selector,
     operatorId: opts.operatorId,
@@ -197,12 +189,12 @@ export async function getShadowPayloads(txnId: string): Promise<RenderedGroup[]>
     const detail = await r.text().catch(() => '');
     throw new Error(`[shadow] read payloads failed: ${r.status} ${detail}`);
   }
-  const rows: Array<{ payload: RenderedGroup & { mode?: string } }> = await r.json();
+  const rows: Array<{ payload: Record<string, unknown> & { mode?: string } }> = await r.json();
   return rows
     .filter((row) => row.payload?.mode === 'shadow')
     .map((row) => {
       const { mode: _mode, ...rest } = row.payload;
-      return rest as RenderedGroup;
+      return rest as unknown as RenderedGroup;
     });
 }
 

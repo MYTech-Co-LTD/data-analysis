@@ -63,6 +63,23 @@
 
 ## 5. 契约快照（Task 6 实现以此为准，不得凭假设）
 
+### 5.0 投递路径契约（生产接线 2026-08-18 实测钉死，triggerBulk 实现依据）
+
+> 引擎 `web/lib/push/novu-client.ts triggerBulk` 的逐 event overrides 由此节决定，
+> 契约测试见 `web/lib/push/__tests__/novu-client.test.ts`。
+
+- **webhookUrl 解析优先级**（`apps/api/src/app/events/usecases/send-message-chat/send-message-chat.usecase.ts:533`）：
+  `overrides.providers['chat-webhook'].webhookUrl || payload.webhookUrl || subscriber.credentials.webhookUrl`。
+  生产取第一路：trigger 时逐 event 注入完整 bridge URL（基址 + bridge_token 路径段），
+  不依赖 subscriber credential（避免换 token 要同步 Novu subscriber）。
+- **engine 字段透传必须走 `_passthrough.body`**（`packages/providers/src/base.provider.ts:51-91` transform）：
+  `overrides.providers['chat-webhook']._passthrough.body` 的键**不做 camelCase 变换**、
+  原样进入送达 body；而放在 override 顶层的 `engine_sig` 会被 transform 成 `engineSig`（签名串对不上，双层验签必挂）。
+  payload 里的 `engine_sig` 等字段**不会**自动流入送达 body（§2 的默认构成里没有 payload 键）。
+- 因此引擎逐 event 构造（`novu-client.ts`）：
+  `overrides.providers['chat-webhook'] = { webhookUrl: '<base>/<bridge_token>', _passthrough: { body: { engine_sig, txn_id, subscriber_id, engine_content } } }`。
+- workflow 模板代码（`provider(...)` 步骤）**不需要**（也不应）再配置 webhookUrl —— 以 event 级注入为准。
+
 ### 5.1 bridge 验签伪代码（按实测构造）
 
 ```text
