@@ -62,7 +62,12 @@ var require_claims = __commonJS({
       const expanded = ctx.expandResult;
       if (!expanded || expanded.ok !== true) return null;
       const normReach = ctx.reachable.map((k) => FRIENDLY_TO_KEY[k] ?? k);
-      const permissions = [...new Set(normReach.filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:")))];
+      const withCoverage = new Set(normReach);
+      for (const k of normReach) {
+        const covered = BOARD_VIEW_COVERAGE[k];
+        if (covered) for (const v of covered) withCoverage.add(v);
+      }
+      const permissions = [...new Set([...withCoverage].filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:")))];
       const brands = permissions.filter((k) => k.startsWith("data-analysis:brand:")).map((k) => k.slice("data-analysis:brand:".length));
       const categories = permissions.filter((k) => k.startsWith("data-analysis:category:")).map((k) => k.slice("data-analysis:category:".length));
       const data_scope = { brands, categories, branch_nums: [...expanded.branch_nums ?? []] };
@@ -82,6 +87,18 @@ var require_claims = __commonJS({
     }
     module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2 };
     var FRIENDLY_TO_KEY = {
+      // 页面级报表视图（方案 C 保留的 2 个）+ 具名资源
+      "\u7ECF\u8425\u603B\u89C8": "data-analysis:view:reports",
+      "\u76EE\u6807\u8FBE\u6210": "data-analysis:view:reports-targets",
+      "\u718A\u55B5\u9C9C\u751F": "data-analysis:brand:3120",
+      "\u54C1\u54C1\u751C": "data-analysis:brand:64188",
+      "\u6C34\u679C": "data-analysis:category:\u6C34\u679C",
+      "\u6807\u54C1": "data-analysis:category:\u6807\u54C1",
+      "\u8017\u6750": "data-analysis:category:\u8017\u6750",
+      "\u6210\u672C\u53EF\u89C1": "data-analysis:field:cost",
+      "\u7BA1\u7406\u53F0": "data-analysis:admin",
+      "\u62A5\u8868\u770B\u677F\u5168\u7EC4": "data-analysis:view-group:reports-all",
+      // 看板层 7（BOARD_CAPABILITIES）
       "\u6307\u6807\u6982\u89C8": "data-analysis:view-board:kpi",
       "\u54C1\u724C\xD7\u6307\u6807": "data-analysis:view-board:brand",
       "\u95E8\u5E97\u6218\u533A": "data-analysis:view-board:region",
@@ -89,6 +106,7 @@ var require_claims = __commonJS({
       "\u7C7B\u522B\u51FA\u5E93": "data-analysis:view-board:category",
       "\u4F9B\u5E94\u94FE\u51FA\u5E93": "data-analysis:view-board:supply-chain",
       "\u5916\u90E8\u6279\u53D1": "data-analysis:view-board:wholesale",
+      // KPI 卡层 6（KPI_CARD_CAPABILITIES）
       "\u95E8\u5E97\u96F6\u552E": "data-analysis:view-kpi:sale",
       "\u95E8\u5E97\u914D\u9001": "data-analysis:view-kpi:delivery",
       "\u4F9B\u5E94\u94FE\u51FA\u5E93\u91D1\u989D": "data-analysis:view-kpi:outbound_amt",
@@ -96,10 +114,22 @@ var require_claims = __commonJS({
       "\u603B\u914D\u9500\u6BD4": "data-analysis:view-kpi:delivery_sale_ratio",
       "\u6BDB\u5229\u7387": "data-analysis:view-kpi:outbound_margin"
     };
+    var BOARD_VIEW_COVERAGE = {
+      "data-analysis:view-board:brand": ["data-analysis:view:report_brand_metric_gen"],
+      "data-analysis:view-board:region": ["data-analysis:view:report_region_breakdown_gen"],
+      "data-analysis:view-board:item-top": ["data-analysis:view:report_item_breakdown_gen"],
+      "data-analysis:view-board:category": ["data-analysis:view:report_category_summary_gen"],
+      "data-analysis:view-board:supply-chain": ["data-analysis:view:report_supply_chain_outbound_gen"],
+      "data-analysis:view-board:wholesale": [
+        "data-analysis:view:report_wholesale_customer_gen",
+        "data-analysis:view:report_wholesale_daily_customer_gen",
+        "data-analysis:view:report_wholesale_daily_gen"
+      ]
+    };
     function normalizeFriendlyPerm(value) {
       return FRIENDLY_TO_KEY[value] ?? value;
     }
-    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, FRIENDLY_TO_KEY, normalizeFriendlyPerm };
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE };
     function resolveGroupBranches2(groupPaths, maps, knownDepts) {
       const deptSet = knownDepts instanceof Set ? knownDepts : null;
       const results = /* @__PURE__ */ new Set();

@@ -110,13 +110,25 @@ eq(R(resolveGroupBranches(['shanhai/东部一区', 'shanhai/总经办'], [
 
 console.log('resolveGroupBranches assertions passed');
 
-// ============ 方案甲：通俗名 → 能力 key 归一（2026-08-17，Casdoor resource.name=通俗名）============
+// ============ 方案甲/方案 C：通俗名 → 能力 key 归一（2026-08-17，Casdoor resource.name=通俗名）============
 // 管理员在 Casdoor 下拉框选中通俗名（如「指标概览」）→ 写进 permission.resources 的是通俗名 →
 // claims B2 过滤前必须还原成 key，否则通俗名被 startsWith('data-analysis:') 丢弃 → 权限静默丢失。
-const { normalizeFriendlyPerm } = require('./claims.js');
+const { normalizeFriendlyPerm, FRIENDLY_TO_KEY, BOARD_VIEW_COVERAGE } = require('./claims.js');
 
-// 1. 13 个看板/KPI 通俗名全部映射到正确 key（与 capability-board.ts 单真相同步）
+// 1. 23 个通俗名全部映射到正确 key（与 capability-catalog.ts + capability-board.ts 单真相同步）
 const friendly = {
+  // catalog 具名 10（页面级 + 品牌/品类/字段/管理台/组）
+  '经营总览': 'data-analysis:view:reports',
+  '目标达成': 'data-analysis:view:reports-targets',
+  '熊喵鲜生': 'data-analysis:brand:3120',
+  '品品甜': 'data-analysis:brand:64188',
+  '水果': 'data-analysis:category:水果',
+  '标品': 'data-analysis:category:标品',
+  '耗材': 'data-analysis:category:耗材',
+  '成本可见': 'data-analysis:field:cost',
+  '管理台': 'data-analysis:admin',
+  '报表看板全组': 'data-analysis:view-group:reports-all',
+  // 看板层 7（BOARD_CAPABILITIES）
   '指标概览': 'data-analysis:view-board:kpi',
   '品牌×指标': 'data-analysis:view-board:brand',
   '门店战区': 'data-analysis:view-board:region',
@@ -124,6 +136,7 @@ const friendly = {
   '类别出库': 'data-analysis:view-board:category',
   '供应链出库': 'data-analysis:view-board:supply-chain',
   '外部批发': 'data-analysis:view-board:wholesale',
+  // KPI 卡层 6（KPI_CARD_CAPABILITIES）
   '门店零售': 'data-analysis:view-kpi:sale',
   '门店配送': 'data-analysis:view-kpi:delivery',
   '供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
@@ -134,6 +147,8 @@ const friendly = {
 for (const [f, key] of Object.entries(friendly)) {
   eq(normalizeFriendlyPerm(f), key, `通俗名归一：${f} → ${key}`);
 }
+// 23 条映射全部断言过（防漏同步）
+eq(Object.keys(FRIENDLY_TO_KEY).length, 23, 'FRIENDLY_TO_KEY 恰 23 条（10 catalog + 7 看板 + 6 KPI）');
 
 // 2. 未命中的值原样返回（key / 通配 / push 裸 key / 未知串都不动）
 eq(normalizeFriendlyPerm('data-analysis:view-board:*'), 'data-analysis:view-board:*', '通配原样透传');
@@ -151,4 +166,37 @@ eq(fc.permissions.includes('data-analysis:view-board:kpi'), true, '通俗名「�
 eq(fc.permissions.includes('data-analysis:view-kpi:sale'), true, '通俗名「门店零售」归一回 key 进 permissions');
 eq(fc.permissions.includes('指标概览'), false, '通俗名本身不进 permissions（已归一）');
 
-console.log('方案甲 通俗名归一 assertions passed');
+// 4. 方案 C 覆盖视图注入：reachable 含看板能力 → permissions 含覆盖的报表视图 key（报表授权 ⇒ 视图访问）
+const coverageCtx = {
+  ...okCtx,
+  reachable: ['data-analysis:view-board:brand', 'data-analysis:view-board:wholesale', 'push:broadcast'],
+};
+const cc = buildClaims(coverageCtx);
+eq(cc.permissions.includes('data-analysis:view-board:brand'), true, '看板能力自身保留');
+eq(cc.permissions.includes('data-analysis:view:report_brand_metric_gen'), true, '品牌看板覆盖注入报表视图 key');
+eq(cc.permissions.includes('data-analysis:view:report_wholesale_customer_gen'), true, '批发看板覆盖注入（客户明细）');
+eq(cc.permissions.includes('data-analysis:view:report_wholesale_daily_gen'), true, '批发看板覆盖注入（日报）');
+eq(cc.permissions.includes('data-analysis:view:report_wholesale_daily_customer_gen'), true, '批发看板覆盖注入（客户日榜）');
+
+// 4b. 覆盖注入幂等（看板 key + 已含覆盖 view key → permissions 去重后各 1 个）
+const idemCtx = {
+  ...okCtx,
+  reachable: ['data-analysis:view-board:brand', 'data-analysis:view:report_brand_metric_gen'],
+};
+const ic = buildClaims(idemCtx);
+eq(ic.permissions.filter((k) => k === 'data-analysis:view:report_brand_metric_gen').length, 1, '覆盖注入幂等：同 view key 不重复');
+
+// 4c. 组通俗名「报表看板全组」→ 组 key 归一（claims 不透传组展开——组 key 保留，展开在 web 侧 buildPermPool）
+const groupCtx = {
+  ...okCtx,
+  reachable: ['报表看板全组', 'push:broadcast'],
+};
+const gc = buildClaims(groupCtx);
+eq(gc.permissions.includes('data-analysis:view-group:reports-all'), true, '组通俗名归一回组 key 进 permissions');
+eq(gc.permissions.includes('报表看板全组'), false, '组通俗名本身不进 permissions');
+eq(gc.permissions.includes('data-analysis:view:reports'), false, 'claims 不展开 view-group（web 侧 buildPermPool 展开）');
+
+// 4d. 覆盖镜像与单真相同步：BOARD_VIEW_COVERAGE 恰 6 个看板有覆盖（kpi 无）
+eq(Object.keys(BOARD_VIEW_COVERAGE).length, 6, 'BOARD_VIEW_COVERAGE 恰 6 条（kpi 看板无覆盖报表视图）');
+
+console.log('方案甲/方案C 通俗名归一 + 覆盖注入 assertions passed');

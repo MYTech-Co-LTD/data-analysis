@@ -24,11 +24,19 @@ function buildClaims(ctx) {
   const expanded = ctx.expandResult;                                         // 已由调用方 await（index.js 组装）
   if (!expanded || expanded.ok !== true) return null;                        // 展开失败/未知组 → 整体失败
 
-  // 方案甲：通俗名 → 能力 key 归一（内置映射表见文件底部，与 capability-board.ts 单真相同步）
+  // 方案甲：通俗名 → 能力 key 归一（内置映射表见文件底部，与 capability-catalog.ts 单真相同步）
   const normReach = ctx.reachable.map((k) => FRIENDLY_TO_KEY[k] ?? k);
 
+  // 方案 C：看板授权 ⇒ 覆盖报表视图授权（BOARD_VIEW_COVERAGE 静态镜像——与 capability-board.ts 同步）。
+  //   命中看板能力 key（data-analysis:view-board:<id>）→ 注入其覆盖的底层报表视图 key（镜像值为完整 key）。
+  const withCoverage = new Set(normReach);
+  for (const k of normReach) {
+    const covered = BOARD_VIEW_COVERAGE[k];
+    if (covered) for (const v of covered) withCoverage.add(v);
+  }
+
   // --- permissions（B2）：资源串过滤（去重——get-all-objects 并集路径可能重复，claims 需唯一）---
-  const permissions = [...new Set(normReach.filter((k) =>
+  const permissions = [...new Set([...withCoverage].filter((k) =>
     k === '*' || k.startsWith('data-analysis:') || k.startsWith('push:')))];
 
   // --- data_scope（B1）三维 ---
@@ -53,12 +61,26 @@ function buildClaims(ctx) {
 
 module.exports = { buildClaims, collapseFullStore, resolveGroupBranches };
 
-// 通俗名 → 能力 key 内置映射（方案甲 2026-08-17）。与 web/lib/capability-board.ts 单真相同步：
-// 看板 7（BOARD_CAPABILITIES）+ KPI 卡 6（KPI_CARD_CAPABILITIES）。
-// ⚠ 保持同步：新增/改名能力必须同步这里 + capability-board.ts + claims.test.js 断言（防漂移）。
+// 通俗名 → 能力 key 内置映射（方案甲/方案 C 2026-08-17）。与 capability-catalog.ts + capability-board.ts 单真相同步：
+//   看板 7（BOARD_CAPABILITIES）+ KPI 卡 6（KPI_CARD_CAPABILITIES）+ catalog 具名 10
+//   （view:reports 经营总览 / view:reports-targets 目标达成 / brand 2 / category 3 / field:cost 成本可见 /
+//   admin 管理台 / view-group:reports-all 报表看板全组）。合计 23 条。
+// ⚠ 保持同步：新增/改名能力必须同步这里 + capability-catalog.ts + capability-board.ts + claims.test.js 断言（防漂移）。
 // ⚠ 禁改值语义：key 是 Casdoor permission.resources 的权威授权串，通俗名只是展示层别名。
-// ⚠ 重名已在 capability-board.ts 加载时断言唯一（2026-08-17：KPI「供应链出库」→「供应链出库金额」消歧）。
+// ⚠ 重名已在 capability-catalog.ts / capability-board.ts 加载时断言唯一（2026-08-17：KPI「供应链出库」→「供应链出库金额」消歧）。
 const FRIENDLY_TO_KEY = {
+  // 页面级报表视图（方案 C 保留的 2 个）+ 具名资源
+  '经营总览': 'data-analysis:view:reports',
+  '目标达成': 'data-analysis:view:reports-targets',
+  '熊喵鲜生': 'data-analysis:brand:3120',
+  '品品甜': 'data-analysis:brand:64188',
+  '水果': 'data-analysis:category:水果',
+  '标品': 'data-analysis:category:标品',
+  '耗材': 'data-analysis:category:耗材',
+  '成本可见': 'data-analysis:field:cost',
+  '管理台': 'data-analysis:admin',
+  '报表看板全组': 'data-analysis:view-group:reports-all',
+  // 看板层 7（BOARD_CAPABILITIES）
   '指标概览': 'data-analysis:view-board:kpi',
   '品牌×指标': 'data-analysis:view-board:brand',
   '门店战区': 'data-analysis:view-board:region',
@@ -66,6 +88,7 @@ const FRIENDLY_TO_KEY = {
   '类别出库': 'data-analysis:view-board:category',
   '供应链出库': 'data-analysis:view-board:supply-chain',
   '外部批发': 'data-analysis:view-board:wholesale',
+  // KPI 卡层 6（KPI_CARD_CAPABILITIES）
   '门店零售': 'data-analysis:view-kpi:sale',
   '门店配送': 'data-analysis:view-kpi:delivery',
   '供应链出库金额': 'data-analysis:view-kpi:outbound_amt',
@@ -74,12 +97,28 @@ const FRIENDLY_TO_KEY = {
   '毛利率': 'data-analysis:view-kpi:outbound_margin',
 };
 
+// 方案 C：看板覆盖报表视图静态镜像（board id → 覆盖的底层报表视图 key 全串）。与 capability-board.ts
+//   BOARD_VIEW_COVERAGE 同步（语义一致，表示不同：web 侧按 board id → slug，此处按完整看板 key → 完整 view key）。
+//   ⚠ 保持同步：新增/改覆盖必须同步这里 + capability-board.ts + claims.test.js 断言（防漂移）。
+const BOARD_VIEW_COVERAGE = {
+  'data-analysis:view-board:brand': ['data-analysis:view:report_brand_metric_gen'],
+  'data-analysis:view-board:region': ['data-analysis:view:report_region_breakdown_gen'],
+  'data-analysis:view-board:item-top': ['data-analysis:view:report_item_breakdown_gen'],
+  'data-analysis:view-board:category': ['data-analysis:view:report_category_summary_gen'],
+  'data-analysis:view-board:supply-chain': ['data-analysis:view:report_supply_chain_outbound_gen'],
+  'data-analysis:view-board:wholesale': [
+    'data-analysis:view:report_wholesale_customer_gen',
+    'data-analysis:view:report_wholesale_daily_customer_gen',
+    'data-analysis:view:report_wholesale_daily_gen',
+  ],
+};
+
 // 归一函数（供 index.js 或测试直接调用：通俗名 → key，未命中原样返回）
 function normalizeFriendlyPerm(value) {
   return FRIENDLY_TO_KEY[value] ?? value;
 }
 
-module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, FRIENDLY_TO_KEY, normalizeFriendlyPerm };
+module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE };
 
 // 组→门店集解析（2026-08-17 组树迁移企微部门树，用户裁定「组织架构严格按企微」）：
 //   新形态（部门组）：maps 行 group_id=部门名 × branch_number 多行——部门→门店集映射
