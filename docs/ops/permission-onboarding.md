@@ -102,3 +102,53 @@ docker logs deploy-web-1 --since 48h 2>&1 | grep -iE "provision|outbox"
   （会按 AllCols 生成的空字段把权限洗白，教训见 `casdoor-role-permission-mechanism.md` §3.3）。
 
 【截图位】Casdoor permission Resources 列表 / 组编辑成员
+
+## 5. 临时例外（本系统唯一权限写入口）
+
+常规权限（角色/组）都走 Casdoor；**本系统 `/admin/permissions` 的「例外」tab 是唯一的权限写入口**，
+只做临时放开 / 临时收窄：
+
+- 页面：本系统 `/admin/permissions` →「例外」tab（管理员登录）
+- 维度与限制：门店（`branch_number` 复合键，形如 `3120-0027`）/ 品牌（`system_book_code`）/
+  品类 / 字段 cost；单维 ≤50 条、到期 ≤90 天
+- 生效：RLS 每请求实查，**即时生效 / 即时收口**（撤销 ≤5min 生效）
+- API 形式（管理员脚本用）：`POST/DELETE /api/admin/permissions/grants`；审计 `GET .../audit`
+
+【截图位】例外 tab 授权表单
+
+## 6. 验证三步（每次配完必做）
+
+1. **DB 视角（合成）**：
+   ```sql
+   SELECT * FROM get_user_perms('<工号>');
+   ```
+   看角色、`data_scope.branch_nums`、`fields.cost` 各段是否符合预期。
+2. **claims 视角（管理员预览）**：
+   `GET /api/admin/permissions/preview?wecom_id=<工号>`
+   看 groups / data_scope / fields.cost 各段——是「新开会话将拿到的 claims」。
+3. **真实会话视角**：退出登录、重新登录实际看板，确认门店行范围 / 成本列掩码 / 看板卡片可见性。
+
+三步口径不一致时见附录 C 排障跳转。
+
+【截图位】preview 响应 / 看板实际可见
+
+## 7. 离职 / 转岗收权
+
+**离职（源操作在企微，软删除）**：
+1. 企微后台停用 / 删除该用户
+2. 通讯录同步（§1 手动触发或每日 03:17 兜底）写 `is_active=false`
+3. 薄同步 **actionDisable**（≤30min）四连收权：
+   Casdoor disable + 本系统标记 `casdoor_writer='disabled'` +
+   `token_blacklist` 拉黑（7 天窗口内的旧 JWT 即刻拒绝）→ outbox 计数重试直到成功
+4. 核对：
+   ```sql
+   SELECT wecom_id,casdoor_writer,is_active FROM org_users WHERE wecom_id='<工号>';
+   -- casdoor_writer='disabled' 且 Casdoor 用户状态为禁用 → 收权完成
+   ```
+
+**转岗换角色**：改部门（企微 + 同步）→ 薄同步按新部门**重新推导角色并写 Casdoor**；
+无附加角色时旧角色自动摘除（有附加角色则受 §3 覆盖规则保护，需手动清）。
+
+**例外回收**：`/admin/permissions`「例外」撤销（到期自动失效，无需手动）。
+
+【截图位】例外撤销 / 离职用户状态
