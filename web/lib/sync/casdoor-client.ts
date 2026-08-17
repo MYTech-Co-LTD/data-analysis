@@ -7,7 +7,9 @@ const CASDOOR_API = process.env.CASDOOR_API_URL || 'https://sso.shanhaiyiguo.com
 const CASDOOR_CLIENT_ID = process.env.CASDOOR_CLIENT_ID || '';
 const CASDOOR_CLIENT_SECRET = process.env.CASDOOR_CLIENT_SECRET || '';
 const CASDOOR_ORG = process.env.CASDOOR_ORG || 'shanhai';
-const CASDOOR_APP = process.env.CASDOOR_APP || 'shanhai-data';
+// 2026-08-17（T6 真机）：缺省曾为 'shanhai-data'——Casdoor application 表实际名 'data-analysis'，
+// signupApplication 指向不存在 app → add-user HTTP 200 + body{status:'error'} → provision 静默失败。
+const CASDOOR_APP = process.env.CASDOOR_APP || 'data-analysis';
 
 // ---- token 管理（client_credentials 自动刷新） ----
 interface TokenCache {
@@ -74,6 +76,33 @@ export async function casdoorFetch(
   }
 }
 
+
+// ---- 写端点 body 级判红 + get-user 解包（2026-08-17 T6 真机发现）----
+// Casdoor 写 API 失败时常见 HTTP 200 + body {status:'error', msg}（PR#20 resource-sync 同款坑，
+// casdoor-client 此前只看 HTTP → provision/disable 假成功静默丢动作）。
+// get-user 成功响应为 {status:'ok', data:<user>}，data:null = 不存在。
+
+async function casdoorWrite(
+  path: string,
+  opts: RequestInit = {},
+): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  const result = await casdoorFetch(path, opts);
+  if (!result.ok) return result;
+  const body = result.data as { status?: string; msg?: string } | null;
+  if (body && typeof body === 'object' && body.status === 'error') {
+    return { ok: false, error: `casdoor_body_error: ${body.msg ?? 'unknown'}` };
+  }
+  return result;
+}
+
+async function getUserObj(wecomId: string): Promise<Record<string, unknown> | null | 'fetch_error'> {
+  const r = await casdoorFetch(`/api/get-user?id=${CASDOOR_ORG}/${encodeURIComponent(wecomId)}`);
+  if (!r.ok) return 'fetch_error';
+  const body = r.data as { status?: string; data?: Record<string, unknown> | null } | null;
+  if (!body || body.status === 'error' || !body.data) return null; // 不存在
+  return body.data;
+}
+
 // ---- 用户操作 ----
 
 export interface CasdoorUser {
@@ -89,15 +118,14 @@ export interface CasdoorUser {
  * 幂等：已存在则跳过
  */
 export async function provisionUser(user: CasdoorUser): Promise<{ ok: boolean; error?: string; created?: boolean }> {
-  // 先查是否已存在
-  const existing = await casdoorFetch(
-    `/api/get-user?id=${CASDOOR_ORG}/${encodeURIComponent(user.name)}`,
-  );
-  if (existing.ok && existing.data) {
+  // 先查是否已存在（get-user 解包：外壳 {status,data}）
+  const existing = await getUserObj(user.name);
+  if (existing === 'fetch_error') return { ok: false, error: 'get_user_failed' };
+  if (existing) {
     return { ok: true, created: false }; // 已存在，幂等跳过
   }
 
-  const result = await casdoorFetch('/api/add-user', {
+  const result = await casdoorWrite('/api/add-user', {
     method: 'POST',
     body: JSON.stringify({
       owner: CASDOOR_ORG,
@@ -126,15 +154,12 @@ export async function assignRoles(
   wecomId: string,
   roleCodes: string[],
 ): Promise<{ ok: boolean; error?: string; changed?: boolean }> {
-  // 查当前角色
-  const current = await casdoorFetch(
-    `/api/get-user?id=${CASDOOR_ORG}/${encodeURIComponent(wecomId)}`,
-  );
-  if (!current.ok || !current.data) {
+  // 查当前角色（get-user 解包——旧代码把 {status,data} 外壳当 user，roles 恒空致 diff 恒全量）
+  const user = await getUserObj(wecomId);
+  if (user === 'fetch_error') return { ok: false, error: 'get_user_failed' };
+  if (!user) {
     return { ok: false, error: 'user_not_found' };
   }
-
-  const user = current.data as Record<string, unknown>;
   const rolesArr = Array.isArray(user.roles) ? user.roles : [];
   const currentRoles: string[] = rolesArr.map((r: unknown) =>
     typeof r === 'object' && r !== null ? String((r as Record<string, unknown>).name ?? '') : String(r),
@@ -152,7 +177,7 @@ export async function assignRoles(
   const errors: string[] = [];
 
   for (const role of toAdd) {
-    const r = await casdoorFetch('/api/add-role-for-user', {
+    const r = await casdoorWrite('/api/add-role-for-user', {
       method: 'POST',
       body: JSON.stringify({
         user: `${CASDOOR_ORG}/${wecomId}`,
@@ -163,7 +188,7 @@ export async function assignRoles(
   }
 
   for (const role of toRemove) {
-    const r = await casdoorFetch('/api/delete-role-for-user', {
+    const r = await casdoorWrite('/api/delete-role-for-user', {
       method: 'POST',
       body: JSON.stringify({
         user: `${CASDOOR_ORG}/${wecomId}`,
@@ -185,15 +210,23 @@ export async function assignRoles(
  * Disable 用户（离职四 sink：即时禁用 Casdoor 登录）
  */
 export async function disableUser(wecomId: string): Promise<{ ok: boolean; error?: string }> {
-  const result = await casdoorFetch('/api/update-user', {
-    method: 'POST',
-    body: JSON.stringify({
-      owner: CASDOOR_ORG,
-      name: wecomId,
-      isForbidden: true,
-    }),
-  });
-
+  // 2026-08-17（T6 真机）：裸 update-user 对 client_credentials token 按 token 身份找用户
+  // （'The user: app/data-analysis doesn't exist'，HTTP 200 + body error → 此前假成功，
+  // sink③ 从未真正禁用过任何人）。唯可用形态（真机验证）：
+  //   get-user?id= 解包 → merge isForbidden → update-user?id=owner/name（?id= 必带）。
+  const user = await getUserObj(wecomId);
+  if (user === 'fetch_error') return { ok: false, error: 'get_user_failed' };
+  if (!user) {
+    // 用户本就不存在（provision 曾静默失败）——无法禁用但等价 deny，显式报错入 outbox 观察
+    return { ok: false, error: 'user_not_found_in_casdoor' };
+  }
+  const result = await casdoorWrite(
+    `/api/update-user?id=${CASDOOR_ORG}/${encodeURIComponent(wecomId)}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ ...user, isForbidden: true }),
+    },
+  );
   if (!result.ok) {
     console.error('[casdoor-client] disableUser failed:', wecomId, result.error);
   }
