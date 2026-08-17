@@ -31,7 +31,10 @@ export function generateAchievementView(config: AchievementViewConfig): string {
     GREATEST(LEAST(current_date, t.end_date) - t.start_date + 1, 0) AS days_elapsed
   FROM targets t WHERE t.target_level = '${target_level}' AND ${permFilterTarget('t')}
 )`;
-  const metricCtes = Object.entries(ctes).map(([name, c]) => `${name} AS (\n  ${injectPerm(c.sql)}\n)`);
+  // 性能优化（2026-08-18，报表中心页 346s 根因链第四环）：metric CTE 强制 MATERIALIZED，
+  // 配合 config 侧 GROUP BY 聚合，每个指标聚合按 target 只算一次（原关联子查询被内联按
+  // target×metric 重算 8 次 → 34s；MATERIALIZED + GROUP BY → ~2s）。语义不变（见配置注释）。
+  const metricCtes = Object.entries(ctes).map(([name, c]) => `${name} AS MATERIALIZED (\n  ${injectPerm(c.sql)}\n)`);
   const withList = [tgtCte, ...metricCtes];
 
   const actualCases = metricEntries.map(([code, m]) =>

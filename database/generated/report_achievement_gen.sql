@@ -7,83 +7,65 @@ WITH tgt AS (
     GREATEST(LEAST(current_date, t.end_date) - t.start_date + 1, 0) AS days_elapsed
   FROM targets t WHERE t.target_level = 'total' AND (t.branch_num = 'ALL' OR scope_match_v2('brands', t.system_book_code) AND (scope_match_v2('branch_nums', t.branch_num::text) OR scope_match_v2('branch_nums', t.system_book_code || '-' || t.branch_num)))
 ),
-sale AS (
+sale AS MATERIALIZED (
   SELECT t.id AS target_id,
-  (SELECT COALESCE(SUM(r.total_sale), 0) FROM report_daily_sales r
-    WHERE (t.system_book_code = 'ALL' OR r.system_book_code = t.system_book_code)
-      AND r.biz_date BETWEEN t.start_date AND t.end_date
-      AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.branch_num = r.branch_num AND db.system_book_code = r.system_book_code AND is_assessed_war_zone(db.first_level_region))
-      AND scope_match_v2('brands', r.system_book_code) AND (scope_match_v2('branch_nums', r.branch_num::text) OR scope_match_v2('branch_nums', r.system_book_code || '-' || r.branch_num))
-  ) AS actual_value,
-  (SELECT count(DISTINCT r.biz_date) FROM report_daily_sales r
-    WHERE (t.system_book_code = 'ALL' OR r.system_book_code = t.system_book_code)
-      AND r.biz_date BETWEEN t.start_date AND t.end_date
-      AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.branch_num = r.branch_num AND db.system_book_code = r.system_book_code AND is_assessed_war_zone(db.first_level_region))
-      AND scope_match_v2('brands', r.system_book_code) AND (scope_match_v2('branch_nums', r.branch_num::text) OR scope_match_v2('branch_nums', r.system_book_code || '-' || r.branch_num))
-  ) AS days
+  COALESCE(SUM(r.total_sale), 0) AS actual_value,
+  count(DISTINCT r.biz_date) AS days
 FROM targets t
+LEFT JOIN report_daily_sales r
+  ON (t.system_book_code = 'ALL' OR r.system_book_code = t.system_book_code)
+  AND r.biz_date BETWEEN t.start_date AND t.end_date
+  AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.branch_num = r.branch_num AND db.system_book_code = r.system_book_code AND is_assessed_war_zone(db.first_level_region))
+  AND scope_match_v2('brands', r.system_book_code) AND (scope_match_v2('branch_nums', r.branch_num::text) OR scope_match_v2('branch_nums', r.system_book_code || '-' || r.branch_num))
+WHERE t.target_level = 'total'
+GROUP BY t.id
 ),
-delivery AS (
+delivery AS MATERIALIZED (
   SELECT t.id AS target_id,
-  (SELECT COALESCE(SUM(d.out_money), 0) + COALESCE((
+  COALESCE(SUM(d.out_money), 0) + COALESCE((
       SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w
       WHERE w.system_book_code = '64188' AND w.biz_date BETWEEN t.start_date AND t.end_date
         AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))
         AND scope_match_v2('brands', w.system_book_code)
-    ), 0) FROM report_daily_delivery d
-    WHERE (t.system_book_code = 'ALL' OR d.system_book_code = t.system_book_code)
-      AND d.biz_date BETWEEN t.start_date AND t.end_date
-      AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.branch_num = d.branch_num AND db.system_book_code = d.system_book_code AND is_assessed_war_zone(db.first_level_region))
-      AND scope_match_v2('brands', d.system_book_code) AND (scope_match_v2('branch_nums', d.branch_num::text) OR scope_match_v2('branch_nums', d.system_book_code || '-' || d.branch_num))
-  ) AS actual_value,
-  (SELECT count(DISTINCT d.biz_date) FROM report_daily_delivery d
-    WHERE (t.system_book_code = 'ALL' OR d.system_book_code = t.system_book_code)
-      AND d.biz_date BETWEEN t.start_date AND t.end_date
-      AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.branch_num = d.branch_num AND db.system_book_code = d.system_book_code AND is_assessed_war_zone(db.first_level_region))
-      AND scope_match_v2('brands', d.system_book_code) AND (scope_match_v2('branch_nums', d.branch_num::text) OR scope_match_v2('branch_nums', d.system_book_code || '-' || d.branch_num))
-  ) AS days
+    ), 0) AS actual_value,
+  count(DISTINCT d.biz_date) AS days
 FROM targets t
+LEFT JOIN report_daily_delivery d
+  ON (t.system_book_code = 'ALL' OR d.system_book_code = t.system_book_code)
+  AND d.biz_date BETWEEN t.start_date AND t.end_date
+  AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.branch_num = d.branch_num AND db.system_book_code = d.system_book_code AND is_assessed_war_zone(db.first_level_region))
+  AND scope_match_v2('brands', d.system_book_code) AND (scope_match_v2('branch_nums', d.branch_num::text) OR scope_match_v2('branch_nums', d.system_book_code || '-' || d.branch_num))
+WHERE t.target_level = 'total'
+GROUP BY t.id
 ),
-outbound_amt AS (
+outbound_amt AS MATERIALIZED (
   SELECT t.id AS target_id,
-  (SELECT COALESCE(SUM(COALESCE(d.out_money, 0) + COALESCE(w.wholesale_money, 0)), 0)
-   FROM report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
-     ON d.system_book_code = w.system_book_code AND d.biz_date = w.biz_date AND d.branch_num = w.branch_num AND d.category_group = w.category_group
-   WHERE (t.system_book_code = 'ALL' OR COALESCE(d.system_book_code, w.system_book_code) = t.system_book_code)
-     AND COALESCE(d.biz_date, w.biz_date) BETWEEN t.start_date AND t.end_date
-     AND (d.category_group IN ('水果','标品','耗材') OR w.category_group IN ('水果','标品','耗材'))
-     AND scope_match_v2('brands', COALESCE(d.system_book_code, w.system_book_code)) AND (scope_match_v2('branch_nums', COALESCE(d.branch_num, w.branch_num)::text) OR scope_match_v2('branch_nums', COALESCE(d.system_book_code, w.system_book_code) || '-' || COALESCE(d.branch_num, w.branch_num)))
-  ) AS actual_value,
-  (SELECT count(DISTINCT COALESCE(d.biz_date, w.biz_date))
-   FROM report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
-     ON d.system_book_code = w.system_book_code AND d.biz_date = w.biz_date AND d.branch_num = w.branch_num AND d.category_group = w.category_group
-   WHERE (t.system_book_code = 'ALL' OR COALESCE(d.system_book_code, w.system_book_code) = t.system_book_code)
-     AND COALESCE(d.biz_date, w.biz_date) BETWEEN t.start_date AND t.end_date
-     AND (d.category_group IN ('水果','标品','耗材') OR w.category_group IN ('水果','标品','耗材'))
-     AND scope_match_v2('brands', COALESCE(d.system_book_code, w.system_book_code)) AND (scope_match_v2('branch_nums', COALESCE(d.branch_num, w.branch_num)::text) OR scope_match_v2('branch_nums', COALESCE(d.system_book_code, w.system_book_code) || '-' || COALESCE(d.branch_num, w.branch_num)))
-  ) AS days
+  COALESCE(SUM(COALESCE(d.out_money, 0) + COALESCE(w.wholesale_money, 0)), 0) AS actual_value,
+  count(DISTINCT COALESCE(d.biz_date, w.biz_date)) AS days
 FROM targets t
+LEFT JOIN report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
+  ON d.system_book_code = w.system_book_code AND d.biz_date = w.biz_date AND d.branch_num = w.branch_num AND d.category_group = w.category_group
+  ON (t.system_book_code = 'ALL' OR COALESCE(d.system_book_code, w.system_book_code) = t.system_book_code)
+  AND COALESCE(d.biz_date, w.biz_date) BETWEEN t.start_date AND t.end_date
+  AND (d.category_group IN ('水果','标品','耗材') OR w.category_group IN ('水果','标品','耗材'))
+  AND scope_match_v2('brands', COALESCE(d.system_book_code, w.system_book_code)) AND (scope_match_v2('branch_nums', COALESCE(d.branch_num, w.branch_num)::text) OR scope_match_v2('branch_nums', COALESCE(d.system_book_code, w.system_book_code) || '-' || COALESCE(d.branch_num, w.branch_num)))
+WHERE t.target_level = 'total'
+GROUP BY t.id
 ),
-outbound_profit AS (
+outbound_profit AS MATERIALIZED (
   SELECT t.id AS target_id,
-  (SELECT CASE WHEN can_cost_visible()
-     THEN COALESCE(SUM(COALESCE(d.profit_money, 0) + COALESCE(w.wholesale_profit, 0)), 0) ELSE NULL END
-   FROM report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
-     ON d.system_book_code = w.system_book_code AND d.biz_date = w.biz_date AND d.branch_num = w.branch_num AND d.category_group = w.category_group
-   WHERE (t.system_book_code = 'ALL' OR COALESCE(d.system_book_code, w.system_book_code) = t.system_book_code)
-     AND COALESCE(d.biz_date, w.biz_date) BETWEEN t.start_date AND t.end_date
-     AND (d.category_group IN ('水果','标品','耗材') OR w.category_group IN ('水果','标品','耗材'))
-     AND scope_match_v2('brands', COALESCE(d.system_book_code, w.system_book_code)) AND (scope_match_v2('branch_nums', COALESCE(d.branch_num, w.branch_num)::text) OR scope_match_v2('branch_nums', COALESCE(d.system_book_code, w.system_book_code) || '-' || COALESCE(d.branch_num, w.branch_num)))
-  ) AS actual_value,
-  (SELECT count(DISTINCT COALESCE(d.biz_date, w.biz_date))
-   FROM report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
-     ON d.system_book_code = w.system_book_code AND d.biz_date = w.biz_date AND d.branch_num = w.branch_num AND d.category_group = w.category_group
-   WHERE (t.system_book_code = 'ALL' OR COALESCE(d.system_book_code, w.system_book_code) = t.system_book_code)
-     AND COALESCE(d.biz_date, w.biz_date) BETWEEN t.start_date AND t.end_date
-     AND (d.category_group IN ('水果','标品','耗材') OR w.category_group IN ('水果','标品','耗材'))
-     AND scope_match_v2('brands', COALESCE(d.system_book_code, w.system_book_code)) AND (scope_match_v2('branch_nums', COALESCE(d.branch_num, w.branch_num)::text) OR scope_match_v2('branch_nums', COALESCE(d.system_book_code, w.system_book_code) || '-' || COALESCE(d.branch_num, w.branch_num)))
-  ) AS days
+  CASE WHEN can_cost_visible()
+     THEN COALESCE(SUM(COALESCE(d.profit_money, 0) + COALESCE(w.wholesale_profit, 0)), 0) ELSE NULL END AS actual_value,
+  count(DISTINCT COALESCE(d.biz_date, w.biz_date)) AS days
 FROM targets t
+LEFT JOIN report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
+  ON d.system_book_code = w.system_book_code AND d.biz_date = w.biz_date AND d.branch_num = w.branch_num AND d.category_group = w.category_group
+  ON (t.system_book_code = 'ALL' OR COALESCE(d.system_book_code, w.system_book_code) = t.system_book_code)
+  AND COALESCE(d.biz_date, w.biz_date) BETWEEN t.start_date AND t.end_date
+  AND (d.category_group IN ('水果','标品','耗材') OR w.category_group IN ('水果','标品','耗材'))
+  AND scope_match_v2('brands', COALESCE(d.system_book_code, w.system_book_code)) AND (scope_match_v2('branch_nums', COALESCE(d.branch_num, w.branch_num)::text) OR scope_match_v2('branch_nums', COALESCE(d.system_book_code, w.system_book_code) || '-' || COALESCE(d.branch_num, w.branch_num)))
+WHERE t.target_level = 'total'
+GROUP BY t.id
 )
 SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_at,
   t.system_book_code, t.branch_num, t.target_level, t.parent_target_id, t.target_type, t.category,
