@@ -51,8 +51,11 @@ module.exports = { buildClaims, collapseFullStore, resolveGroupBranches };
 //   （战区/区部门→辖区门店多行；职能部门→全店 388 行）。任一命中行即贡献，group_type 不再区分。
 //   旧形态回退（门店组过渡兼容）：迁移窗口内旧挂组（熊喵/品品甜根、熊喵-3120-xxxx 门店组）经
 //   store 前缀展开继续工作——两条路径共存直至旧组树删除。
-//   组存在但 maps 无行（未灌映射的新部门）→ unknown fail-close（C2 禁半可达；部门同步器灌组须同步灌 maps）。
-function resolveGroupBranches(groupPaths, maps) {
+//   组存在但 maps 无行 → 二分：①部门树（org_departments）里存在 = 合法空辖区部门（企微树超前
+//   于 dim 数据，如南部五区建区未配店，2026-08-17 生产实况）——贡献空集不阻断；②否则未知组
+//   fail-close（C2 禁半可达；部门同步器灌组须同步灌 maps）。
+function resolveGroupBranches(groupPaths, maps, knownDepts) {
+  const deptSet = knownDepts instanceof Set ? knownDepts : null;
   const results = new Set();
   for (const path of groupPaths ?? []) {
     const g = String(path).split('/').pop();                     // 全路径 'shanhai/部门名' → 组名
@@ -68,6 +71,7 @@ function resolveGroupBranches(groupPaths, maps) {
       }
       continue;
     }
+    if (deptSet && deptSet.has(g)) continue;                     // 合法空辖区（企微树有 dim 无店）——贡献空集
     return { branch_nums: [], ok: false, error: `unknown group: ${g}` };   // fail-close（H13 未知组）
   }
   return { branch_nums: [...results].sort(), ok: true };

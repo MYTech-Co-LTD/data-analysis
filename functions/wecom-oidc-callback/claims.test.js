@@ -92,6 +92,17 @@ eq(R(resolveGroupBranches(['shanhai/熊喵'], [
 eq(R(resolveGroupBranches(['shanhai/新部门'], [])),
   R({ branch_nums: [], ok: false, error: 'unknown group: 新部门' }), '组无映射行 → fail-close（禁半可达）');
 
+eq(R(resolveGroupBranches(['shanhai/南部五区'], [], new Set(['南部五区']))),
+  R({ branch_nums: [], ok: true }), '合法空辖区（org_departments 有 maps 无行）→ 贡献空集不 fail-close');
+
+eq(R(resolveGroupBranches(['shanhai/南部五区', 'shanhai/东部一区'], [
+  { group_id: '东部一区', branch_number: '3120-0002' },
+], new Set(['南部五区']))),
+  R({ branch_nums: ['3120-0002'], ok: true }), '空辖区与有映射组混合 → 空集不拖垮整体（LiuHeFa 形态）');
+
+eq(R(resolveGroupBranches(['shanhai/真未知组'], [], new Set(['南部五区']))),
+  R({ branch_nums: [], ok: false, error: 'unknown group: 真未知组' }), 'knownDepts 不含的组仍 fail-close（保守方向不变）');
+
 eq(R(resolveGroupBranches(['shanhai/东部一区', 'shanhai/总经办'], [
   { group_id: '总经办', branch_number: '3120-0001' },
   { group_id: '东部一区', branch_number: '3120-0002' },

@@ -84,9 +84,22 @@ async function expandGroupsToBranches(groupPaths, pgrstUrl) {
     if (!Array.isArray(maps)) {
       return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
     }
+    // 合法空辖区部门清单（2026-08-17 南部五区实况：企微树建区 dim 无店 → maps 无行）。
+    // 拉取失败不阻断：回退 undefined = 全部未知组 fail-close（保守方向，宁可拒绝不可放行）。
+    let knownDepts;
+    try {
+      const deptRes = await fetch(
+        `${pgrstUrl}/org_departments?is_active=eq.true&select=name`,
+        { headers: { "Content-Type": "application/json" } },
+      );
+      if (deptRes.ok) {
+        const depts = await deptRes.json();
+        if (Array.isArray(depts)) knownDepts = new Set(depts.map((d) => d.name).filter(Boolean));
+      }
+    } catch (e) { console.error("wecom-oidc-callback: org_departments fetch failed", e); }
     // 组→门店集解析提为 claims.js 纯函数 resolveGroupBranches（2026-08-17 组树迁移企微部门树）：
     // 新形态 = 部门组多行映射；旧门店组前缀展开保留为过渡兼容（详见该函数注释）。
-    const resolved = resolveGroupBranches(groupPaths, maps);
+    const resolved = resolveGroupBranches(groupPaths, maps, knownDepts);
     if (resolved.ok !== true) return resolved;
     // 全店→'*' 收敛（2026-08-17 胖 cookie 修复）：expand 结果覆盖 maps 门店全集时输出 ['*']，
     // 防 388 店清单把 JWT 撑过浏览器 cookie 4096B 上限（Set-Cookie 被静默丢弃 → 登录存不住）。
