@@ -1,27 +1,40 @@
 // web/lib/sync/resource-sync.ts
 // resource 注册 adapter（spec §5.1 ③）：Casdoor 原生 add-resource，只增改不删。
-// ★H3 怪癖（代码注释钉死，V2 源码验证项）：add-resource = 裸 Insert（PK=owner+name，重复即报错）；
-//   GetResource/get-resources 查表恒加 "/" 前缀 → 写入与比对都统一 "/" 前缀归一化。
 // ★L2：同步失败若静默跳过 → 能力永不可配——逐 key 结果显式反馈，failed 进对账红区。
+// 2026-08-17（T6 真机取证，H3 怪癖勘误）：上游 Casdoor 文档要求 resource name 带 "/" 前缀；
+//   但生产镜像 casbin/casdoor:latest（opsh 113.249.101.33）行为不同——get-resources 返回裸 name
+//   （无 "/"），且 add-resource 对含 "/" 或 ":" 的 name 直接拒（字段校验 Field 'name' contains
+//   forbidden characters: "/?:#&%=+;"）。旧实现写 "/key" 前缀 → 21/21 全被拒（红区误导为"禁 /"）。
+//   修复：写入与比对都用裸 key（无前缀归一）；带 ":" 的 catalog key 仍会被 fork 拒（平台限制，
+//   见 reconcile-catalog 的 known-limitation 登记，不静默）。
+// 2026-08-17 打通（资源映射）：catalog key 含 ":"（Casdoor 字段校验禁），resource 表无法直接
+//   写原文 → name 用合法映射名（":"→"_"；当前 catalog 无 "_"，映射无歧义）+ description 存
+//   catalog key 原文（权威可逆：即使推导歧义，description 是可信源）。Casdoor 管理面显示映射名，
+//   主管理面在 /admin/capabilities（catalog 原文）。约束：catalog key 不得含 "_"（scan 纪律）。
 // 契约适配（T4 实施取证，2026-08-16）：casdoor-client 的 casdoorFetch 不抛异常，失败返回
 //   { ok: false, error }——plan 原文的 try/catch 只覆盖 reject 形态；此处把 ok === false 归一为
 //   同一失败路径（throw 进 catch），mock 测试返回体无 ok 字段不受影响（undefined !== false）。
 import { casdoorFetch } from './casdoor-client';
 import { CATALOG_KEYS, DEPRECATED_KEYS } from '../capability-catalog';
 
-const norm = (name: string): string => (name.startsWith('/') ? name : `/${name}`);
-const denorm = (name: string): string => name.replace(/^\//, '');
-
 export interface SyncReport {
   added: string[]; skippedExisting: string[]; failed: { key: string; error: string }[];
 }
+
+// 资源映射（2026-08-17 打通）：catalog key ↔ Casdoor name。name 须避开 fork 禁字符
+// （/?:#&%=+;），":" 是 catalog 三段式分隔 → 映射为 "_"。description 存 key 原文（权威）。
+const enc = (key: string): string => key.replace(/:/g, '_');
+const dec = (name: string): string => name.replace(/_/g, ':');   // 仅老数据/兜底；新数据走 description
+
+type ResourceRow = { name?: string; description?: string };
 
 type FetchResult = { ok?: boolean; data?: unknown; error?: string };
 
 async function fetchRemoteKeys(owner: string): Promise<Set<string>> {
   const resp = (await casdoorFetch('/api/get-resources?owner=' + encodeURIComponent(owner), {})) as FetchResult | undefined;
-  const rows = (Array.isArray(resp?.data) ? resp.data : []) as { name?: string }[];
-  return new Set(rows.map((r) => denorm(r.name ?? '')));
+  const rows = (Array.isArray(resp?.data) ? resp.data : []) as ResourceRow[];
+  // description 存 catalog key 原文（权威）；老数据无 description 时回退 decode(name)
+  return new Set(rows.map((r) => r.description || dec(r.name ?? '')));
 }
 
 export async function syncResources(owner: string, keys?: readonly string[]): Promise<SyncReport> {
@@ -34,7 +47,7 @@ export async function syncResources(owner: string, keys?: readonly string[]): Pr
     try {
       const res = (await casdoorFetch('/api/add-resource', {
         method: 'POST',
-        body: JSON.stringify({ owner, name: norm(key) }),       // ← "/" 前缀归一（H3）
+        body: JSON.stringify({ owner, name: enc(key), description: key }),   // 映射名 + 原文 description
       })) as FetchResult | undefined;
       if (res?.ok === false) throw new Error(res.error ?? 'add-resource failed');   // 真实通道失败归一（L2）
       // ★Casdoor body 级失败（生产实测 2026-08-17）：add-resource 可能 HTTP 200 但 body

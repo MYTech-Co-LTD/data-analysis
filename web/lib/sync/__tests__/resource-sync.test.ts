@@ -10,26 +10,26 @@ import { casdoorFetch } from '../casdoor-client';
 import { syncResources } from '../resource-sync';
 
 const mockFetch = casdoorFetch as unknown as ReturnType<typeof vi.fn>;
-function remoteHas(names: string[]) { // get-resources 返回形态（name 恒带 / 前缀——H3 怪癖）
-  return { data: names.map((n) => ({ owner: 'shanhai', name: n })) };
+function remoteHas(names: string[]) { // get-resources 返回形态（fork 裸 name + description 存 catalog key 原文）
+  return { data: names.map((n) => ({ owner: 'shanhai', name: n.replace(/:/g, '_'), description: n })) };
 }
 
-describe('resource 同步 adapter（spec §5.1 ③ H3 怪癖）', () => {
-  it('差集只插缺口 + name 统一加 "/" 前缀', async () => {
-    mockFetch.mockResolvedValueOnce(remoteHas(['/data-analysis:view:reports']));       // 现有
-    mockFetch.mockResolvedValueOnce({ data: [{ owner: 'shanhai', name: '/x' }] });    // add 成功
+describe('resource 同步 adapter（spec §5.1 ③，fork 裸 name 语义）', () => {
+  it('差集只插缺口 + name 不加 "/" 前缀（fork 裸 name）', async () => {
+    mockFetch.mockResolvedValueOnce(remoteHas(['data-analysis:view:reports']));       // 现有
+    mockFetch.mockResolvedValueOnce({ data: [{ owner: 'shanhai', name: 'data-analysis:view:x' }] });    // add 成功
     const r = await syncResources('shanhai', ['data-analysis:view:reports', 'data-analysis:view:x']);
     expect(r.added).toEqual(['data-analysis:view:x']);
     expect(r.skippedExisting).toEqual(['data-analysis:view:reports']);
     expect(mockFetch).toHaveBeenLastCalledWith('/api/add-resource', expect.objectContaining({
       method: 'POST',
-      body: JSON.stringify({ owner: 'shanhai', name: '/data-analysis:view:x' }),  // ← 前缀归一
+      body: JSON.stringify({ owner: 'shanhai', name: 'data-analysis_view_x', description: 'data-analysis:view:x' }),
     }));
   });
   it('撞 PK（重复插入）→ 吞 duplicate 继续（幂等重跑 no-op）', async () => {
     mockFetch.mockResolvedValueOnce(remoteHas([]));
     mockFetch.mockRejectedValueOnce(new Error('duplicate key'));  // 首插撞（并发窗口）
-    mockFetch.mockResolvedValueOnce(remoteHas(['/data-analysis:view:y'])); // retry 确认已被插过
+    mockFetch.mockResolvedValueOnce(remoteHas(['data-analysis:view:y'])); // retry 确认已被插过
     const r = await syncResources('shanhai', ['data-analysis:view:y']);
     expect(r.added).toEqual(['data-analysis:view:y']);
     expect(r.failed).toEqual([]);
