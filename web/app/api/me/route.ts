@@ -27,5 +27,10 @@ export async function GET(req: NextRequest) {
     // 旧形状令牌在 RLS 终版本就 deny，展示层同向全掩）。响应字段名 can_see_cost 保持不变：
     // 这是 /api/me → 前端 hook 的内部布尔契约，下游 useCanSeeCost/MaskedBadge 不感知。
     can_see_cost: claims.fields?.cost === true,
+    // permissions（看板/KPI 卡片级能力过滤，2026-08-17）：资源串全量透传——
+    // KpiCards 等 client 组件按 view-board:*/view-kpi:* 过滤渲染（软门禁，真实裁决在 RLS/requireAdmin）。
+    permissions: Array.isArray(claims.permissions)
+      ? claims.permissions.filter((p): p is string => typeof p === 'string')
+      : [],
   });
 }

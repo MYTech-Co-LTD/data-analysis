@@ -1,6 +1,8 @@
 "use client";
 
 import { METRICS, METRIC_ORDER, MetricCode } from "@/lib/report-center/metric-source";
+import { hasKpiPerm } from "@/lib/feature-perm";
+import { KPI_CARD_CAPABILITIES } from "@/lib/capability-board";
 import { statusToZh } from "@/lib/report-center/status-i18n";
 import { isSuspiciousRate, isSuspiciousMargin, suspiciousClass } from "@/lib/report-center/guard";
 import { actualRatio, marginAchievement, absoluteThreeColor } from "@/lib/report-center/ratio";
@@ -84,11 +86,20 @@ function KpiTooltip({ target, actual, rate }: { target: string; actual: string; 
 export function KpiCards({
   result,
   isMobile = false,
+  permissions,
 }: {
   result: GetterResult<TargetKpiRow>;
   isMobile?: boolean;
+  permissions?: readonly string[];
 }) {
   const { rows, status, error } = result;
+
+  // KPI 卡片级能力过滤（用户要求）：只渲染有权限的卡片。
+  // permissions 缺省 undefined（宿主不注入）→ 不过滤全显（保持旧行为，避免误伤非看板页调用方）。
+  const allowedCodes = new Set<string>();
+  if (permissions !== undefined) {
+    for (const c of KPI_CARD_CAPABILITIES) if (hasKpiPerm(permissions, c.code)) allowedCodes.add(c.code);
+  }
 
   if (status === "error") {
     return (
@@ -115,9 +126,21 @@ export function KpiCards({
       </div>
     );
   }
+  // 权限过滤后的可见卡数（0 = 全部被过滤 → 显示无权限占位）
+  const visibleCodes = permissions === undefined
+    ? METRIC_ORDER.length + 2
+    : METRIC_ORDER.filter((c) => allowedCodes.has(c)).length + ['delivery_sale_ratio', 'outbound_margin'].filter((c) => allowedCodes.has(c)).length;
+  if (visibleCodes === 0) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white p-4 text-center text-slate-400 py-8 text-sm">
+        你没有可查看的指标卡——请联系管理员分配 KPI 卡片能力
+      </div>
+    );
+  }
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
       {METRIC_ORDER.map((code) => {
+        if (permissions !== undefined && !allowedCodes.has(code)) return null; // KPI 卡能力过滤
         const r = typedRows.find((x) => x.metric_code === code);
         if (!r) return null;
         const meta = METRICS[code];
@@ -184,7 +207,9 @@ export function KpiCards({
           { key: "delivery_sale_ratio", label: "总配销比", num: delivery?.actual_value ?? null, den: sale?.actual_value ?? null, numLabel: "配送", denLabel: "销售", colored: false },
           { key: "outbound_margin", label: "毛利率", num: outboundProfit?.actual_value ?? null, den: outboundAmt?.actual_value ?? null, numLabel: "毛利", denLabel: "出库", colored: true },
         ];
-        return ratioCards.map((c) => {
+        return ratioCards
+          .filter((c) => permissions === undefined || allowedCodes.has(c.key)) // 比率卡能力过滤
+          .map((c) => {
           // actualRatio 为通用 num/den，但仅处理 den=0；num=null（毛利脱敏）须前置守卫 → null
           const ratio: number | null = c.num == null || !c.den ? null : actualRatio(c.num, c.den);
           const susp = isSuspiciousMargin(ratio);

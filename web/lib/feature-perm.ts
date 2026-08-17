@@ -6,6 +6,7 @@
 // 两者皆无 → false（fail-close）。BREAKGLASS 默认空 = 兜底关闭。
 import { CATALOG_KEYS, DEPRECATED_KEYS } from './capability-catalog';
 import { expandViewGroups } from './view-groups';
+import { BOARD_CAPABILITY_BY_KEY, KPI_CARD_CAPABILITY_BY_KEY } from './capability-board';
 
 export async function checkFeaturePerm(
   userId: string,
@@ -93,4 +94,34 @@ export function resolveViewKey(perms: readonly string[], view: string): { ok: bo
   if (DEPRECATED_KEYS.has(key)) return { ok: false, reason: 'deprecated' };
   if (!CATALOG_KEYS.has(key)) return { ok: false, reason: 'unknown' };        // ★M2：通配持有者对已驱逐 key 在此被挡
   return { ok: true, key };
+}
+
+// ============ 看板级 / KPI 卡片级能力判定（用户要求：每个看板/KPI 卡抽象成能力，自由配给角色） ============
+// 命名空间：data-analysis:view-board:<id>（看板层）+ data-analysis:view-kpi:<code>（KPI 卡片层）。
+// 判定语义（fail-open 软门禁，对齐功能门禁一贯原则）：
+//   - claims.permissions 直接命中具名 key → true
+//   - 命中命名空间通配（view-board:* / view-kpi:* / 全局 *）→ true（放行整类）
+//   - 其他 → false（不含具名即默认拒绝——需 Casdoor 配具名能力或通配）
+// 依赖单真相（capability-board.ts）做合法 key 校验：key 不存在于单真相 → false（防御未知 key）。
+
+/** 看板级能力：用户能否看到某个看板模块（boardId = BOARDS registry id，如 'kpi'/'region'） */
+export function hasBoardPerm(perms: readonly string[] | undefined, boardId: string): boolean {
+  if (!perms) return false;
+  const key = `data-analysis:view-board:${boardId}`;
+  if (!BOARD_CAPABILITY_BY_KEY.has(key)) return false;            // 未知 boardId（防御）
+  const pool = new Set(expandViewGroups(perms));
+  if (pool.has(key)) return true;
+  if (pool.has('data-analysis:view-board:*')) return true;         // 命名空间通配
+  return pool.has('*');                                            // 全局通配
+}
+
+/** KPI 卡片级能力：用户能否看到某个 KPI 指标卡（code = metric_code 或派生比率卡 key，如 'sale'/'outbound_margin'） */
+export function hasKpiPerm(perms: readonly string[] | undefined, code: string): boolean {
+  if (!perms) return false;
+  const key = `data-analysis:view-kpi:${code}`;
+  if (!KPI_CARD_CAPABILITY_BY_KEY.has(key)) return false;          // 未知 code（防御）
+  const pool = new Set(expandViewGroups(perms));
+  if (pool.has(key)) return true;
+  if (pool.has('data-analysis:view-kpi:*')) return true;           // 命名空间通配
+  return pool.has('*');
 }

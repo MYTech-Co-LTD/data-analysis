@@ -11,7 +11,7 @@ export function validateKey(key: string): KeyVerdict {
   return { ok: false, reason: 'unknown' };
 }
 
-const WILDCARD_RE = /^data-analysis:(view|view-group|brand|category|field):\*$/;
+const WILDCARD_RE = /^data-analysis:(view|view-board|view-kpi|view-group|brand|category|field):\*$/;
 export function validateWildcardRisk(perms: readonly string[]): { risky: readonly string[] } {
   return { risky: perms.filter((p) => WILDCARD_RE.test(p)) };
 }
