@@ -30,10 +30,14 @@ export interface MembershipDiff {
   whitelistHits: { user: string; branches: string[] }[];          // 白名单命中（人工审批+审计留痕，单列不算红）
 }
 
-export function classifyMembershipDiff({ expected, actual, whitelist }: {
+export function classifyMembershipDiff({ expected, actual, whitelist, ignoreExtra }: {
   expected: ExpectedMembership[];
   actual: ActualMembership[];
   whitelist?: WhitelistEntry[];
+  /** 覆盖检查语义（expected=应覆盖集，actual=管理者集团并集）：missing=未覆盖（红）；
+   *  extra=管理者辖区超出考核集（良性——区域经理管全部辖区店含非考核店，2026-08-17 实测
+   *  388⊇246 假红），true 时不计红不计数。双向红语义的 per-user 检查不变。 */
+  ignoreExtra?: boolean;
 }): MembershipDiff {
   const red: MembershipDiff['red'] = [];
   const minor: MembershipDiff['minor'] = [];
@@ -45,7 +49,11 @@ export function classifyMembershipDiff({ expected, actual, whitelist }: {
     const missing = e.branch_numbers.filter((b) => !got.includes(b) && !wl.has(`${e.user}:${b}`));
     const extra = got.filter((b) => !e.branch_numbers.includes(b) && !wl.has(`${e.user}:${b}`));
     const wlHit = e.branch_numbers.filter((b) => !got.includes(b) && wl.has(`${e.user}:${b}`));
-    if (missing.length || extra.length) red.push({ user: e.user, missing, extra });
+    if (ignoreExtra) {
+      if (missing.length) red.push({ user: e.user, missing, extra: [] });
+    } else if (missing.length || extra.length) {
+      red.push({ user: e.user, missing, extra });
+    }
     if (wlHit.length) whitelistHits.push({ user: e.user, branches: wlHit });
   }
   // M 级：期望源缺席的用户挂了组（新员工未进分区清单——提示补录，不算红）

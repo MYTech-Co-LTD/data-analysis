@@ -122,6 +122,7 @@ export const reconcileGroupsManifest: JobManifest = {
         expected: [{ user: COVERAGE_USER, branch_numbers: assessedBranches }],
         actual: [{ user: COVERAGE_USER, branch_numbers: managerUnion }],
         whitelist,
+        ignoreExtra: true,   // 覆盖语义：missing（未覆盖）驱动；extra（辖区⊇考核集）良性
       });
       // fail-close 展开失败并入红（保守：无法证明覆盖 → 按未覆盖计）
       for (const e of expandErrors) diff.red.push({ user: e.user, missing: [], extra: [] });
