@@ -107,6 +107,6 @@ BEGIN
     RAISE EXCEPTION '189 verification failed: offboard user should deny ([]), got %', v_off_branch;
   END IF;
   IF v_svc_branch <> '["*"]' THEN
-    RAISE EXCEPTION '189 verification failed: system:% should stay permissive (["*"]), got %', v_svc_branch;
+    RAISE EXCEPTION '189 verification failed: system:%% identity should stay permissive (["*"]), got %', v_svc_branch;
   END IF;
 END $$;
