@@ -14,7 +14,7 @@ import type { JobManifest, JobResult } from '../../contracts';
 import { notifyWecom } from '../../notify';
 import { tryAcquireLock } from '../../scheduler-lock';
 import { expandGroupsToBranches } from '../../sync/group-expand';
-import { INSFORGE_API_BASE, INSFORGE_API_KEY } from '../env';
+import { INSFORGE_API_BASE, INSFORGE_API_KEY, POSTGREST_URL } from '../env';
 import { runningTasks } from '../state';
 import { buildReconcileRow, classifyMembershipDiff, gate7days, type WhitelistEntry } from '../../reconcile-groups';
 
@@ -25,8 +25,9 @@ const POSITION_PATTERN = /店长|督导|主管/;   // 店长/督导岗位清单�
 interface HistoryRow { whitelist_outside_diff: number; red_count: number; detail?: { whitelist?: WhitelistEntry[] } | null }
 
 async function pgrstGet<T>(path: string): Promise<T[]> {
-  // PostgREST 直连读（裸数组；走 INSFORGE_API_BASE 网关同 sdk client 权限域）
-  const res = await fetch(`${INSFORGE_API_BASE}${path}`, {
+  // PostgREST 直连读（裸数组）：网关（INSFORGE_API_BASE）不代理裸表路径（404，生产首跑实测），
+  // 固化 POSTGREST_URL 直连 + apikey 头（env.ts 注释同款口径：RPC/裸表均直连）
+  const res = await fetch(`${POSTGREST_URL}${path}`, {
     headers: { apikey: INSFORGE_API_KEY, Authorization: `Bearer ${INSFORGE_API_KEY}` },
   });
   if (!res.ok) throw new Error(`pgrst ${path} ${res.status}: ${await res.text().catch(() => '')}`);

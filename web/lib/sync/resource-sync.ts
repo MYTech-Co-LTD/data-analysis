@@ -37,6 +37,12 @@ export async function syncResources(owner: string, keys?: readonly string[]): Pr
         body: JSON.stringify({ owner, name: norm(key) }),       // ← "/" 前缀归一（H3）
       })) as FetchResult | undefined;
       if (res?.ok === false) throw new Error(res.error ?? 'add-resource failed');   // 真实通道失败归一（L2）
+      // ★Casdoor body 级失败（生产实测 2026-08-17）：add-resource 可能 HTTP 200 但 body
+      //   {status:'error', msg:"Field 'name' contains forbidden characters ..."}
+      //   （fork 内置字段校验禁 "/?:#&%=+;"——含 ':' 的 catalog key 全被拒，架构 §6.4「adapter 待修」）。
+      //   只查 HTTP 层会误报 added（L2 静默失败），必须按 body status 判红。
+      const body = res?.data as { status?: string; msg?: string } | undefined;
+      if (body?.status === 'error') throw new Error(body.msg ?? 'add-resource body error');
       report.added.push(key);
     } catch (e1) {
       try {                                                       // 并发撞 PK → 重读确认已被插过
