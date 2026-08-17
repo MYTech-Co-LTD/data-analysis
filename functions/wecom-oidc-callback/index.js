@@ -23,7 +23,7 @@
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { corsHeaders, json } = require("../_shared/cors");
-const { buildClaims, collapseFullStore } = require("./claims");
+const { buildClaims, collapseFullStore, resolveGroupBranches } = require("./claims");
 
 // JWT payload 解码（不验签——token 已由 Casdoor 签发且经 client_secret 换取，此处只读 claims；
 // access_token 非 JWT 形态时返回 null，调用方按 C2 处理）。
@@ -84,35 +84,15 @@ async function expandGroupsToBranches(groupPaths, pgrstUrl) {
     if (!Array.isArray(maps)) {
       return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
     }
-    const results = new Set();
-    for (const path of groupPaths ?? []) {
-      const g = String(path).split("/").pop();                    // 全路径 → 组名
-      const exact = maps.find((m) => m.group_id === g);
-      if (exact) {
-        if (exact.group_type === "store" && exact.branch_number) results.add(exact.branch_number);
-        else if (exact.group_type === "region") {
-          for (const m of maps) {
-            if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
-          }
-        }
-        // dept：不贡献（H13）
-        continue;
-      }
-      const asRegion = maps.some((m) => m.group_id.startsWith(g + "-"));
-      if (asRegion) {
-        for (const m of maps) {
-          if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
-        }
-        continue;
-      }
-      return { branch_nums: [], ok: false, error: `unknown group: ${g}` };   // fail-close（H13 未知组）
-    }
-    // 全店→'*' 收敛（2026-08-17 胖 cookie 修复）：expand 覆盖 maps 门店全集时输出 ['*']，
+    // 组→门店集解析提为 claims.js 纯函数 resolveGroupBranches（2026-08-17 组树迁移企微部门树）：
+    // 新形态 = 部门组多行映射；旧门店组前缀展开保留为过渡兼容（详见该函数注释）。
+    const resolved = resolveGroupBranches(groupPaths, maps);
+    if (resolved.ok !== true) return resolved;
+    // 全店→'*' 收敛（2026-08-17 胖 cookie 修复）：expand 结果覆盖 maps 门店全集时输出 ['*']，
     // 防 388 店清单把 JWT 撑过浏览器 cookie 4096B 上限（Set-Cookie 被静默丢弃 → 登录存不住）。
-    const universe = maps
-      .filter((m) => m.group_type === "store" && m.branch_number)
-      .map((m) => m.branch_number);
-    return { branch_nums: collapseFullStore([...results], universe), ok: true };
+    // 宇宙 = maps 全部去重 branch_number（部门形态行无 group_type='store'，不能再按类型筛）。
+    const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
+    return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
   } catch (e) {
     return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
   }

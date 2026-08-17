@@ -66,3 +66,35 @@ eq(collapseFullStore(['3120-001'], []), ['3120-001'], '宇宙空（maps 无门�
 eq(collapseFullStore(undefined, ['3120-001']), [], 'undefined 入参 → 空数组（防御，不抛）');
 
 console.log('collapseFullStore assertions passed');
+
+// ============ resolveGroupBranches（企微部门组形态 + 旧门店组过渡兼容，2026-08-17 组树迁移）============
+// 新形态：maps 行 group_id=部门名 × branch_number 多行（部门→门店集，职能部门=全店 388 行）。
+// 旧形态回退：门店组前缀展开（迁移窗口内 5 管理员旧挂组仍工作）。
+// 组存在但 maps 无行（未灌映射的新部门）→ unknown fail-close（C2，禁半可达）。
+const { resolveGroupBranches } = require('./claims.js');
+const R = (o) => JSON.stringify(o);
+
+eq(R(resolveGroupBranches(['shanhai/东部一区'], [
+  { group_id: '东部一区', branch_number: '3120-0001' },
+  { group_id: '东部一区', branch_number: '3120-0002' },
+  { group_id: '东部二区', branch_number: '3120-0003' },
+])), R({ branch_nums: ['3120-0001', '3120-0002'], ok: true }), '部门组多行映射全命中（全路径剥前缀，他组行不外溢）');
+
+eq(R(resolveGroupBranches(['shanhai/熊喵-3120-0001'], [
+  { group_id: '熊喵-3120-0001', group_type: 'store', branch_number: '3120-0001' },
+])), R({ branch_nums: ['3120-0001'], ok: true }), '旧门店组精确行兼容（迁移窗口）');
+
+eq(R(resolveGroupBranches(['shanhai/熊喵'], [
+  { group_id: '熊喵-3120-0001', group_type: 'store', branch_number: '3120-0001' },
+  { group_id: '熊喵-3120-0002', group_type: 'store', branch_number: '3120-0002' },
+])), R({ branch_nums: ['3120-0001', '3120-0002'], ok: true }), '旧区域根前缀回退兼容（迁移窗口）');
+
+eq(R(resolveGroupBranches(['shanhai/新部门'], [])),
+  R({ branch_nums: [], ok: false, error: 'unknown group: 新部门' }), '组无映射行 → fail-close（禁半可达）');
+
+eq(R(resolveGroupBranches(['shanhai/东部一区', 'shanhai/总经办'], [
+  { group_id: '总经办', branch_number: '3120-0001' },
+  { group_id: '东部一区', branch_number: '3120-0002' },
+])), R({ branch_nums: ['3120-0001', '3120-0002'], ok: true }), '多组并集（兼职多挂）');
+
+console.log('resolveGroupBranches assertions passed');

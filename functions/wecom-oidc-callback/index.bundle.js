@@ -79,7 +79,27 @@ var require_claims = __commonJS({
         catalog_v: ctx.catalogV
       };
     }
-    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2 };
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2 };
+    function resolveGroupBranches2(groupPaths, maps) {
+      const results = /* @__PURE__ */ new Set();
+      for (const path of groupPaths ?? []) {
+        const g = String(path).split("/").pop();
+        const rows = (maps ?? []).filter((m) => m.group_id === g && m.branch_number);
+        if (rows.length > 0) {
+          for (const m of rows) results.add(m.branch_number);
+          continue;
+        }
+        const asRegion = (maps ?? []).some((m) => m.group_type === "store" && m.group_id.startsWith(g + "-"));
+        if (asRegion) {
+          for (const m of maps) {
+            if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
+          }
+          continue;
+        }
+        return { branch_nums: [], ok: false, error: `unknown group: ${g}` };
+      }
+      return { branch_nums: [...results].sort(), ok: true };
+    }
     function collapseFullStore2(branchNums, allStoreNums) {
       const uniq = [...new Set(branchNums ?? [])];
       const universe = new Set(allStoreNums ?? []);
@@ -93,7 +113,7 @@ var require_claims = __commonJS({
 // functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
-var { buildClaims, collapseFullStore } = require_claims();
+var { buildClaims, collapseFullStore, resolveGroupBranches } = require_claims();
 function decodeJwtPayload(token) {
   try {
     const part = String(token).split(".")[1];
@@ -141,30 +161,10 @@ async function expandGroupsToBranches(groupPaths, pgrstUrl) {
     if (!Array.isArray(maps)) {
       return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
     }
-    const results = /* @__PURE__ */ new Set();
-    for (const path of groupPaths ?? []) {
-      const g = String(path).split("/").pop();
-      const exact = maps.find((m) => m.group_id === g);
-      if (exact) {
-        if (exact.group_type === "store" && exact.branch_number) results.add(exact.branch_number);
-        else if (exact.group_type === "region") {
-          for (const m of maps) {
-            if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
-          }
-        }
-        continue;
-      }
-      const asRegion = maps.some((m) => m.group_id.startsWith(g + "-"));
-      if (asRegion) {
-        for (const m of maps) {
-          if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
-        }
-        continue;
-      }
-      return { branch_nums: [], ok: false, error: `unknown group: ${g}` };
-    }
-    const universe = maps.filter((m) => m.group_type === "store" && m.branch_number).map((m) => m.branch_number);
-    return { branch_nums: collapseFullStore([...results], universe), ok: true };
+    const resolved = resolveGroupBranches(groupPaths, maps);
+    if (resolved.ok !== true) return resolved;
+    const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
+    return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
   } catch (e) {
     return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
   }

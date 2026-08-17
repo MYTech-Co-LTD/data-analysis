@@ -44,7 +44,34 @@ function buildClaims(ctx) {
   };
 }
 
-module.exports = { buildClaims, collapseFullStore };
+module.exports = { buildClaims, collapseFullStore, resolveGroupBranches };
+
+// 组→门店集解析（2026-08-17 组树迁移企微部门树，用户裁定「组织架构严格按企微」）：
+//   新形态（部门组）：maps 行 group_id=部门名 × branch_number 多行——部门→门店集映射
+//   （战区/区部门→辖区门店多行；职能部门→全店 388 行）。任一命中行即贡献，group_type 不再区分。
+//   旧形态回退（门店组过渡兼容）：迁移窗口内旧挂组（熊喵/品品甜根、熊喵-3120-xxxx 门店组）经
+//   store 前缀展开继续工作——两条路径共存直至旧组树删除。
+//   组存在但 maps 无行（未灌映射的新部门）→ unknown fail-close（C2 禁半可达；部门同步器灌组须同步灌 maps）。
+function resolveGroupBranches(groupPaths, maps) {
+  const results = new Set();
+  for (const path of groupPaths ?? []) {
+    const g = String(path).split('/').pop();                     // 全路径 'shanhai/部门名' → 组名
+    const rows = (maps ?? []).filter((m) => m.group_id === g && m.branch_number);
+    if (rows.length > 0) {
+      for (const m of rows) results.add(m.branch_number);        // 部门组多行映射
+      continue;
+    }
+    const asRegion = (maps ?? []).some((m) => m.group_type === 'store' && m.group_id.startsWith(g + '-'));
+    if (asRegion) {
+      for (const m of maps) {
+        if (m.group_type === 'store' && m.group_id.startsWith(g + '-') && m.branch_number) results.add(m.branch_number);
+      }
+      continue;
+    }
+    return { branch_nums: [], ok: false, error: `unknown group: ${g}` };   // fail-close（H13 未知组）
+  }
+  return { branch_nums: [...results].sort(), ok: true };
+}
 
 // 全店→'*' 收敛（2026-08-17 胖 cookie 修复，用户裁定）：expand 结果与 maps 门店全集**集合相等**时
 // branch_nums 收敛为 ['*']（scope_match_v2 通配=放行，语义=全店授权，与明细清单访问面完全等价）。
