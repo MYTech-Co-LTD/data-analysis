@@ -99,6 +99,11 @@ services:
       # （架构文档 §4.3；值同 deploy/.env 的 AGENT_API_KEY，与 function secret 同源）
       AGENT_API_KEY: ${AGENT_API_KEY:-}
       AGENT_QUERY_URL: http://insforge:7130/functions/agent-query
+      # push-admin-plugin：服务身份 client_credentials JWT（spec §6.1，scope openclaw:push）
+      PUSH_API_URL: http://web:3000/api/push
+      CASDOOR_ORIGIN: ${CASDOOR_ISSUER:-https://sso.shanhaiyiguo.com}
+      CASDOOR_CLIENT_ID: ${CASDOOR_CLIENT_ID:-}
+      CASDOOR_CLIENT_SECRET: ${CASDOOR_CLIENT_SECRET:-}
     volumes:
       - "../openclaw/state:/home/node/.openclaw"
     cap_drop:
