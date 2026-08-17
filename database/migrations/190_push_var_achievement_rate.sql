@@ -10,7 +10,16 @@ INSERT INTO push_variables (var_code, name, metric_code, scope_dim, extra_filter
   -- URL 型变量（render.ts：<code>_url → /report/<view>?…&jwt=<10min 代签>）；
   -- scheduled_report workflow 模板引用 {{payload.detail_url}}（契约①：模板 ⊆ 白名单）
   ('detail_url', '明细链接（10min 代签 JWT）', NULL, 'total', NULL, NULL, true)
-ON CONFLICT (var_code) DO NOTHING;
+-- 2026-08-17 幂等自愈修复：此前 DO NOTHING 遇到半途种的旧行（achievement_rate
+-- 存在但 enabled=false）被 CONFLICT 跳过 → 断言挂 → 阻塞部署管线（main CI failure
+-- 31996958965）。改 DO UPDATE 自愈口径+启用，重复执行稳定收敛。
+ON CONFLICT (var_code) DO UPDATE SET
+  name = EXCLUDED.name,
+  metric_code = EXCLUDED.metric_code,
+  scope_dim = EXCLUDED.scope_dim,
+  extra_filter = EXCLUDED.extra_filter,
+  unit = EXCLUDED.unit,
+  enabled = EXCLUDED.enabled;
 
 -- 验证断言（重复执行幂等：存在且口径正确即通过）
 DO $$ BEGIN
