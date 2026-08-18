@@ -24,8 +24,11 @@ export function WholesaleBoard({
     />
   );
   if (isMobile) return <div>{table}</div>;
+  // md:absolute 结构依赖同行的供应链看板提供行高——只给外部批发权限（无供应链）时父容器
+  // 高度为 0 → 看板塌缩不可见（2026-08-19 实测修复：加 min-height 保证独立可见；
+  // 供应链在时行高更大，仍照旧随行高滚动）。
   return (
-    <div className="md:relative">
+    <div className="md:relative md:min-h-[400px]">
       <div className="md:absolute md:inset-0 md:overflow-y-auto">{table}</div>
     </div>
   );
