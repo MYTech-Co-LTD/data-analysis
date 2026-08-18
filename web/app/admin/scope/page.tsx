@@ -1,18 +1,17 @@
 'use client';
 // web/app/admin/scope/page.tsx
-// 2026-08-18 门店范围显式授权 P3：「数据范围总览」——每人授权面三块同屏中文展示：
-//   常规范围（范围|xx）· 品牌/品类/字段 · 临时例外（temporary_grants，迁完后历史对照）
-//   + 体检项（悬空范围/零范围/单店/重名）。变更需用户重新登录生效（JWT 快照）。
+// 2026-08-18 门店范围显式授权 P3：「数据范围总览」——每人授权面中文展示：
+//   常规范围（范围|xx）· 品牌/品类/字段 · 企微组（仅目录对照）
+//   + 体检项（悬空范围/零范围/单店/重名）。例外体系已废除（2026-08-18）。变更需用户重新登录生效（JWT 快照）。
 import { useEffect, useState } from 'react';
 
 interface Row {
   user: string; display: string; disabled: boolean;
   legacyGroups: string[]; scope: string[]; brands: string[]; categories: string[]; fields: string[];
   scopePermissions: string[];
-  grants: Array<{ dim: string; value: string; expires_at: string; granted_by: string; note?: string }>;
 }
 interface Check { kind: string; user?: string; detail: string; level: 'warn' | 'info' }
-interface Data { rows: Row[]; checks: Check[]; meta: { users: number; scopePermissions: number; activeGrants: number; duplicateStoreNames: Array<{ name: string; count: number }> } }
+interface Data { rows: Row[]; checks: Check[]; meta: { users: number; scopePermissions: number; duplicateStoreNames: Array<{ name: string; count: number }> } }
 
 export default function ScopeOverviewPage() {
   const [data, setData] = useState<Data | null>(null);
@@ -38,7 +37,7 @@ export default function ScopeOverviewPage() {
       <div>
         <h1 className="text-lg font-semibold text-slate-800">数据范围总览</h1>
         <p className="mt-1 text-xs text-slate-400">
-          {data.meta.users} 人 · {data.meta.scopePermissions} 个范围 permission · 活跃例外 {data.meta.activeGrants} 条 ·
+          {data.meta.users} 人 · {data.meta.scopePermissions} 个范围 permission ·
           变更需用户<b className="text-amber-600"> 重新登录 </b>生效（JWT 快照）
         </p>
       </div>
@@ -70,8 +69,7 @@ export default function ScopeOverviewPage() {
               <th className="px-3 py-2 font-medium">用户</th>
               <th className="px-3 py-2 font-medium">门店范围</th>
               <th className="px-3 py-2 font-medium">品牌 / 品类 / 字段</th>
-              <th className="px-3 py-2 font-medium">临时例外</th>
-              <th className="px-3 py-2 font-medium">企微组（旧通道对照）</th>
+              <th className="px-3 py-2 font-medium">企微组（仅目录对照）</th>
             </tr>
           </thead>
           <tbody>
@@ -88,11 +86,6 @@ export default function ScopeOverviewPage() {
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-600">
                   {[...r.brands, ...r.categories, ...r.fields].join(' · ') || <span className="text-slate-300">—</span>}
-                </td>
-                <td className="px-3 py-2 text-xs text-amber-700">
-                  {r.grants.length ? r.grants.map((g, i) => (
-                    <div key={i}>{g.dim}:{g.value} · 至 {new Date(g.expires_at).toLocaleDateString('zh-CN')}（{g.granted_by}）</div>
-                  )) : <span className="text-slate-300">—</span>}
                 </td>
                 <td className="px-3 py-2 text-xs text-slate-400">{r.legacyGroups.join(' · ') || '—'}</td>
               </tr>

@@ -5,7 +5,7 @@
 //   触发器层（superuser/psql 直写兜底）           → {"code":"P0001","message":"data_permissions frozen (W5 写关闭, ...)"}
 import { NextResponse } from 'next/server';
 
-export const PERM_FROZEN_GUIDANCE = '四维授权已上收 Casdoor（W5 写关闭）；临时例外走「例外」tab';
+export const PERM_FROZEN_GUIDANCE = '四维授权与例外已上收/废除（W5 写关闭 + 197 例外废除）；门店范围 = 范围|X 资源，走 Casdoor';
 
 export function isPermFrozenError(errText: string): boolean {
   return /data_permissions frozen|permission denied for (table|relation) data_permissions/i.test(errText);

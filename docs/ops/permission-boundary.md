@@ -1,7 +1,7 @@
 # 权限职责边界：Casdoor 与本系统（data-analysis）
 
 > 成文 2026-08-16；同日按 IAM 标准化 spec（`docs/superpowers/specs/2026-08-16-platform-iam-standardization-design.md`，revision-2）更新为三分流边界。来源：权限页改造（`fix(permissions): 权限管理页对齐 Casdoor 职责边界`）+ 生产实探。
-> 一句话：**Casdoor 认人授职定范围（你是谁、什么职位、能不能进管理台、看哪些品牌/品类/门店）；本系统只留临时例外与执行（temporary_grants + 行/列过滤）。**
+> 一句话：**Casdoor 认人授职定范围（你是谁、什么职位、能不能进管理台、看哪些品牌/品类/门店）；本系统只执行（行/列过滤）。** 例外体系已废除（2026-08-18，temporary_grants 冻结）。
 > 权限体系配置（初始化/维护）：[permission-onboarding.md](./permission-onboarding.md)。
 
 ## 三层职责
@@ -13,7 +13,7 @@
 | **职位授权** | 谁担任 boss / zone_manager / manager / buyer / finance（`roles.id=1..5`） | Casdoor 角色归属 | 薄同步 → `org_users.role_id`（`role_source='auto'`；U2 后 role_codes 数组） |
 | **admin 门禁资格** | 谁能进 `/admin/*`（token `permissions: ["data-analysis:admin"]`） | Casdoor permission 挂人/挂角色 | middleware / `requireAdmin` 验签 + claim |
 | **能力点（功能资源）** | 看板/字段/门禁等 `data-analysis:*` 能力可配清单 | **catalog 单真相**（`web/lib/capability-catalog.ts` 代码派生）→ 同步进 Casdoor resource 表；Casdoor UI 勾选仅限 catalog ∪ `*` | scan 自动发现 + 部署钩子/cron 双通道同步 + 校验器 fail-close（architecture.md §6.4） |
-| **数据范围（三分流）** | 品牌/品类/字段 → Casdoor resource；**门店 → `范围\|X` 资源**（2026-08-18 演进，废除 Group 挂组推导）；临时例外 → `temporary_grants` RT 实查 | Casdoor（resource 判定 + `范围\|X` 资源挂 permission.resources）+ 本系统授权中心（例外表，带到期） | claims `data_scope`/`groups`/`fields` + 例外经 `pgrst_pre_request` 每请求并集（§6.5） |
+| **数据范围（二分流，2026-08-18 例外废除后）** | 品牌/品类/字段 → Casdoor resource；**门店 → `范围\|X` 资源**（2026-08-18 演进，废除 Group 挂组推导与例外体系） | Casdoor（resource 判定 + `范围\|X` 资源挂 permission.resources） | claims `data_scope`/`groups`/`fields` |
 | **角色默认数据范围**（legacy 双氧期） | 该职位默认能看哪些门店/品牌/品类/成本 | **本系统** `/admin/permissions` 角色 tab（`data_permissions.subject_type='role'`）——**W6 sunset 迁移中**（W5 DB 级写关闭 → W6 删表；目标态转 Casdoor resource/挂组） | `get_user_perms` 基底（W4 起消费侧切 data_scope） |
 | **部门级范围**（legacy 双氧期） | 某部门整体看哪些门店/成本 | **本系统** `/admin/permissions` 部门 tab（`subject_type='dept'`）——**W6 sunset 迁移中**（部门语义转 Group tree 挂组） | `get_user_perms` 基底（并集） |
 | **个人 override**（legacy 双氧期） | 覆盖默认（逐维 + 到期时间 + 备注）——**带到期者迁 temporary_grants 例外表，其余转 Casdoor** | **本系统** `/admin/permissions` 用户 tab → 单独授权（W6 sunset 迁移中） | `get_user_perms` 逐字段覆盖 |
@@ -27,8 +27,7 @@ Casdoor 职位 → org_users.role_codes 镜像（写穿，非真相源）
           品牌/品类/字段 = Casdoor resource 判定（data-analysis:brand:* / category:* / field:*）
           门店           = `范围|X` 资源（范围|全店 / 战区包名 / branch_number / 门店中文名
                             → expandScopeResources 展开 → branch_nums；2026-08-18 废除 Group 挂组推导）
-          临时例外       = temporary_grants RT 实查（5min 缓存；★不折叠进 claims，撤销 ≤5min 生效；
-                           经 pgrst_pre_request 每请求并集进专用 claim 段）
+          临时例外       = 已废除（2026-08-18：无例外通道，临时授权改用 `范围|X` 资源挂上到期摘除）
       → JWT claims：data_scope{brands, categories, branch_nums} + groups + fields + catalog_v
           ★空集 = deny：data_scope/groups 段存在但为空 = 授权确定为 ∅，禁止收敛 ["*"]
           （双氧期：顶层旧 key（brands/branch_nums/categories/can_see_cost）保留至 W6；
@@ -40,11 +39,11 @@ Casdoor 职位 → org_users.role_codes 镜像（写穿，非真相源）
 ```
 
 > 当前生产仍是 legacy 路径：`database/migrations/167_permission_consolidation.sql` 的 `get_user_perms`（角色∪部门基底 → 个人覆盖 → `*` 收敛）→ 顶层四维 claims → `claim_match_or_star`。W3 起新签发 claims 带 data_scope 新段、W4 消费侧切（策略分支）、W6 删旧 key——迁移窗口内新旧并存（双氧期）。
-门禁与数据范围**独立**：`data-analysis:admin` 只管「能不能进管理台」，不替数据范围；数据范围目标态三分流（Casdoor resource / `范围|X` 门店资源 + 本系统例外表）。
+门禁与数据范围**独立**：`data-analysis:admin` 只管「能不能进管理台」，不替数据范围；数据范围目标态二分流（Casdoor resource / `范围|X` 门店资源，无例外通道）。
 
 ## 实操：加人 → 授职 → 划范围
 
-> 迁移态提示（2026-08-16，2026-08-18 更新）：下表「本系统 `/admin/permissions` 配数据范围」三行为 **legacy 双氧期操作**——目标态：门店范围 → **Casdoor `范围|X` 资源挂 permission.resources**（2026-08-18 演进，废除 Group 挂组推导）；带到期临时授权 → 授权中心例外 tab（temporary_grants）；`data_permissions` W6 删表。迁移完成前按现状操作。
+> 迁移态提示（2026-08-16，2026-08-18 更新）：下表「本系统 `/admin/permissions` 配数据范围」三行为 **legacy 双氧期操作**——目标态：门店范围 → **Casdoor `范围|X` 资源挂 permission.resources**（2026-08-18 演进，废除 Group 挂组推导与例外体系，临时授权改用 `范围|X` 资源）；`data_permissions` W6 删表。迁移完成前按现状操作。
 
 | 动作 | 去哪个系统 | 具体步骤 |
 |---|---|---|
@@ -62,7 +61,7 @@ Casdoor 职位 → org_users.role_codes 镜像（写穿，非真相源）
 
 - **改某人的职位** → Casdoor（「谁在什么职位」）。
 - **改该职位的默认数据范围** → 本系统角色 tab（「这个职位能看什么」，legacy 双氧期；目标态品牌/品类随 resource、**门店范围随 `范围|X` 资源**走 Casdoor）。两者绑定顺序：先有职位，角色行默认范围才生效。
-- **门店范围（目标态）≠ 品牌品类范围**：门店 = **Casdoor `范围|X` 资源**（`范围|全店`/战区包名/`branch_number`/门店中文名，挂 permission.resources，2026-08-18 废除 Group 挂组推导）；品牌/品类/字段 = Casdoor resource 勾选。临时例外（带到期）= 本系统例外表 RT 实查（**不折叠进 claims**，撤销 ≤5min 生效）。
+- **门店范围（目标态）≠ 品牌品类范围**：门店 = **Casdoor `范围|X` 资源**（`范围|全店`/战区包名/`branch_number`/门店中文名，挂 permission.resources，2026-08-18 废除 Group 挂组推导）；品牌/品类/字段 = Casdoor resource 勾选。**例外体系已废除（2026-08-18）**——临时授权直接改 `范围|X` 资源（挂上到期摘除），无独立例外通道。
 - **admin 门禁 ≠ 数据权限**：manager 也能被授 admin（能进管理台），但数据范围由三分流合成决定。
 - **页面体验**：用户/角色/部门 tab 的职位列均为只读（U1 起冻结），带「Casdoor 管理端」外链；本系统不写 `role_id`（PUT /users 对 role 字段返回 409）。
 

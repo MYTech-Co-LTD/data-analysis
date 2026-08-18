@@ -108,7 +108,7 @@ export function classifyCatalogReconcile({
 
   // M-orphan-permission（2026-08-18）：启用中的 permission 未挂任何角色也未直挂用户
   //   → 授予不了任何人（静默无效果，纯误导配置）——提示级不算红（fail 方向安全），页面单列展示。
-  //   直挂用户（permission.users）是合法形态（例外/测试），不算孤儿。
+  //   直挂用户（permission.users）是合法形态（测试/临时挂载），不算孤儿（例外体系已废除 2026-08-18）。
   for (const p of permissions) {
     if (p.isEnabled === false) continue;
     const roleCnt = Array.isArray(p.roles) ? p.roles.length : 0;
