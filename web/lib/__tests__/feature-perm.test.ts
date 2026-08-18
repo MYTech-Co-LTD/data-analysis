@@ -2,7 +2,7 @@
 // checkFeaturePerm 单模块（plan Task 3 Step 1，spec §6.2）：
 // claims 命中 true / BREAKGLASS 命中 true+审计 / 双无 false。
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { checkFeaturePerm, hasBoardPerm, hasKpiPerm, buildPermPool } from '../feature-perm';
+import { checkFeaturePerm, hasBoardPerm, hasKpiPerm, hasGatePerm, buildPermPool } from '../feature-perm';
 
 afterEach(() => {
   delete process.env.BREAKGLASS_ADMINS;
@@ -115,5 +115,24 @@ describe('buildPermPool 全量通俗名归一 + 覆盖视图注入（方案 C �
     // （hasBoardPerm 本身看 view-board 命名空间；覆盖注入在 buildPermPool 层，供 resolveViewKey 复用）
     const pool = buildPermPool(['看板|门店战区']);
     expect(pool.has('data-analysis:view:report_region_breakdown_gen')).toBe(true);
+  });
+});
+
+describe('hasGatePerm — 报表中心页面门禁（2026-08-18 方案 A）', () => {
+  it('具名 gate key 命中 → true', () => {
+    expect(hasGatePerm(['data-analysis:gate:reports-center', 'data-analysis:view:reports'], 'data-analysis:gate:reports-center')).toBe(true);
+  });
+
+  it('门禁通俗名「门禁|报表中心」→ 映射反查命中 → true', () => {
+    expect(hasGatePerm(['门禁|报表中心'], 'data-analysis:gate:reports-center')).toBe(true);
+  });
+
+  it('只有 经营总览(view:reports) 无门禁 → false（视图不再单独解锁页面）', () => {
+    expect(hasGatePerm(['data-analysis:view:reports', 'data-analysis:view:reports-targets'], 'data-analysis:gate:reports-center')).toBe(false);
+  });
+
+  it('空/未定义 → fail-close false（middleware 场景）', () => {
+    expect(hasGatePerm(undefined, 'data-analysis:gate:reports-center')).toBe(false);
+    expect(hasGatePerm([], 'data-analysis:gate:reports-center')).toBe(false);
   });
 });
