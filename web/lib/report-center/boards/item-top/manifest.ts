@@ -14,7 +14,12 @@ import { ItemTopBoard } from "./desktop";
 export const itemTopBoard: BoardManifest<ItemBreakdownResult> = {
   id: "item-top",
   serverGet: async (targetId, opts) => {
-    const r = await getItemBreakdownTop(targetId, opts.closed);
+    // 宿主透传的周期（BoardCtx 扩展键）——避开 targets 表的 branch RLS（门店用户看不到 ALL 目标）
+    const dates = {
+      startDate: typeof opts.startDate === "string" ? opts.startDate : undefined,
+      endDate: typeof opts.endDate === "string" ? opts.endDate : undefined,
+    };
+    const r = await getItemBreakdownTop(targetId, opts.closed, dates);
     return { rows: [r], status: r.status, error: r.error };
   },
   Desktop: ItemTopBoard,

@@ -112,7 +112,15 @@ export default async function TargetDashboard({
   // F1.2: Promise.allSettled + GetterResult——单 getter 失败不挂整页。
   // 各板块 serverGet 内部已 catch（返 status:'error'），allSettled 是双保险。
   const results = await Promise.allSettled(
-    visibleBoards.map((board) => board.serverGet(targetId, { closed })),
+    visibleBoards.map((board) =>
+      // 透传目标周期（t 来自 RLS 可见的报表视图）：item-top 等 getter 不再直查 targets 底表，
+      // 避免门店权限用户被 targets 的 branch RLS 挡掉 ALL 目标（PGRST116 → 整板加载失败）。
+      board.serverGet(targetId, {
+        closed,
+        startDate: t.start_date,
+        endDate: t.end_date,
+      }),
+    ),
   );
   const outcome = (i: number) =>
     results[i].status === "fulfilled" ? results[i].value : errResult();
