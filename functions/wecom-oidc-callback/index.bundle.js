@@ -133,7 +133,7 @@ var require_claims = __commonJS({
       }
       return FRIENDLY_TO_KEY[value] ?? value;
     }
-    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE, matchRolePermissions };
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE, matchRolePermissions: matchRolePermissions2 };
     function resolveGroupBranches2(groupPaths, maps, knownDepts) {
       const deptSet = knownDepts instanceof Set ? knownDepts : null;
       const results = /* @__PURE__ */ new Set();
@@ -202,7 +202,7 @@ var require_claims = __commonJS({
       const covered = uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
       return covered ? ["*"] : [...uniq].sort();
     }
-    function matchRolePermissions(perms, myRoleCodes) {
+    function matchRolePermissions2(perms, myRoleCodes) {
       const mine = new Set((myRoleCodes ?? []).map((r) => String(r)));
       const out = /* @__PURE__ */ new Set();
       for (const p of perms ?? []) {
@@ -219,7 +219,7 @@ var require_claims = __commonJS({
 // functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
-var { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, normalizeFriendlyPerm } = require_claims();
+var { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions } = require_claims();
 function decodeJwtPayload(token) {
   try {
     const part = String(token).split(".")[1];
@@ -232,25 +232,25 @@ function decodeJwtPayload(token) {
     return null;
   }
 }
-async function fetchAllObjects(issuer, accessToken, userId) {
+async function fetchRolePermissions(issuer, accessToken, owner, roleCodes) {
   try {
-    const q = userId ? `?userId=${encodeURIComponent(userId)}` : "";
-    const res = await fetch(`${issuer}/api/get-all-objects${q}`, {
+    const res = await fetch(`${issuer}/api/get-permissions?owner=${encodeURIComponent(owner)}`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     if (!res.ok) {
       console.error(
-        "wecom-oidc-callback: get-all-objects http",
+        "wecom-oidc-callback: get-permissions http",
         res.status,
         (await res.text().catch(() => "")).slice(0, 200)
       );
       return null;
     }
     const data = await res.json();
-    const arr = data && data.data;
-    return Array.isArray(arr) ? arr.filter((k) => typeof k === "string") : null;
+    const perms = Array.isArray(data) ? data : data && Array.isArray(data.data) ? data.data : null;
+    if (!perms) return null;
+    return matchRolePermissions(perms, roleCodes);
   } catch (e) {
-    console.error("wecom-oidc-callback: get-all-objects failed", e);
+    console.error("wecom-oidc-callback: get-permissions failed", e);
     return null;
   }
 }
@@ -439,8 +439,8 @@ module.exports = async function(req) {
       console.error("wecom-oidc-callback: groups claim missing, login denied (C2)");
       return json({ error: "group_claim_missing_login_denied" }, 503);
     }
-    const casdoorUserId = tokenPayload.owner && tokenPayload.name ? `${tokenPayload.owner}/${tokenPayload.name}` : tokenPayload.sub;
-    const reachable = await fetchAllObjects(issuer, accessToken, casdoorUserId);
+    const casdoorOwner = tokenPayload.owner || "shanhai";
+    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles);
     const branchKeys = (reachable ?? []).map((k) => normalizeFriendlyPerm(k)).filter((k) => typeof k === "string" && k.startsWith("data-analysis:branch:")).map((k) => k.slice("data-analysis:branch:".length));
     const expandResult = branchKeys.length > 0 ? await expandScopeResources(branchKeys, pgrstUrl) : await expandGroupsToBranches(oidcGroups, pgrstUrl);
     console.log(

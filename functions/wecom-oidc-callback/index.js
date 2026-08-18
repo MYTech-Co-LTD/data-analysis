@@ -12,7 +12,7 @@
 //
 // W3 / Task 11（spec §5.4）：claims 构建提为 claims.js 纯函数 buildClaims(ctx)，本文件只做三段组装：
 //   ① 原生 token groups（useGroupPathInToken 全路径 claim，F4——Casdoor 无用户组查询路由，组信息只从 token 读）
-//   ② get-all-objects 可达对象（policy 侧，F11——与 get-resources 注册表语义区分）
+//   ② get-permissions 角色链可达对象（2026-08-18 三层模型强制：只认 permission.roles 命中用户角色的 resources，直挂/groups 挂载排除）
 //   ③ 门店叶子展开（Task 9 三态逻辑内联，HTTP 读 maps_branch_group，H12 只读映射表不内嵌 catalog）
 //   三段任一失败 → buildClaims 返回 null → 503 整体失败（C2 fail-close，禁半截 claims）。
 //   claims 新增 groups/data_scope{brands,categories,branch_nums}/fields{cost}/catalog_v；
@@ -23,7 +23,7 @@
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { corsHeaders, json } = require("../_shared/cors");
-const { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, normalizeFriendlyPerm } = require("./claims");
+const { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions } = require("./claims");
 
 // JWT payload 解码（不验签——token 已由 Casdoor 签发且经 client_secret 换取，此处只读 claims；
 // access_token 非 JWT 形态时返回 null，调用方按 C2 处理）。
@@ -42,27 +42,27 @@ function decodeJwtPayload(token) {
   }
 }
 
-// ② get-all-objects（F11：policy 侧可达对象，owner 任意 permission 的 casbin objects 并集）。
-//    userId 要求 owner/name 双段格式（如 "shanhai/ZhangDuo"，上游 GetOwnerAndNameFromId 按 "/" 切 2 段）；
-//    JWT 的 sub 只是 user.Id 列（本部署库为裸名，直传报 wrong token count → data=null），
-//    由调用方从 token 的 owner/name claims 构造，缺失时回退 sub（老格式兼容）。
-//    返回 string[]；任何失败返回 null（由 buildClaims 判 C2 → 503）。
-async function fetchAllObjects(issuer, accessToken, userId) {
+// ②' 角色链可达对象（2026-08-18 三层模型强制）：只取 permission.roles 命中用户角色码的 permission resources。
+//    get-permissions?owner= 全量（每项含 roles/users/groups/resources）；permission.users 直挂（roles=[]）
+//    与 permission.groups 挂载天然匹配不上 → 排除——不管直挂从 Casdoor UI / API / 脚本写入都不生效。
+//    输入 owner = token owner claim（'shanhai'），roleCodes = 登录时 userinfo roles claim（裸名，index.js 2b 提取）。
+//    失败/非数组 → null（由 buildClaims 判 C2 → 503）；空集（有角色但权限 roles 全不命中）→ []（B1 deny 载体）。
+async function fetchRolePermissions(issuer, accessToken, owner, roleCodes) {
   try {
-    const q = userId ? `?userId=${encodeURIComponent(userId)}` : "";
-    const res = await fetch(`${issuer}/api/get-all-objects${q}`, {
+    const res = await fetch(`${issuer}/api/get-permissions?owner=${encodeURIComponent(owner)}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) {
-      console.error("wecom-oidc-callback: get-all-objects http", res.status,
+      console.error("wecom-oidc-callback: get-permissions http", res.status,
         (await res.text().catch(() => "")).slice(0, 200));
       return null;
     }
     const data = await res.json();
-    const arr = data && data.data;
-    return Array.isArray(arr) ? arr.filter((k) => typeof k === "string") : null;
+    const perms = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : null);
+    if (!perms) return null;
+    return matchRolePermissions(perms, roleCodes);
   } catch (e) {
-    console.error("wecom-oidc-callback: get-all-objects failed", e);
+    console.error("wecom-oidc-callback: get-permissions failed", e);
     return null;
   }
 }
@@ -305,12 +305,10 @@ module.exports = async function (req) {
       return json({ error: "group_claim_missing_login_denied" }, 503);
     }
 
-    // ② get-all-objects 可达对象（F11）
-    // 不能直传 sub：该 API 要求 owner/name 双段，sub 是裸 user.Id → wrong token count → data=null → 503
-    const casdoorUserId = tokenPayload.owner && tokenPayload.name
-      ? `${tokenPayload.owner}/${tokenPayload.name}`
-      : tokenPayload.sub;
-    const reachable = await fetchAllObjects(issuer, accessToken, casdoorUserId);
+    // ②' 角色链可达对象（2026-08-18 三层模型强制）：只认 permission.roles 命中用户角色码的资源。
+    //    owner 取 token owner claim（构造双段 userId 的同源）；roleCodes = userinfo roles claim（2b 已提取）。
+    const casdoorOwner = tokenPayload.owner || "shanhai";
+    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles);
 
     // ③ 门店叶子展开（Task 9 三态内联）——双读（2026-08-18 门店范围显式授权）：
     //    用户在 Casdoor 挂有任一 data-analysis:branch:* 资源 → 走范围资源展开（新通道）；

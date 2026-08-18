@@ -276,4 +276,17 @@ eq(matchRolePermissions([], ['manager']), [], '全量空 → 空数组');
 eq(matchRolePermissions(permsRole, []), [], '无角色 → 空数组（无角色即无授权）');
 eq(matchRolePermissions(undefined, ['manager']), [], 'undefined 入参防御 → 空数组');
 
+// 跨 permission resources 去重：两个不同 permission 命中同一角色且 resources 有重复 key 时，返回去重后的并集
+const permsDup = [
+  { name: 'role-a', roles: ['shanhai/manager'], users: [], resources: ['data-analysis:view:reports', 'push:broadcast'] },
+  { name: 'role-b', roles: ['shanhai/manager'], users: [], resources: ['data-analysis:view:reports', 'data-analysis:admin'] },
+];
+eq(matchRolePermissions(permsDup, ['manager']), ['data-analysis:view:reports', 'push:broadcast', 'data-analysis:admin'], '跨 permission 命中同角色 → resources 并集去重');
+
+// 数字角色码 String 归一：permission.roles 与用户角色码是数字（String 形态）也能命中
+const permsNum = [
+  { name: 'role-num', roles: ['shanhai/12345'], users: [], resources: ['push:broadcast'] },
+];
+eq(matchRolePermissions(permsNum, [12345]), ['push:broadcast'], '数字角色码 String 归一命中');
+
 console.log('matchRolePermissions assertions passed');
