@@ -1322,6 +1322,8 @@ spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.m
 
 **生成器新能力**（§10.10）：`dim_grain`（actual CTE 粒度变换，支持商品级从品牌×商品聚合到 item_code 全品牌合并）/ `carry_cols`（携带原表列如 `item_name`/`category_name`，免去额外 JOIN）/ `extra_join`（补 LEFT JOIN 如 `dim_item` 取 `top_category`）/ `source_override`（覆盖 metric_sources 默认表名，支持 wholesale 客户视图切 `report_daily_wholesale_customer`）。**3 板块走 2 视图 + 2 RPC**：`report_item_breakdown_gen`（含 `sale_amount`+`outbound_amount`+`top_category`+`item_brand` 等携带列）+ `report_wholesale_customer_gen`（3120 客户排行）+ `get_item_top_by_day`/`get_item_detail` 2 RPC（迁移 141/142）。迁移 143 调 `report_item_breakdown_gen` 的 outbound 口径 `depends_on` 对齐（与 `outbound_amt` 同源）。**预取策略**：`page.tsx` 的 `Promise.all` 加 `getItemBreakdownTop` + `getItemOutboundListPage(targetId, 1, {})` + `getWholesaleCustomer`，首屏 SSR 同步出 3 板块；日榜切换/列表翻页/弹层走 client fetch。
 
+**RPC 权限约束（2026-08-18 漏洞修复，迁移 198）**：`get_item_top_by_day`/`get_item_detail` 是**手写 SECURITY DEFINER RPC**（非生成器产物，不含生成器模板的 perm 过滤注入）——SECURITY DEFINER 以 owner(postgres) 身份执行会绕过基表 `report_rls_brand` 行级策略。函数体必须自带品牌维过滤 `scope_match_v2('brands', system_book_code)`（迁移 198 加）与成本掩码 `can_cost_visible()`（197 后标准读法，取代旧 `request.jwt.claims.can_see_cost` 顶层 key——已废弃恒 false 误掩）。口径约束与月榜视图 `report_item_breakdown_gen`（生成器产物，基表 RLS 自动生效）保持一致：**品牌粒度数据授权单位是「品牌」非「门店」，brands 授权才可见**。
+
 **供应链出库层级报表 + 外部批发客户日报（2026-08-02，date grain 架构扩展）**：
 
 2 新看板挂目标详情页（PC + 移动）：
