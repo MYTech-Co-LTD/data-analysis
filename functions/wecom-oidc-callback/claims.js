@@ -70,9 +70,8 @@ module.exports = { buildClaims, collapseFullStore, resolveScopeKeys };
 // ⚠ 保持同步：新增/改名能力必须同步这里 + capability-catalog.ts + capability-board.ts + claims.test.js 断言。
 // ⚠ 通配（view-board:* / view-kpi:* / * / push:*）恒为 key 形态，不入此表。
 const FRIENDLY_TO_KEY = {
-  // 页面级报表视图（方案 C 保留的 2 个）+ 具名资源
-  '看板|经营总览': 'data-analysis:view:reports',
-  '看板|目标达成': 'data-analysis:view:reports-targets',
+  // 2026-08-18 方案 A：view:reports（经营总览）/view:reports-targets（目标达成）已删——
+  // 报表中心入口由 gate:reports-center 单一把关，不再映射这两个 view。
   '品牌|熊喵鲜生': 'data-analysis:brand:3120',
   '品牌|品品甜': 'data-analysis:brand:64188',
   '品类|水果': 'data-analysis:category:水果',

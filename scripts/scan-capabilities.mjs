@@ -52,7 +52,7 @@ export function viewConfigNames() {
 // 排除：admin（走门禁不入 catalog，plan Task2 测试钉死）、api、auth/login/help/debug/clear-cache
 // （工具/认证页非能力视图）、`_` 前缀（私有布局段）、`[` 动态段。
 // 兼容路由组形态（plan 假设的 (app)/(pc)，现仓库无）：括号目录下钻一层取子目录。
-const ROUTE_EXCLUDE = new Set(['admin', 'api', 'auth', 'login', 'help', 'debug', 'clear-cache']);
+const ROUTE_EXCLUDE = new Set(['admin', 'api', 'auth', 'login', 'help', 'debug', 'clear-cache', 'reports']);
 export function appRouteDirs() {
   if (!existsSync(APP_DIR)) return [];
   const out = [];

@@ -15,14 +15,8 @@ describe('capability-catalog 单真相', () => {
   it('DEPRECATED 与 CATALOG 不相交（废弃即不在册）', () => {
     for (const d of DEPRECATED_KEYS) expect(CATALOG_KEYS.has(d)).toBe(false);
   });
-  it('VIEW_GROUPS 成员必须 ∈ CATALOG 且禁含通配', () => {
-    for (const [g, def] of Object.entries(VIEW_GROUPS)) {
-      expect(CATALOG_KEYS.has(g)).toBe(true); // 组名自身也是 resource
-      for (const m of def.members) {
-        expect(m.includes('*'), `${g} 成员禁通配: ${m}`).toBe(false);
-        expect(CATALOG_KEYS.has(m), `${g} 成员不在册: ${m}`).toBe(true);
-      }
-    }
+  it('VIEW_GROUPS 已清空（2026-08-18 方案 A：view-group 机制随 view:reports/目标达成删除）', () => {
+    expect(Object.keys(VIEW_GROUPS)).toHaveLength(0);
   });
   it('种子含 admin 门禁与 cost 字段', () => {
     expect(CATALOG_KEYS.has('data-analysis:admin')).toBe(true);
@@ -70,9 +64,10 @@ describe('capability-catalog 单真相', () => {
     }
   });
 
-  it('保留页面级 view 门禁（middleware 消费）+ 全部具名能力带中文通俗名', () => {
-    expect(CATALOG_KEYS.has('data-analysis:view:reports')).toBe(true);
-    expect(CATALOG_KEYS.has('data-analysis:view:reports-targets')).toBe(true);
+  it('2026-08-18 方案 A：view:reports/view:reports-targets 已删，报表中心入口归 gate', () => {
+    expect(CATALOG_KEYS.has('data-analysis:view:reports')).toBe(false);
+    expect(CATALOG_KEYS.has('data-analysis:view:reports-targets')).toBe(false);
+    expect(CATALOG_KEYS.has('data-analysis:gate:reports-center')).toBe(true);  // 门禁普通能力入册
     // 保留的具名能力（非通配）label 不得为英文 slug
     for (const e of capabilityCatalog) {
       if (e.key.startsWith('data-analysis:view:') && !e.key.endsWith(':*')) {
@@ -81,13 +76,11 @@ describe('capability-catalog 单真相', () => {
     }
   });
 
-  it('VIEW_GROUPS 成员已收敛（退役成员摘除）', () => {
-    const members = Object.values(VIEW_GROUPS).flatMap((g) => g.members);
-    expect(members).toContain('data-analysis:view:reports');
-    expect(members).toContain('data-analysis:view:reports-targets');
-    expect(members).not.toContain('data-analysis:view:reports-items');
-    expect(members).not.toContain('data-analysis:view:wholesale-customers');
-    for (const m of members) expect(CATALOG_KEYS.has(m), `${m} 不在册`).toBe(true);
+  it('VIEW_GROUPS 无残留成员（方案 A 全量清空：无 view-group 成员引用）', () => {
+    const members = (Object.values(VIEW_GROUPS) as Array<{ members: string[] }>).flatMap((g) => g.members);
+    expect(members).toEqual([]);
+    expect(members).not.toContain('data-analysis:view:reports');
+    expect(members).not.toContain('data-analysis:view:reports-targets');
   });
 
   it('通俗名全局唯一（Casdoor resource name 主键 + BY_NAME 反查）', () => {
@@ -96,9 +89,7 @@ describe('capability-catalog 单真相', () => {
   });
 
   it('KEY_TO_LABEL / LABEL_TO_KEY 双向映射一致（全量归一查找表）', () => {
-    expect(KEY_TO_LABEL.get('data-analysis:view:reports')).toBe('经营总览');
     expect(KEY_TO_LABEL.get('data-analysis:brand:3120')).toBe('熊喵鲜生');
-    expect(LABEL_TO_KEY.get('经营总览')).toBe('data-analysis:view:reports');
     expect(LABEL_TO_KEY.get('熊喵鲜生')).toBe('data-analysis:brand:3120');
     expect(LABEL_TO_KEY.get('品牌×指标')).toBe('data-analysis:view-board:brand'); // 看板通俗名入册
     expect(LABEL_TO_KEY.get('门店零售')).toBe('data-analysis:view-kpi:sale'); // KPI 通俗名入册
@@ -116,14 +107,12 @@ describe('casdoor 展示名（组|label）', () => {
     }
   });
   it('有 label → 组|label；group 来自 merged 后的最终值', () => {
-    expect(KEY_TO_DISPLAY_NAME.get('data-analysis:view:reports')).toBe('看板|经营总览');
     expect(KEY_TO_DISPLAY_NAME.get('data-analysis:brand:3120')).toBe('品牌|熊喵鲜生');
     expect(KEY_TO_DISPLAY_NAME.get('data-analysis:admin')).toBe('门禁|管理台');
     expect(KEY_TO_DISPLAY_NAME.get('data-analysis:view-board:brand')).toBe('看板|品牌×指标');
     expect(KEY_TO_DISPLAY_NAME.get('data-analysis:view-kpi:sale')).toBe('看板|门店零售');
   });
   it('DISPLAY_NAME_TO_KEY 双向一致（全量反查）', () => {
-    expect(DISPLAY_NAME_TO_KEY.get('看板|经营总览')).toBe('data-analysis:view:reports');
     expect(DISPLAY_NAME_TO_KEY.get('品牌|熊喵鲜生')).toBe('data-analysis:brand:3120');
     expect(DISPLAY_NAME_TO_KEY.get('看板|品牌×指标')).toBe('data-analysis:view-board:brand');
     expect(DISPLAY_NAME_TO_KEY.get('看板|门店零售')).toBe('data-analysis:view-kpi:sale');
@@ -133,7 +122,6 @@ describe('casdoor 展示名（组|label）', () => {
     expect(new Set(names).size).toBe(names.length);
   });
   it('displayNameFor 单 key 查询', () => {
-    expect(displayNameFor('data-analysis:view:reports')).toBe('看板|经营总览');
     expect(displayNameFor('data-analysis:brand:3120')).toBe('品牌|熊喵鲜生');
   });
 });

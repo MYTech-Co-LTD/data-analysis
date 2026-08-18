@@ -4,6 +4,5 @@
 export const GENERATED_CATALOG: readonly {
   key: string; group: string; label: string; source: 'auto';
 }[] = Object.freeze([
-  { key: 'data-analysis:view:reports', group: '看板', label: 'reports', source: 'auto' },
-  { key: 'data-analysis:view:reports-targets', group: '看板', label: 'reports-targets', source: 'auto' },
+
 ]);

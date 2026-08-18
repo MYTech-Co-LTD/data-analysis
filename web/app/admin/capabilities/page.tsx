@@ -153,7 +153,7 @@ export default function CapabilitiesPage() {
         <span>
           能力点 catalog 单真相 = <code className="text-xs">web/lib/capability-catalog(-.generated).ts</code>；
           新增视图/路由由 scan 自动发现（本页只读）。查看本页即触发 resource 差集自愈（add-resource 幂等只补缺）。
-          <b className="block mt-1">授权操作</b>：Casdoor 建/改 permission → Resource type 选 <b>Custom</b> → Resources 框粘贴下表「授权名」（点击即复制，如 <code className="text-xs mx-1">看板|经营总览</code>）→ 保存后用户重新登录生效。资源留空/选 <code className="text-xs">*</code> 会进红区 E-global-wildcard（判定层已去特权，但仍须改勾具体资源）。
+          <b className="block mt-1">授权操作</b>：Casdoor 建/改 permission → Resource type 选 <b>Custom</b> → Resources 框粘贴下表「授权名」（点击即复制，如 <code className="text-xs mx-1">门禁|报表中心</code>）→ 保存后用户重新登录生效。资源留空/选 <code className="text-xs">*</code> 会进红区 E-global-wildcard（判定层已去特权，但仍须改勾具体资源）。
         </span>
       </div>
       {error && <div className="mb-3 text-sm text-red-600">{error}</div>}

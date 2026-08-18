@@ -7,13 +7,13 @@ import { describe, it, expect } from 'vitest';
 import { classifyCatalogReconcile } from '../reconcile-catalog';
 import { CATALOG_KEYS } from '../capability-catalog';
 
-const CATALOG = new Set(['data-analysis:view:reports', 'data-analysis:field:cost', 'data-analysis:admin']);
+const CATALOG = new Set(['data-analysis:view-board:brand', 'data-analysis:field:cost', 'data-analysis:admin']);
 const DEPRECATED = new Set<string>([]);
 
 describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注入）', () => {
   it('permission 引用未知 key → E-unknown-key 红（反向发现）', () => {
     const d = classifyCatalogReconcile({
-      permissions: [{ name: 'p1', resources: ['data-analysis:view:reports', 'data-analysis:view:ghost'] }],
+      permissions: [{ name: 'p1', resources: ['data-analysis:view-board:brand', 'data-analysis:view:ghost'] }],
       catalog: CATALOG, deprecated: DEPRECATED,
     });
     expect(d.red.length).toBe(1);
@@ -24,7 +24,7 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
 
   it('catalog 内 key 未被引用 → M-unreferenced 提示（不算红）', () => {
     const d = classifyCatalogReconcile({
-      permissions: [{ name: 'p1', resources: ['data-analysis:view:reports'], roles: ['shanhai/manager'], users: [] }],
+      permissions: [{ name: 'p1', resources: ['data-analysis:view-board:brand'], roles: ['shanhai/manager'], users: [] }],
       catalog: CATALOG, deprecated: DEPRECATED,
     });
     expect(d.red.length).toBe(0);
@@ -36,10 +36,10 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
   it('孤儿 permission（未挂角色未直挂用户）→ M-orphan-permission 提示（2026-08-18）', () => {
     const d = classifyCatalogReconcile({
       permissions: [
-        { name: 'p-orphan', resources: ['data-analysis:view:reports'], roles: [], users: [] },
+        { name: 'p-orphan', resources: ['data-analysis:view-board:brand'], roles: [], users: [] },
         { name: 'p-role', resources: ['data-analysis:field:cost'], roles: ['shanhai/boss'], users: [] },
         { name: 'p-user', resources: ['data-analysis:admin'], roles: [], users: ['shanhai/ZhangDuo'] },
-        { name: 'p-off', resources: ['data-analysis:view:reports'], roles: [], users: [], isEnabled: false },
+        { name: 'p-off', resources: ['data-analysis:view-board:brand'], roles: [], users: [], isEnabled: false },
       ],
       catalog: CATALOG, deprecated: DEPRECATED,
     });
@@ -67,7 +67,7 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
     const d = classifyCatalogReconcile({
       permissions: [
         { name: '测试', resources: ['*'] },
-        { name: 'p-ok', resources: ['data-analysis:view:reports'] },
+        { name: 'p-ok', resources: ['data-analysis:view-board:brand'] },
       ],
       catalog: CATALOG, deprecated: new Set(['data-analysis:view:gone']),
     });
@@ -80,7 +80,7 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
 
   it('废弃 key 无任何持有者 → 不算红（驱逐判据之一：红区清零）', () => {
     const d = classifyCatalogReconcile({
-      permissions: [{ name: 'p1', resources: ['data-analysis:view:reports'] }],
+      permissions: [{ name: 'p1', resources: ['data-analysis:view-board:brand'] }],
       catalog: CATALOG, deprecated: new Set(['data-analysis:view:gone']),
     });
     expect(d.red.length).toBe(0);
@@ -117,21 +117,21 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
 
   it('get-resources 怪癖防御：resources 名带 "/" 前缀不漏判（H3）', () => {
     const d = classifyCatalogReconcile({
-      permissions: [{ name: 'p1', resources: ['/data-analysis:view:reports'], roles: ['shanhai/manager'] }],
+      permissions: [{ name: 'p1', resources: ['/data-analysis:view-board:brand'], roles: ['shanhai/manager'] }],
       catalog: CATALOG, deprecated: DEPRECATED,
     });
-    expect(d.red.length).toBe(0);   // "/data-analysis:view:reports" 归一后命中 catalog，不算未知
+    expect(d.red.length).toBe(0);   // "/data-analysis:view-board:brand" 归一后命中 catalog，不算未知
     expect(d.minor.length).toBe(2); // field:cost / admin 未引用
   });
 
   it('方案C：permission.resources 含组|label（Casdoor 下拉选中）→ 归一回 key 不误报 E-unknown', () => {
     const d = classifyCatalogReconcile({
-      permissions: [{ name: 'p1', resources: ['看板|经营总览', '字段|成本可见'] }],
+      permissions: [{ name: 'p1', resources: ['看板|品牌×指标', '字段|成本可见'] }],
       catalog: CATALOG, deprecated: DEPRECATED,
     });
-    expect(d.red.length).toBe(0);   // 「看板|经营总览」→ view:reports、「字段|成本可见」→ field:cost 均命中
+    expect(d.red.length).toBe(0);   // 「看板|品牌×指标」→ view-board:brand、「字段|成本可见」→ field:cost 均命中
     const minorKeys = d.minor.map((m) => m.key);
-    expect(minorKeys).not.toContain('data-analysis:view:reports');
+    expect(minorKeys).not.toContain('data-analysis:view-board:brand');
     expect(minorKeys).not.toContain('data-analysis:field:cost');
     expect(minorKeys).toContain('data-analysis:admin');   // 只有 admin 未引用
   });

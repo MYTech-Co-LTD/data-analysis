@@ -74,9 +74,7 @@ const { normalizeFriendlyPerm, FRIENDLY_TO_KEY, BOARD_VIEW_COVERAGE } = require(
 
 // 1. 23 个通俗名全部映射到正确 key（与 capability-catalog.ts + capability-board.ts 单真相同步）
 const friendly = {
-  // catalog 具名 10（页面级 + 品牌/品类/字段/管理台/组）
-  '看板|经营总览': 'data-analysis:view:reports',
-  '看板|目标达成': 'data-analysis:view:reports-targets',
+  // catalog 具名（品牌/品类/字段/管理台/组）；2026-08-18 方案 A：view:reports（经营总览）/view:reports-targets（目标达成）已删
   '品牌|熊喵鲜生': 'data-analysis:brand:3120',
   '品牌|品品甜': 'data-analysis:brand:64188',
   '品类|水果': 'data-analysis:category:水果',
@@ -105,7 +103,7 @@ for (const [f, key] of Object.entries(friendly)) {
   eq(normalizeFriendlyPerm(f), key, `通俗名归一：${f} → ${key}`);
 }
 // 23 条映射全部断言过（防漏同步）
-eq(Object.keys(FRIENDLY_TO_KEY).length, 23, 'FRIENDLY_TO_KEY 恰 23 条（10 catalog + 7 看板 + 6 KPI）');
+eq(Object.keys(FRIENDLY_TO_KEY).length, 21, 'FRIENDLY_TO_KEY 恰 21 条（8 catalog + 7 看板 + 6 KPI；2026-08-18 方案 A 删 经营总览/目标达成）');
 
 // 2. 未命中的值原样返回（key / 通配 / push 裸 key / 未知串都不动）
 eq(normalizeFriendlyPerm('data-analysis:view-board:*'), 'data-analysis:view-board:*', '通配原样透传');

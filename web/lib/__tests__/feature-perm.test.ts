@@ -78,14 +78,14 @@ describe('hasBoardPerm / hasKpiPerm（看板/KPI 卡片级能力）', () => {
 });
 
 describe('buildPermPool 全量通俗名归一 + 覆盖视图注入（方案 C 统一视图/看板）', () => {
-  it('通俗名 → key：具名能力（含 view:reports/brand/category/field/admin）', () => {
-    const pool = buildPermPool(['看板|经营总览', '看板|目标达成', '品牌|熊喵鲜生', '品类|水果', '字段|成本可见', '门禁|管理台']);
-    expect(pool.has('data-analysis:view:reports')).toBe(true);
-    expect(pool.has('data-analysis:view:reports-targets')).toBe(true);
+  it('通俗名 → key：具名能力（brand/category/field/admin/门禁）', () => {
+    // 2026-08-18 方案 A：view:reports（经营总览）/view:reports-targets（目标达成）已删，不再映射
+    const pool = buildPermPool(['品牌|熊喵鲜生', '品类|水果', '字段|成本可见', '门禁|管理台', '门禁|报表中心']);
     expect(pool.has('data-analysis:brand:3120')).toBe(true);
     expect(pool.has('data-analysis:category:水果')).toBe(true);
     expect(pool.has('data-analysis:field:cost')).toBe(true);
     expect(pool.has('data-analysis:admin')).toBe(true);
+    expect(pool.has('data-analysis:gate:reports-center')).toBe(true);
   });
 
   it('看板能力通俗名 → 覆盖的报表视图 key 注入（报表授权 ⇒ 视图访问）', () => {
@@ -103,11 +103,11 @@ describe('buildPermPool 全量通俗名归一 + 覆盖视图注入（方案 C �
     expect([...pool].filter((k) => k === 'data-analysis:view:report_brand_metric_gen').length).toBe(1);
   });
 
-  it('门禁通俗名「报表中心」→ 反查组 key → 展开成员（2026-08-18 门禁拆分：仅页面门禁）', () => {
+  it('门禁通俗名「报表中心」→ 反查 gate key（2026-08-18 方案 A：普通能力非 view-group，不再展开成员）', () => {
     const pool = buildPermPool(['门禁|报表中心']);
-    expect(pool.has('data-analysis:view:reports')).toBe(true);
-    expect(pool.has('data-analysis:view:reports-targets')).toBe(true);
-    expect(pool.has('data-analysis:gate:reports-center')).toBe(false); // 组 key 被展开消费
+    expect(pool.has('data-analysis:gate:reports-center')).toBe(true);   // 普通门禁 key 原样保留
+    expect(pool.has('data-analysis:view:reports')).toBe(false);         // view:reports 已删
+    expect(pool.has('data-analysis:view:reports-targets')).toBe(false); // view:reports-targets 已删
   });
 
   it('看板覆盖注入对 hasBoardPerm 语义闭环：配看板即能访问对应报表视图', () => {
