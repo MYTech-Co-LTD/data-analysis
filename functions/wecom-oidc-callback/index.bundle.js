@@ -85,7 +85,7 @@ var require_claims = __commonJS({
         catalog_v: ctx.catalogV
       };
     }
-    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2 };
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveScopeKeys: resolveScopeKeys2 };
     var FRIENDLY_TO_KEY = {
       // 页面级报表视图（方案 C 保留的 2 个）+ 具名资源
       "\u770B\u677F|\u7ECF\u8425\u603B\u89C8": "data-analysis:view:reports",
@@ -133,29 +133,7 @@ var require_claims = __commonJS({
       }
       return FRIENDLY_TO_KEY[value] ?? value;
     }
-    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE };
-    function resolveGroupBranches2(groupPaths, maps, knownDepts) {
-      const deptSet = knownDepts instanceof Set ? knownDepts : null;
-      const results = /* @__PURE__ */ new Set();
-      for (const path of groupPaths ?? []) {
-        const g = String(path).split("/").pop();
-        const rows = (maps ?? []).filter((m) => m.group_id === g && m.branch_number);
-        if (rows.length > 0) {
-          for (const m of rows) results.add(m.branch_number);
-          continue;
-        }
-        const asRegion = (maps ?? []).some((m) => m.group_type === "store" && m.group_id.startsWith(g + "-"));
-        if (asRegion) {
-          for (const m of maps) {
-            if (m.group_type === "store" && m.group_id.startsWith(g + "-") && m.branch_number) results.add(m.branch_number);
-          }
-          continue;
-        }
-        if (deptSet && deptSet.has(g)) continue;
-        return { branch_nums: [], ok: false, error: `unknown group: ${g}` };
-      }
-      return { branch_nums: [...results].sort(), ok: true };
-    }
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE };
     function resolveScopeKeys2(scopeKeys, maps, dimBranches) {
       const results = /* @__PURE__ */ new Set();
       const mapsByGroup = /* @__PURE__ */ new Map();
@@ -208,7 +186,7 @@ var require_claims = __commonJS({
 // functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
-var { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, normalizeFriendlyPerm } = require_claims();
+var { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm } = require_claims();
 function decodeJwtPayload(token) {
   try {
     const part = String(token).split(".")[1];
@@ -241,40 +219,6 @@ async function fetchAllObjects(issuer, accessToken, userId) {
   } catch (e) {
     console.error("wecom-oidc-callback: get-all-objects failed", e);
     return null;
-  }
-}
-async function expandGroupsToBranches(groupPaths, pgrstUrl) {
-  try {
-    const mapsRes = await fetch(
-      `${pgrstUrl}/maps_branch_group?is_active=eq.true&select=group_id,group_type,branch_number`,
-      { headers: { "Content-Type": "application/json" } }
-    );
-    if (!mapsRes.ok) {
-      return { branch_nums: [], ok: false, error: `maps_branch_group http ${mapsRes.status}` };
-    }
-    const maps = await mapsRes.json();
-    if (!Array.isArray(maps)) {
-      return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
-    }
-    let knownDepts;
-    try {
-      const deptRes = await fetch(
-        `${pgrstUrl}/org_departments?is_active=eq.true&select=name`,
-        { headers: { "Content-Type": "application/json" } }
-      );
-      if (deptRes.ok) {
-        const depts = await deptRes.json();
-        if (Array.isArray(depts)) knownDepts = new Set(depts.map((d) => d.name).filter(Boolean));
-      }
-    } catch (e) {
-      console.error("wecom-oidc-callback: org_departments fetch failed", e);
-    }
-    const resolved = resolveGroupBranches(groupPaths, maps, knownDepts);
-    if (resolved.ok !== true) return resolved;
-    const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
-    return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
-  } catch (e) {
-    return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
   }
 }
 async function expandScopeResources(scopeKeys, pgrstUrl) {
@@ -431,10 +375,9 @@ module.exports = async function(req) {
     const casdoorUserId = tokenPayload.owner && tokenPayload.name ? `${tokenPayload.owner}/${tokenPayload.name}` : tokenPayload.sub;
     const reachable = await fetchAllObjects(issuer, accessToken, casdoorUserId);
     const branchKeys = (reachable ?? []).map((k) => normalizeFriendlyPerm(k)).filter((k) => typeof k === "string" && k.startsWith("data-analysis:branch:")).map((k) => k.slice("data-analysis:branch:".length));
-    const expandResult = branchKeys.length > 0 ? await expandScopeResources(branchKeys, pgrstUrl) : await expandGroupsToBranches(oidcGroups, pgrstUrl);
+    const expandResult = branchKeys.length > 0 ? await expandScopeResources(branchKeys, pgrstUrl) : { branch_nums: [], ok: true };
     console.log(
-      "wecom-oidc-callback: scope source =",
-      branchKeys.length > 0 ? "permission-resources" : "legacy-groups",
+      "wecom-oidc-callback: scope source = permission-resources",
       { keys: branchKeys.length, ok: expandResult.ok === true }
     );
     const claims = buildClaims({
