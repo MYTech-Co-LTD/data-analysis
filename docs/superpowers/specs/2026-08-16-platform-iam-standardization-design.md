@@ -183,6 +183,7 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
 - **不 resource 化门店的理由**（钉死）：policy 行数 = 门店数 × 授权组合数，每开新店要 add-resource + 重挂权限——resource 表达的是"能力点"，门店是"过滤值"，两者语义不同（08-15 已论证 casbin 无 policy→SQL）。
   - **2026-08-18 演进（用户裁定）：本段被取代**——门店不再按「逐店逐组合」建 policy，而是把**粗粒度范围键**（`范围|全店` / 战区包名 / `branch_number` / 门店中文名）作为资源直接挂 permission.resources，登录时经 `expandScopeResources`（读 maps + dim_branch）展开成门店集。范围键数量 = O(授权组合数) 而非 O(门店数 × 组合)，原始「policy 行数 = 门店数 × 授权组合数」顾虑不成立；`范围|X` 进 `data-analysis:branch:X` 归一（claims.js `normalizeFriendlyPerm`），无范围资源 = `branch_nums: []` = B1 空集 deny（fail-close，组织架构推导废除）。
 - **例外表语义**：`temporary_grants(user_id, dim, value, expires_at, note)`——IAM 无到期语义（Casdoor 角色无过期），这是 app 侧唯一授权数据；授权中心 UI 维护。
+  - **2026-08-18 演进（用户裁定）：例外体系废除**——temporary_grants 不再作为授权通道（pgrst_pre_request x_grants 段与 scope_match_v2 x_grants 分支删除，迁移 197）；表保留冻结历史；临时授权改用 `范围|X` 资源（挂上到期摘除）。
   - **不走 JWT 折叠（B5，废除 rev1 的「折叠进 claims exp min(7d, grant)」）**：例外是风险最高通道且行数极少，实查段做 **5min 缓存实查 temporary_grants**（命名钉死 = TTL 缓存，非每请求 DB 查询）——撤销 ≤5min 生效（健康态），贴合「例外在 app 侧」定位。
     - **三处粒度统一（redteam-lite M3）**：正文「即刻生效」/ 测试「≤5min」/ 降级「24h stale」口径冲突 → 统一为「**健康态撤销 ≤5min 生效；降级态（Casdoor 不可达）沿用裁决-1 24h stale 上限**」。temporary_grants 是**本地表**，裁决-1 的「24h stale」是为远端实查设计的——**本地查的降级 = DB 不可达 → fail-close（等同无例外，见错误处理表），不产生 24h 窗口**。
     - **缓存主动失效（M3）**：授权中心 UI 撤销/删除例外时**同步清该 sub 的例外 RT 缓存**（TTL 立即作废），不靠 TTL 兜底；H16 的 token_blacklist 是数据面 JWT 黑名单，**不是例子缓存失效通道**，两者分开。

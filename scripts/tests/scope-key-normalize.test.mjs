@@ -60,11 +60,6 @@ test('绿：通配 "*" 语义保持', () => {
   assert.equal(sm({ sub: 'shanhai/t', data_scope: { branch_nums: ['*'] } }, '3120-58'), 't');
 });
 
-test('绿：x_grants 例外侧同样归一（补零例外值命中不补零门店列）', () => {
-  assert.equal(
-    sm({ sub: 'shanhai/t', data_scope: { branch_nums: [] } }, '3120-58', { branch_nums: ['3120-0058'] }), 't');
-});
-
 test('绿：多零尾段全剥（\'3120-0005\' ≡ \'3120-5\' ≡ \'3120-05\'）', () => {
   assert.equal(sm({ sub: 'shanhai/t', data_scope: { branch_nums: ['3120-0005'] } }, '3120-5'), 't');
   assert.equal(sm({ sub: 'shanhai/t', data_scope: { branch_nums: ['3120-05'] } }, '3120-5'), 't');

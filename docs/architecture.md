@@ -575,7 +575,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 | 能力点（功能资源） | Casdoor Permission + resource 表 | Casdoor UI / **catalog 同步 adapter**（§6.4） | **★ 新增 catalog 动态发现** |
 | 数据范围-静态枚举（品牌/品类/字段） | **Casdoor resource** | catalog 同步 adapter | **★ 原 `data_permissions` 各维内** |
 | 数据范围-动态门店 | **`范围|X` 资源**（permission.resources） | Casdoor UI 挂资源 | **★ 原 `data_permissions.branch_nums` 内；2026-08-18 废除 Group 归属推导** |
-| 数据范围-临时例外 | app `temporary_grants`（RT 实查，§6.5） | 授权中心 UI | 新建（原表内 `expires_at` 语义） |
+| 数据范围-临时例外 | **已废除**（2026-08-18：例外体系废除，临时授权改用 `范围\|X` 资源） | — | `temporary_grants` 表冻结（历史） |
 | 人→角色（本地视图） | 持久投影 `role_codes`（非真相源） | 只被写穿 | 不变（sunset 时点继承） |
 | 本地 `org_departments`/`org_users` | **缓存投影（非真相源）** | 只读消费 | **★ 降级：不再被写**（W2/W4 切换） |
 
@@ -590,7 +590,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 >                       角色×功能资源：data-analysis:<模块>:<动作>（casbin Permission，§6.4）
 > ③ 座位层（W2 上收）   Casdoor Group tree 中心化（部门树 + 区域-门店树，组同步器，§7.1.2）
 >                       org_departments / org_users 降级只读投影（不再被写）
-> ④ 口径层（三分流）    品牌/品类/字段 → Casdoor resource；**门店 → `范围|X` 资源**（expandScopeResources 展开；2026-08-18 废除 Group 挂组推导）
+> ④ 口径层（二分流，2026-08-18 例外废除后）    品牌/品类/字段 → Casdoor resource；**门店 → `范围|X` 资源**（expandScopeResources 展开；废除 Group 挂组推导与例外体系）
 >                       临时例外 → temporary_grants RT 实查（§6.5）
 >                       data_permissions 双氧期 → W5 写关闭 → W6 sunset（§6.2）
 >                       → get_user_perms（PERMS_INPUT 感知读 role_codes 镜像或 role_id 折 code）
@@ -713,7 +713,7 @@ PostgreSQL RLS 策略（执行点机制不变；W3 起新增策略分支，见�
 
 ### 6.4 casbin 功能授权层与能力点 catalog 与动态发现（2026-08-15 新增；2026-08-16 IAM 标准化扩展）
 
-**功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1）。数据授权目标态 = **三分流**（静态枚举→resource / **门店→`范围|X` 资源**（2026-08-18 演进，废除 Group 挂组推导） / 例外→temporary_grants，§6.0/§6.5）；`data_permissions` 双氧期保留、W6 sunset（§6.2）——casbin 是单次判定引擎、无 policy→SQL。**门店范围 resource 化 = `范围|X` 粗粒度键**（`范围|全店`/战区包名/单店编号/门店名）挂 permission.resources，登录经 `expandScopeResources`（读 maps + dim_branch）展开成门店集——范围键数量 O(授权组合数) 而非 O(门店数×组合)，不逐店建 policy（原「不 resource 化门店」顾虑据此不成立，08-16 spec §5.2 有演进标注）。
+**功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1）。数据授权目标态 = **二分流**（静态枚举→resource / **门店→`范围|X` 资源**（2026-08-18 演进，废除 Group 挂组推导与例外体系，无例外通道）；`data_permissions` 双氧期保留、W6 sunset（§6.2）——casbin 是单次判定引擎、无 policy→SQL。**门店范围 resource 化 = `范围|X` 粗粒度键**（`范围|全店`/战区包名/单店编号/门店名）挂 permission.resources，登录经 `expandScopeResources`（读 maps + dim_branch）展开成门店集——范围键数量 O(授权组合数) 而非 O(门店数×组合)，不逐店建 policy（原「不 resource 化门店」顾虑据此不成立，08-16 spec §5.2 有演进标注）。
 
 - **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual）+ 薄同步 auto（§6.1 单写者）。
 - **checkFeaturePerm 单模块**：`web/lib/feature-perm.ts` 单函数收口所有功能门禁（禁散落 `userid === '...'` 硬编码）——P0a 读 claims + BREAKGLASS；U2 后读 claims + casbin 实查。切 casbin 是 1 处切换，非 N 处 hunt-and-replace。
@@ -739,7 +739,9 @@ PostgreSQL RLS 策略（执行点机制不变；W3 起新增策略分支，见�
 - **环引用检测**：嵌套组 A→B→A 展开死循环 = 登录链路卡死；catalog 校验含环引用检测（红/绿测试）。
 - **成员变更生效粒度**：显式声明（batch-enforce 重建挂 webhook 事件，或显式时效），测试覆盖「成员变更 → 声明粒度内生效」。
 
-**例外表 temporary_grants（数据范围三分流的第三流；app 侧唯一授权数据）**——IAM 无到期语义（Casdoor 角色无过期），带到期的临时授权是 app 侧例外机制：
+> **⚠️ 2026-08-18 用户裁定：例外体系（temporary_grants）已废除**——数据范围唯一真相 = `范围|X` 资源（§6.0/§6.4），**无例外通道**。pgrst_pre_request 的 x_grants 并集段、scope_match_v2 的 x_grants 分支已删除（迁移 197）；`temporary_grants` 表保留冻结（历史授权记录，不再消费）。带到期的临时授权一律改用 `范围|X` 资源（临时挂上、到期摘除）。下方为废除前设计，仅作历史参考。
+
+**例外表 temporary_grants（已废除，2026-08-18 前设计）**——IAM 无到期语义（Casdoor 角色无过期），带到期的临时授权是 app 侧例外机制：
 
 - **形态**：`temporary_grants(user_id, dim, value, expires_at, note)`；授权中心 UI（`/admin/permissions` 例外 tab）维护。**例外不折叠进 claims（B5 铁律）**——登录时折叠 = 撤销窗口拉到 token 寿命（7 天），禁止。
 - **RT 实查（5min 缓存 TTL，命名钉死）**：实查段做 5min 缓存实查 temporary_grants——**健康态撤销 ≤5min 生效**；授权中心撤销/删除时**同步清该 sub 的例外 RT 缓存**（TTL 立即作废，不靠 TTL 兜底）。本地表降级 = DB 不可达 → fail-close（等同无例外），不产生 24h 窗口（裁决-1 的 24h stale 仅限远端实查场景）。
@@ -1033,6 +1035,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | 部署钩子 + cron 对账双通道同步（D5） | resource 同步双通道：GHA 部署钩子（scan→validate→sync）+ cron 对账兜底（§6.4 动态发现闭环） | 2026-08-16 |
 | 变更传播 webhook 事件（D6） | Casdoor webhook 事件驱动（非轮询）；payload 只当「失效信号」，数据一律以 re-pull/对账为准；组变更 → 数据面 JWT 即时失效（token_blacklist by sub） | 2026-08-16 |
 | 例外表放 app（D7） | IAM 无到期语义，temporary_grants 留 app 侧；RT 实查（5min 缓存）不折叠进 claims（§6.5，B5） | 2026-08-16 |
+| 例外体系废除（2026-08-18） | temporary_grants 不再作为授权通道（pgrst_pre_request x_grants 段/scope_match_v2 x_grants 分支删，迁移 197）；表保留冻结历史；临时授权改用 `范围\|X` 资源（挂上到期摘除） | 2026-08-18 |
 | casbin 实查默认开（D8） | 裁决-1 继承：高危实查（admin/push:broadcast/临时授权类）默认启用，shadow 一周 ±0 后转正，E2E 冒烟 | 2026-08-16 |
 
 ---

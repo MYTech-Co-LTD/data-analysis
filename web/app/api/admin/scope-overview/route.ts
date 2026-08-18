@@ -1,6 +1,7 @@
 // web/app/api/admin/scope-overview/route.ts
 // 2026-08-18 门店范围显式授权 P3：管理后台「数据范围总览」数据源。
-// 三块同屏：Casdoor 显式范围/品牌/品类/字段资源（中文）· 企微部门组（旧通道对照）· 临时例外（temporary_grants）。
+// 两块同屏：Casdoor 显式范围/品牌/品类/字段资源（中文）· 企微部门组（旧通道对照，仅目录）。
+// （例外体系已废除 2026-08-18：temporary_grants 不再展示为授权通道。）
 // 附体检项：悬空范围资源 / 零范围用户 / 单店资源 / 门店重名。
 // 门禁：requireAdmin。Casdoor 或 PostgREST 任一不可达 → 降级 503 带原因（页面显示不可用）。
 import { NextRequest, NextResponse } from 'next/server';
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
     name: string; displayName?: string; users?: string[]; resources?: string[];
   }>;
 
-  // ② 本地：maps（包定义）+ dim_branch（门店名）+ 例外
+  // ② 本地：maps（包定义）+ dim_branch（门店名）
   const pgrstGet = async (path: string) => {
     const r = await fetch(`${PGRST}${path}`, { headers: { 'Content-Type': 'application/json' } });
     if (!r.ok) throw new Error(`${path} ${r.status}`);
@@ -39,12 +40,10 @@ export async function GET(req: NextRequest) {
   };
   let maps: Array<{ group_id: string; branch_number: string }>;
   let dimBranches: Array<{ branch_number: string; branch_name: string }>;
-  let grants: Array<{ user_id: string; dim: string; value: string; expires_at: string; granted_by: string; note?: string }>;
   try {
-    [maps, dimBranches, grants] = await Promise.all([
+    [maps, dimBranches] = await Promise.all([
       pgrstGet('/maps_branch_group?is_active=eq.true&select=group_id,branch_number'),
       pgrstGet('/dim_branch?select=branch_number,branch_name'),
-      pgrstGet('/temporary_grants?revoked_at=is.null&expires_at=gt.now()&select=user_id,dim,value,expires_at,granted_by,note'),
     ]);
   } catch (e) {
     return NextResponse.json({ error: 'postgrest_unavailable', detail: (e as Error).message }, { status: 503 });
@@ -72,7 +71,6 @@ export async function GET(req: NextRequest) {
         legacyGroups: (u.groups ?? []).map((g) => String(g).split('/').pop()),
         scope: scopeRes, brands: brandRes, categories: categoryRes, fields: fieldRes,
         scopePermissions: userPerms.filter((p) => (p.resources ?? []).some((r) => r.startsWith('范围|'))).map((p) => p.name),
-        grants: grants.filter((g) => g.user_id === u.name),
       };
     });
 
@@ -87,12 +85,12 @@ export async function GET(req: NextRequest) {
       if (!isStoreName) checks.push({ kind: 'M-dangling-scope', user: r.user, detail: `范围资源「${s}」在 maps/dim_branch 均不存在（企微删组后悬空？）`, level: 'warn' });
       else if ((nameCount.get(key) ?? 0) > 1) checks.push({ kind: 'M-ambiguous-store', user: r.user, detail: `门店名「${key}」重名 ${nameCount.get(key)} 家，登录解析 fail-close`, level: 'warn' });
     }
-    if (r.scope.length === 0 && r.legacyGroups.length === 0) {
-      checks.push({ kind: 'M-empty-scope', user: r.user, detail: '无范围资源且无企微组——登录后数据全 deny（B1）', level: 'info' });
+    if (r.scope.length === 0) {
+      checks.push({ kind: 'M-empty-scope', user: r.user, detail: '无范围资源——登录后门店维 deny（B1，2026-08-18 起不再从部门组/例外推导）', level: 'info' });
     }
     const singleStores = r.scope.filter((s) => branchNums.has(s.slice('范围|'.length)) || (nameCount.get(s.slice('范围|'.length)) ?? 0) === 1);
     if (singleStores.length > 0) {
-      checks.push({ kind: 'M-single-store-grant', user: r.user, detail: `直挂单店：${singleStores.join(' · ')}（临时/例外授权，注意审计）`, level: 'info' });
+      checks.push({ kind: 'M-single-store-grant', user: r.user, detail: `直挂单店：${singleStores.join(' · ')}（精确授权，注意审计）`, level: 'info' });
     }
   }
 
@@ -102,7 +100,6 @@ export async function GET(req: NextRequest) {
     meta: {
       users: rows.length,
       scopePermissions: perms.filter((p) => (p.resources ?? []).some((r) => r.startsWith('范围|'))).length,
-      activeGrants: grants.length,
       duplicateStoreNames: [...nameCount.entries()].filter(([, n]) => n > 1).map(([name, n]) => ({ name, count: n })),
     },
   });
