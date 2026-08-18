@@ -48,7 +48,7 @@ export function ScopeTree() {
     <div>
       <p className="text-xs text-slate-400 mb-2">
         共 {data.tree.length} 战区 / {data.totalStores} 家门店。勾选后复制，粘贴到 Casdoor permission 的
-        Resources（资源类型选「Custom」）→ 用户重登生效。带 ✓ 的节点是已注册范围包；⚠ 门店重名（授权须用编号）。
+        Resources（资源类型选「Custom」）→ 用户重登生效。带 ✓ 的节点是范围包（maps 有定义）；⚠ 门店重名（授权须用编号）。
       </p>
 
       <div className="rounded-lg border border-slate-200 bg-white max-h-[28rem] overflow-auto">
@@ -66,8 +66,8 @@ export function ScopeTree() {
                 </label>
                 <span className="text-[11px] text-slate-400">{wz.storeCount} 店</span>
                 {wz.grantable
-                  ? <span className="text-[11px] text-green-600">✓ 可授权包</span>
-                  : <span className="text-[11px] text-slate-300">未注册包（勾区域包代替）</span>}
+                  ? <span className="text-[11px] text-green-600">✓ 范围包</span>
+                  : <span className="text-[11px] text-slate-300">无独立包（勾下级区域包）</span>}
                 {wz.users > 0 && <span className="text-[11px] text-blue-500">{wz.users} 人在用</span>}
                 <button className="ml-auto text-[11px] text-slate-400 hover:text-slate-700"
                   onClick={() => { navigator.clipboard.writeText(wzRes); }}>复制</button>
