@@ -17,7 +17,7 @@
 | **角色默认数据范围**（legacy 双氧期） | 该职位默认能看哪些门店/品牌/品类/成本 | **本系统** `/admin/permissions` 角色 tab（`data_permissions.subject_type='role'`）——**W6 sunset 迁移中**（W5 DB 级写关闭 → W6 删表；目标态转 Casdoor resource/挂组） | `get_user_perms` 基底（W4 起消费侧切 data_scope） |
 | **部门级范围**（legacy 双氧期） | 某部门整体看哪些门店/成本 | **本系统** `/admin/permissions` 部门 tab（`subject_type='dept'`）——**W6 sunset 迁移中**（部门语义转 Group tree 挂组） | `get_user_perms` 基底（并集） |
 | **个人 override**（legacy 双氧期） | 覆盖默认（逐维 + 到期时间 + 备注）——**带到期者迁 temporary_grants 例外表，其余转 Casdoor** | **本系统** `/admin/permissions` 用户 tab → 单独授权（W6 sunset 迁移中） | `get_user_perms` 逐字段覆盖 |
-| **应急兜底** | Casdoor 不可用时临时放行 admin | 服务器 env `BREAKGLASS_ADMINS`（当前 ZhangDuo,YangWei） | 门禁旁路 |
+| **应急兜底** | Casdoor 不可用时临时放行 admin | 服务器 env `BREAKGLASS_ADMINS`（**默认空，用后即清**——非空时能力页显琥珀横幅） | 门禁旁路 |
 
 ## 合成顺序（用户最终能看什么——claims data_scope 版，2026-08-16 IAM 标准化目标态）
 
@@ -55,7 +55,7 @@ Casdoor 职位 → org_users.role_codes 镜像（写穿，非真相源）
 | 个别用户特殊收窄/放开 | 本系统 `/admin/permissions` 用户 tab → 单独授权（legacy，W6 sunset 迁移中） | 逐维 + 到期时间；留 NULL 维 = 该维继承基底 |
 | 开/收 admin 管理台权限 | **Casdoor** | 挂/摘 `data-analysis:admin` permission |
 | 给角色勾看板/字段能力点 | **Casdoor**（能力点勾选） | 勾 `data-analysis:view:*` / `field:*` / `brand:*` / `category:*`（可配清单以能力目录辅助页 `/admin/capabilities` 为准；非 catalog key 会被校验器拒绝） |
-| 紧急放行 admin | 服务器 env | `BREAKGLASS_ADMINS` 加 wecom_id（兜底，勿常态使用） |
+| 紧急放行 admin | 服务器 env | `BREAKGLASS_ADMINS` 加 wecom_id（全权限旁路；仅 Casdoor 故障期临时用，**用后即清**，能力页有非空警示） |
 
 ## 易混淆点的判据
 

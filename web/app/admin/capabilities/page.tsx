@@ -25,6 +25,7 @@ type RedEntry = {
 };
 type Payload = {
   catalogV: string;
+  breakglass?: string[];   // BREAKGLASS_ADMINS 非空名单（应急后门开启中警示）
   entries: CatalogEntry[];
   deprecated: string[];
   viewGroups: Record<string, { label: string; members: readonly string[] }>;
@@ -155,6 +156,17 @@ export default function CapabilitiesPage() {
         </span>
       </div>
       {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
+
+      {/* BREAKGLASS 应急后门开启警示（非空即显）：全权限旁路，用后即清 */}
+      {data?.breakglass && data.breakglass.length > 0 && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <ShieldAlert size={15} className="shrink-0 mt-0.5" />
+          <span>
+            <b>应急后门开启中</b>（BREAKGLASS_ADMINS）：{data.breakglass.join('、')} —— 名单内用户绕过一切 Casdoor 权限（含管理台门禁）。
+            仅限 Casdoor 故障期临时使用，<b>用后即清</b>（服务器 <code className="text-xs">deploy/.env</code> 改空后 <code className="text-xs">docker compose up -d web</code> 重建）。
+          </span>
+        </div>
+      )}
 
       {/* 校验告警条（环检测 / 对账不可用 / synced 异常） */}
       {data && (data.cycleCheck.length > 0 || data.synced.unknown || (!data.synced.ok) || !data.reconcile) && (

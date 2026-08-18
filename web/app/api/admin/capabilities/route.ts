@@ -42,8 +42,14 @@ export async function GET(req: NextRequest) {
     ? [...new Set((reconcile.wildcardHolders ?? []).map((w) => w.wildcard))]
     : [];
 
+  // BREAKGLASS 应急后门可视化（2026-08-18）：非空 = 全权限旁路开启中——能力页琥珀横幅提示，
+  // 防无声长期存在（张铎案例：调试时加入，一一个月无人知）。
+  const breakglass = (process.env.BREAKGLASS_ADMINS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean);
+
   return NextResponse.json({
     catalogV: process.env.CATALOG_V ?? '0',
+    breakglass,
     // 2026-08-18：附授权名（组|通俗名，= Casdoor resource.name / permission Custom 粘贴串），供能力页一键复制
     entries: capabilityCatalog.map((e) => ({ ...e, displayName: displayNameFor(e.key) })),
     deprecated: [...DEPRECATED_KEYS],

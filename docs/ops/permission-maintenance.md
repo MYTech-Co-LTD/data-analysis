@@ -76,7 +76,9 @@ SELECT * FROM get_user_perms('<wecom_id>');
 
 - 登录 claims 排障：`GET /api/admin/permissions/preview?wecom_id=<id>`（管理员）。
 - Casdoor 可达对象（登录链路同源）：`GET {sso}/api/get-all-objects?userId=shanhai/<name>`。
-- 管理台门禁 = BREAKGLASS_ADMINS env（当前 ZhangDuo/YangWei）+ `data-analysis:admin` 资源（当前不授予任何 Permission，纯 breakglass）。
+- 管理台门禁 = `data-analysis:admin` 能力（能力页授权名「门禁|管理台」）+ BREAKGLASS_ADMINS env 兜底。
+- **BREAKGLASS 用后即清（2026-08-18 约定）**：该名单 = 全权限旁路（绕过 Casdoor 一切判定，含管理台），仅限 Casdoor 故障期临时加人，恢复后立即清空。
+  能力页顶部非空即显琥珀横幅。改法：服务器 `deploy/.env` 改空 → `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d web` 重建。反面教材：调试期间加入 ZhangDuo 后长期未清，导致无论 Casdoor 怎么配他都是隐形超管。
 
 ## 已下线（勿再引用）
 
