@@ -43,7 +43,7 @@ export async function expandScopeResources(scopeKeys: readonly string[]): Promis
     if (!mapsByGroup.has(m.group_id)) mapsByGroup.set(m.group_id, []);
     mapsByGroup.get(m.group_id)!.push(m.branch_number);
   }
-  const branchNums = new Set(maps.map((m) => m.branch_number).filter(Boolean));
+  const branchNums = new Set(maps.map((m) => m.branch_number).filter((b): b is string => b !== null && b !== undefined));
   const byName = new Map<string, string[]>();
   for (const d of dims) {
     if (!d.branch_name || !d.branch_number) continue;
@@ -67,7 +67,7 @@ export async function expandScopeResources(scopeKeys: readonly string[]): Promis
   }
 
   // collapseFullStore：结果覆盖 maps 门店全集 → ['*']（claims.js 同款语义，集合相等才收敛）
-  const universe = new Set(maps.map((m) => m.branch_number).filter(Boolean));
+  const universe = new Set(maps.map((m) => m.branch_number).filter((b): b is string => b !== null && b !== undefined));
   const uniq = [...results].sort();
   if (uniq.length === 0 || universe.size === 0) return { branch_nums: uniq, ok: true };
   const covered = uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
