@@ -7,6 +7,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { ScopeTree } from '@/components/admin/scope-tree';
 import {
   AlertTriangle, BookCheck, CheckCircle2, CircleAlert, Copy, ListTree, RefreshCw, ShieldAlert,
 } from 'lucide-react';
@@ -211,6 +212,12 @@ export default function CapabilitiesPage() {
             tone={data.synced.unknown ? 'warn' : data.synced.ok ? 'ok' : 'warn'} icon={<BookCheck size={16} />} />
         </div>
       )}
+
+      {/* 数据范围：战区→二级区域→门店 三级树（勾选复制 → Casdoor Resources Custom 粘贴） */}
+      <section className="mb-6">
+        <h2 className="text-sm font-semibold text-slate-800 mb-2">数据范围（树形授权参照）</h2>
+        <ScopeTree />
+      </section>
 
       {/* 红区：对账红条目（E-unknown / E-deprecated 废弃引用 / C-sync-failed） */}
       {data?.reconcile && (
