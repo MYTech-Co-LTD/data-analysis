@@ -125,7 +125,7 @@ org-wide `get-permissions?owner=`（casdoor-client.ts，5min token 缓存）→ 
 - **全店收敛**：解析结果与 maps 门店全集**集合相等** → 收敛 `['*']`（胖 cookie 修复语义，collapseFullStore）。
 - **system:% 服务身份**：`['*']` 宽松形状保留（185 语义）。
 - **NOT FOUND 真实用户（离职/不存在）**：deny 形状（189 语义不变）。
-- **`get_user_perms_strict`**：前置 NULL 闸判定源改为**无 role_codes ∧ 无 scope_resources**（M3 迁移：门店范围源从 groups 切到 scope_resources）；**移除 temporary_grants 子句（M11/spec-forge）**——197 已冻结，范围唯一真相 = scope_resources，temp grant 不构成授权面，避免「过闸但函数不读」的自相矛盾。返回委托 get_user_perms 新形状。
+- **`get_user_perms_strict`**（引擎路径 strict 闸，与 architecture §6.2「数据范围持久投影」配套）：前置 NULL 闸判定源 = **无 role_codes ∧ 无 scope_resources**（M3 迁移：门店范围源从 **groups → scope_resources**，`org_users.groups` 不再参与范围判定）；**移除 temporary_grants 子句（M11/spec-forge）**——197 已冻结，temporary_grants 不构成授权面，temp grant 不参与判定，避免「过闸但函数不读」的自相矛盾；范围唯一真相 = scope_resources。返回委托 get_user_perms 新形状（双形同源）。
 
 ## 7. 代签 JWT 升级（generateScopedJwt）
 
