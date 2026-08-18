@@ -123,6 +123,7 @@ export default function CapabilitiesPage() {
 
   const red = data?.reconcile?.red ?? [];
   const wildcards = data?.reconcile?.wildcardHolders ?? [];
+  const orphanPerms = (data?.reconcile?.minor ?? []).filter((m) => m.kind === 'M-orphan-permission');
   const missingSet = new Set(data?.synced?.missing ?? []);
   const deprecatedSet = new Set(data?.deprecated ?? []);
   const groups = new Map<string, CatalogEntry[]>();
@@ -257,6 +258,31 @@ export default function CapabilitiesPage() {
                   <tr key={`${w.user}:${w.wildcard}:${i}`} className="border-b border-slate-100">
                     <td className="px-3 py-2 text-slate-800">{w.user}</td>
                     <td className="px-3 py-2"><Badge tone="warn">{w.wildcard}</Badge></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {/* 孤儿 permission（未挂角色未直挂用户——授予不了任何人的误导配置） */}
+      {data?.reconcile && orphanPerms.length > 0 && (
+        <section className="mb-6">
+          <h2 className="text-sm font-semibold text-slate-800 mb-2">孤儿 permission（未挂角色/用户，配置无效）</h2>
+          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="text-left text-slate-500 border-b border-slate-200 bg-slate-50">
+                  <th className="px-3 py-2 font-medium">permission</th>
+                  <th className="px-3 py-2 font-medium">说明</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orphanPerms.map((m) => (
+                  <tr key={m.key} className="border-b border-slate-100">
+                    <td className="px-3 py-2 text-slate-800">{m.key}</td>
+                    <td className="px-3 py-2 text-xs text-amber-700">未挂任何角色也未直挂用户——授予不了任何人；在 Casdoor 挂角色或删除，避免误导</td>
                   </tr>
                 ))}
               </tbody>

@@ -280,7 +280,7 @@ module.exports = async function(req) {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const userData = await userRes.json();
-    const wecomUserId = userData.sub;
+    let wecomUserId = userData.sub;
     if (!wecomUserId) {
       console.error(
         "wecom-oidc-callback: userinfo missing sub",
@@ -288,6 +288,7 @@ module.exports = async function(req) {
       );
       return json({ error: "failed_to_get_wecom_id" }, 401);
     }
+    const aliasCandidates = [userData.preferred_username, userData.name].filter((v) => typeof v === "string" && v.length > 0 && v !== wecomUserId);
     let casdoorRoles = [];
     if (Array.isArray(userData.roles)) {
       casdoorRoles = userData.roles.filter((r) => typeof r === "string" && r.length > 0);
@@ -298,7 +299,23 @@ module.exports = async function(req) {
       baseUrl: Deno.env.get("INSFORGE_API_BASE") || "http://insforge:7130",
       anonKey: Deno.env.get("ANON_KEY")
     });
-    const { data: user, error: userErr } = await client.database.from("org_users").select("is_active, department_ids, name").eq("wecom_id", wecomUserId).single();
+    const selectUser = (id) => client.database.from("org_users").select("is_active, department_ids, name").eq("wecom_id", id).single();
+    let { data: user, error: userErr } = await selectUser(wecomUserId);
+    if ((userErr || !user) && aliasCandidates.length > 0) {
+      for (const alias of aliasCandidates) {
+        const retry = await selectUser(alias);
+        if (!retry.error && retry.data) {
+          console.log(
+            "wecom-oidc-callback: sub miss, resolved wecom_id by claim",
+            { aliasSource: alias === userData.preferred_username ? "preferred_username" : "name" }
+          );
+          wecomUserId = alias;
+          user = retry.data;
+          userErr = null;
+          break;
+        }
+      }
+    }
     if (userErr && !user) {
       console.error("wecom-oidc-callback: org_users query error", userErr?.message ?? userErr);
     }

@@ -10,6 +10,10 @@ import { CATALOG_KEYS, DEPRECATED_KEYS, DISPLAY_NAME_TO_KEY } from './capability
 export interface CasdoorPermission {
   name: string;
   resources?: string[];
+  // 2026-08-18：孤儿检测用（get-permissions 全量返回，可选字段防御旧 mock）
+  roles?: unknown;
+  users?: unknown;
+  isEnabled?: boolean;
 }
 
 export type RedEntry =
@@ -23,7 +27,7 @@ export type RedEntry =
 
 export interface ReconcileResult {
   red: RedEntry[];
-  minor: { kind: 'M-unreferenced'; key: string }[];
+  minor: { kind: 'M-unreferenced' | 'M-orphan-permission'; key: string }[];
   wildcardHolders: { user: string; wildcard: string }[];
 }
 
@@ -102,9 +106,19 @@ export function classifyCatalogReconcile({
   }
   red.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
+  // M-orphan-permission（2026-08-18）：启用中的 permission 未挂任何角色也未直挂用户
+  //   → 授予不了任何人（静默无效果，纯误导配置）——提示级不算红（fail 方向安全），页面单列展示。
+  //   直挂用户（permission.users）是合法形态（例外/测试），不算孤儿。
+  for (const p of permissions) {
+    if (p.isEnabled === false) continue;
+    const roleCnt = Array.isArray(p.roles) ? p.roles.length : 0;
+    const userCnt = Array.isArray(p.users) ? p.users.length : 0;
+    if (roleCnt === 0 && userCnt === 0) minor.push({ kind: 'M-orphan-permission', key: p.name });
+  }
+
   // M-unreferenced：catalog 内 key 未被直接引用（可配但没人配——提示，不算红）
   for (const key of catalog) if (!referenced.has(key)) minor.push({ kind: 'M-unreferenced', key });
-  minor.sort((a, b) => (a.key < b.key ? -1 : 1));
+  minor.sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
 
   return { red, minor, wildcardHolders };
 }

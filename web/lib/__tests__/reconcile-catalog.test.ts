@@ -24,13 +24,28 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
 
   it('catalog 内 key 未被引用 → M-unreferenced 提示（不算红）', () => {
     const d = classifyCatalogReconcile({
-      permissions: [{ name: 'p1', resources: ['data-analysis:view:reports'] }],
+      permissions: [{ name: 'p1', resources: ['data-analysis:view:reports'], roles: ['shanhai/manager'], users: [] }],
       catalog: CATALOG, deprecated: DEPRECATED,
     });
     expect(d.red.length).toBe(0);
     expect(d.minor.map((m) => m.key).sort()).toEqual(
       ['data-analysis:admin', 'data-analysis:field:cost'],
     );
+  });
+
+  it('孤儿 permission（未挂角色未直挂用户）→ M-orphan-permission 提示（2026-08-18）', () => {
+    const d = classifyCatalogReconcile({
+      permissions: [
+        { name: 'p-orphan', resources: ['data-analysis:view:reports'], roles: [], users: [] },
+        { name: 'p-role', resources: ['data-analysis:field:cost'], roles: ['shanhai/boss'], users: [] },
+        { name: 'p-user', resources: ['data-analysis:admin'], roles: [], users: ['shanhai/ZhangDuo'] },
+        { name: 'p-off', resources: ['data-analysis:view:reports'], roles: [], users: [], isEnabled: false },
+      ],
+      catalog: CATALOG, deprecated: DEPRECATED,
+    });
+    const orphans = d.minor.filter((m) => m.kind === 'M-orphan-permission');
+    expect(orphans).toEqual([{ kind: 'M-orphan-permission', key: 'p-orphan' }]);  // 停用的不算；挂角色/直挂人都不算
+    expect(d.red.length).toBe(0);
   });
 
   it('废弃 key：直接引用 ∪ 命名空间通配合并 holders（M2 通配审计；全局 * 已单列不再计入）', () => {
@@ -102,7 +117,7 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
 
   it('get-resources 怪癖防御：resources 名带 "/" 前缀不漏判（H3）', () => {
     const d = classifyCatalogReconcile({
-      permissions: [{ name: 'p1', resources: ['/data-analysis:view:reports'] }],
+      permissions: [{ name: 'p1', resources: ['/data-analysis:view:reports'], roles: ['shanhai/manager'] }],
       catalog: CATALOG, deprecated: DEPRECATED,
     });
     expect(d.red.length).toBe(0);   // "/data-analysis:view:reports" 归一后命中 catalog，不算未知

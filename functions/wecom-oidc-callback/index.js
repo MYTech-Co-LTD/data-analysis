@@ -169,12 +169,19 @@ module.exports = async function (req) {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const userData = await userRes.json();
-    const wecomUserId = userData.sub;
+    // sub 即 wecom_id 的前提是 Casdoor 企微 provider「Use id as name」且用户 id=wecom userid
+    // （老用户手建时 id=name）。但 2026-08 后 Casdoor 新注册用户 id 是 UUID（如 ZhengXin），
+    // sub 变 UUID → org_users 查不到 → 姓名回退成 UUID、perms 全丢。
+    // 解法：sub 在 org_users 无匹配时，依次用 preferred_username / name claim（Casdoor
+    // 携带的登录名 = 企微 userid）重试；仍无匹配才沿用 sub（走原兜底分支）。
+    let wecomUserId = userData.sub;
     if (!wecomUserId) {
       console.error("wecom-oidc-callback: userinfo missing sub",
         { status: userRes.status, respBody: JSON.stringify(userData).slice(0, 500) });
       return json({ error: "failed_to_get_wecom_id" }, 401);
     }
+    const aliasCandidates = [userData.preferred_username, userData.name]
+      .filter((v) => typeof v === "string" && v.length > 0 && v !== wecomUserId);
 
     // 2b. 提取 roles claim（Casdoor JWT userinfo 可能含 roles 字段）
     //     兼容 string[] / string / 缺失三种情况，统一为 string[]
@@ -192,9 +199,25 @@ module.exports = async function (req) {
       baseUrl: Deno.env.get("INSFORGE_API_BASE") || "http://insforge:7130",
       anonKey: Deno.env.get("ANON_KEY"),
     });
-    const { data: user, error: userErr } = await client.database
-      .from("org_users").select("is_active, department_ids, name")
-      .eq("wecom_id", wecomUserId).single();
+    const selectUser = (id) =>
+      client.database.from("org_users").select("is_active, department_ids, name")
+        .eq("wecom_id", id).single();
+
+    let { data: user, error: userErr } = await selectUser(wecomUserId);
+    if ((userErr || !user) && aliasCandidates.length > 0) {
+      // sub(UUID) 兜底：用登录名 claim 逐个重试，命中即采用为 wecom_userid
+      for (const alias of aliasCandidates) {
+        const retry = await selectUser(alias);
+        if (!retry.error && retry.data) {
+          console.log("wecom-oidc-callback: sub miss, resolved wecom_id by claim",
+            { aliasSource: alias === userData.preferred_username ? "preferred_username" : "name" });
+          wecomUserId = alias;
+          user = retry.data;
+          userErr = null;
+          break;
+        }
+      }
+    }
     if (userErr && !user) {
       console.error("wecom-oidc-callback: org_users query error", userErr?.message ?? userErr);
     }

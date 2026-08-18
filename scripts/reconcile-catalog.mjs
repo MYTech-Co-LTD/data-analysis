@@ -122,7 +122,16 @@ export function classifyDiff({ permissions, catalog, deprecated, syncFailures = 
 
   // M-unreferenced：catalog 内 key 未被任何 permission 直接引用（可配但没人配——提示，不算红）
   for (const key of catalog) if (!referenced.has(key)) minor.push({ kind: 'M-unreferenced', key });
-  minor.sort((a, b) => (a.key < b.key ? -1 : 1));
+  minor.sort((a, b) => (a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+
+  // M-orphan-permission（2026-08-18，web 侧同基线）：启用中的 permission 未挂任何角色也未直挂用户
+  //   → 授予不了任何人（静默无效果，纯误导配置）。直挂用户是合法形态（例外/测试），不算孤儿。
+  for (const p of permissions) {
+    if (p.isEnabled === false) continue;
+    const roleCnt = Array.isArray(p.roles) ? p.roles.length : 0;
+    const userCnt = Array.isArray(p.users) ? p.users.length : 0;
+    if (roleCnt === 0 && userCnt === 0) minor.push({ kind: 'M-orphan-permission', key: p.name });
+  }
 
   // per-user 汇总（对象数粒度会掩盖个别用户缺失）：catalog 内持有 keys + 越界项 offending（catalog 外/废弃）
   for (const p of permissions) {
