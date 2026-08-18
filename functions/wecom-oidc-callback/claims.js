@@ -123,7 +123,7 @@ function normalizeFriendlyPerm(value) {
   return FRIENDLY_TO_KEY[value] ?? value;
 }
 
-module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE };
+module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE, matchRolePermissions };
 
 // 组→门店集解析（2026-08-17 组树迁移企微部门树，用户裁定「组织架构严格按企微」）：
 //   新形态（部门组）：maps 行 group_id=部门名 × branch_number 多行——部门→门店集映射
@@ -203,4 +203,20 @@ function collapseFullStore(branchNums, allStoreNums) {
   if (uniq.length === 0 || universe.size === 0) return [...uniq].sort();
   const covered = uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
   return covered ? ['*'] : [...uniq].sort();
+}
+
+// 角色链匹配（2026-08-18 三层模型强制）：只取 permission.roles 命中用户角色码的 permission resources 并集。
+//   permission.users 直挂（roles=[]）与 permission.groups 挂载天然匹配不上 → 排除（任何来源写入直挂都不生效）。
+//   roles 全路径（'shanhai/manager'）vs 用户角色码裸名（'manager'）→ split('/').pop() 归一。
+//   纯函数，无 I/O —— claims.test.js 契约断言防回归；index.js fetchRolePermissions 复用。
+function matchRolePermissions(perms, myRoleCodes) {
+  const mine = new Set((myRoleCodes ?? []).map((r) => String(r)));
+  const out = new Set();
+  for (const p of perms ?? []) {
+    const pr = Array.isArray(p.roles) ? p.roles.map((r) => String(r)) : [];
+    const hit = pr.some((r) => mine.has(r) || mine.has(String(r).split('/').pop()));
+    if (!hit) continue;
+    for (const res of p.resources ?? []) if (typeof res === 'string') out.add(res);
+  }
+  return [...out];
 }

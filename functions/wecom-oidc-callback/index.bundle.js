@@ -133,7 +133,7 @@ var require_claims = __commonJS({
       }
       return FRIENDLY_TO_KEY[value] ?? value;
     }
-    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE };
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveGroupBranches: resolveGroupBranches2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE, matchRolePermissions };
     function resolveGroupBranches2(groupPaths, maps, knownDepts) {
       const deptSet = knownDepts instanceof Set ? knownDepts : null;
       const results = /* @__PURE__ */ new Set();
@@ -201,6 +201,17 @@ var require_claims = __commonJS({
       if (uniq.length === 0 || universe.size === 0) return [...uniq].sort();
       const covered = uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
       return covered ? ["*"] : [...uniq].sort();
+    }
+    function matchRolePermissions(perms, myRoleCodes) {
+      const mine = new Set((myRoleCodes ?? []).map((r) => String(r)));
+      const out = /* @__PURE__ */ new Set();
+      for (const p of perms ?? []) {
+        const pr = Array.isArray(p.roles) ? p.roles.map((r) => String(r)) : [];
+        const hit = pr.some((r) => mine.has(r) || mine.has(String(r).split("/").pop()));
+        if (!hit) continue;
+        for (const res of p.resources ?? []) if (typeof res === "string") out.add(res);
+      }
+      return [...out];
     }
   }
 });

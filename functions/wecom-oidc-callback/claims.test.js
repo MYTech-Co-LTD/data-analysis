@@ -249,3 +249,31 @@ eq(sc.data_scope.brands, ['3120'], '品牌资源照常解析');
 // 注：branch_nums 展开值由 index.js 双读侧（expandScopeResources）注入 expandResult——claims 层不重复展开
 
 console.log('门店范围显式授权 assertions passed');
+
+// ============ matchRolePermissions（三层模型强制，2026-08-18）============
+const { matchRolePermissions } = require('./claims.js');
+
+// Casdoor permission 真实形态：roles=全路径数组；直挂用户存 users（本函数不读）；groups 挂载存 groups（本函数不读）
+const permsRole = [
+  { name: 'role-manager', roles: ['shanhai/manager'], users: [], resources: ['data-analysis:view:reports', 'push:broadcast'] },
+  { name: 'role-boss', roles: ['shanhai/boss'], users: [], resources: ['data-analysis:admin'] },
+];
+const permsDirect = [
+  { name: 'scope-张三', roles: [], users: ['shanhai/张三'], resources: ['data-analysis:branch:*'] },
+];
+const permsMixed = [
+  { name: 'role-zone', roles: ['shanhai/zone_manager'], users: ['shanhai/郑欣'], resources: ['data-analysis:view-board:region'] },
+];
+
+eq(matchRolePermissions(permsRole, ['manager']), ['data-analysis:view:reports', 'push:broadcast'], '角色命中（用户裸名 vs 权限全路径）→ resources 并集');
+eq(matchRolePermissions(permsRole, ['boss']), ['data-analysis:admin'], '只取命中角色的 permission');
+eq(matchRolePermissions([...permsRole, ...permsDirect], ['manager']), ['data-analysis:view:reports', 'push:broadcast'], '直挂（roles=[]）被排除——三层模型强制');
+eq(matchRolePermissions([...permsRole, ...permsMixed], ['manager', 'zone_manager']),
+  ['data-analysis:view:reports', 'push:broadcast', 'data-analysis:view-board:region'], '多角色 UNION；混合形态角色命中即取全部 resources');
+eq(matchRolePermissions([...permsRole, ...permsMixed], ['zone_manager']), ['data-analysis:view-board:region'], '只命中一个角色的资源');
+eq(matchRolePermissions(permsDirect, ['张三']), [], '用户角色码存在但权限全是直挂 → 空集（B1 deny 载体）');
+eq(matchRolePermissions([], ['manager']), [], '全量空 → 空数组');
+eq(matchRolePermissions(permsRole, []), [], '无角色 → 空数组（无角色即无授权）');
+eq(matchRolePermissions(undefined, ['manager']), [], 'undefined 入参防御 → 空数组');
+
+console.log('matchRolePermissions assertions passed');
