@@ -110,10 +110,14 @@ module.exports = async function (req) {
         departments: departmentIds,  // 部门 ID 数组（兼容旧字段）
         // 权限 claim（Task 4 新增）
         role_code: perms.role_code ?? null,
-        branch_nums: perms.branch_nums || ["*"],
-        brands: perms.brands || ["*"],
-        categories: perms.categories || ["*"],
-        can_see_cost: perms.can_see_cost ?? false,
+        // T7/M1：兜底恒 deny（`?? []` / `?? false`，禁 `|| ["*"]` fail-open）——旧兜底会在
+        //   get_user_perms 顶层 key 为 [] 或缺失时把「无授权」放大成全权；双形下读 data_scope/fields 同源同值。
+        branch_nums: perms.data_scope?.branch_nums ?? perms.branch_nums ?? [],
+        brands: perms.data_scope?.brands ?? perms.brands ?? [],
+        categories: perms.data_scope?.categories ?? perms.categories ?? [],
+        can_see_cost: perms.fields?.cost ?? perms.can_see_cost ?? false,
+        data_scope: perms.data_scope ?? { brands: [], categories: [], branch_nums: [] },
+        fields: perms.fields ?? { cost: false },
         default_landing: perms.default_landing || "/",
         default_metric: perms.default_metric || "sale",
         visible_panels: perms.visible_panels || [],
