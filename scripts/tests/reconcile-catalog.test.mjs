@@ -65,3 +65,17 @@ test('退役 key（如 view:mobile）仍被 permission 引用 → E-deprecated-k
 test('通俗名静态镜像恰 23 条（与 catalog/claims 同步防漂移）', () => {
   assert.equal(Object.keys(FRIENDLY_TO_KEY).length, 23);
 });
+
+// 2026-08-18：全局 '*' 持有单独成红（Casdoor 空配置默认 ['*'] 风险），不再连锁展开废弃覆盖（web 侧同基线）
+test('全局 * 持有 → E-global-wildcard 独立红，废弃 key 无连锁误报', () => {
+  const d = classifyDiff({
+    permissions: [
+      { name: '测试', resources: ['*'] },
+      { name: 'p-ok', resources: ['data-analysis:view:reports'] },
+    ],
+    catalog: CATALOG, deprecated: new Set(['data-analysis:view:gone']),
+  });
+  assert.equal(d.red.length, 1, '只有一条红：* 独立成条');
+  assert.deepEqual(d.red[0], { kind: 'E-global-wildcard', key: '*', holders: ['测试'] });
+  assert.deepEqual(d.wildcardHolders, [{ user: '测试', wildcard: '*' }]);
+});

@@ -7,7 +7,7 @@
 // 门禁：requireAdmin（data-analysis:admin，web/lib/admin-api-auth.ts）。
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
-import { capabilityCatalog, DEPRECATED_KEYS, VIEW_GROUPS } from '@/lib/capability-catalog';
+import { capabilityCatalog, DEPRECATED_KEYS, VIEW_GROUPS, displayNameFor } from '@/lib/capability-catalog';
 import { detectViewGroupCycle, validateWildcardRisk } from '@/lib/validate-capabilities';
 import { classifyCatalogReconcile, fetchCasdoorPermissions, type ReconcileResult } from '@/lib/reconcile-catalog';
 import { syncResources } from '@/lib/sync/resource-sync';
@@ -44,7 +44,8 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     catalogV: process.env.CATALOG_V ?? '0',
-    entries: capabilityCatalog,
+    // 2026-08-18：附授权名（组|通俗名，= Casdoor resource.name / permission Custom 粘贴串），供能力页一键复制
+    entries: capabilityCatalog.map((e) => ({ ...e, displayName: displayNameFor(e.key) })),
     deprecated: [...DEPRECATED_KEYS],
     viewGroups: VIEW_GROUPS,
     cycleCheck: detectViewGroupCycle(),

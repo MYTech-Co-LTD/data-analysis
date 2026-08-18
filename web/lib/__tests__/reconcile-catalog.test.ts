@@ -33,7 +33,7 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
     );
   });
 
-  it('废弃 key：直接引用 ∪ 命名空间通配 ∪ 全局 * 三源合并 holders（M2 通配审计）', () => {
+  it('废弃 key：直接引用 ∪ 命名空间通配合并 holders（M2 通配审计；全局 * 已单列不再计入）', () => {
     const d = classifyCatalogReconcile({
       permissions: [
         { name: 'p-direct', resources: ['data-analysis:view:gone'] },
@@ -44,8 +44,23 @@ describe('catalog 对账核心（Task 5 语义同源，catalog 集参数化注�
     });
     const gone = d.red.find((r) => r.key === 'data-analysis:view:gone');
     expect(gone?.kind).toBe('E-deprecated-key');
-    // holder 展示短格式 view:*（与 scripts 侧 shortWild 基线一致）
-    expect([...(gone?.holders ?? [])].sort()).toEqual(['p-all(*)', 'p-direct', 'p-wild(view:*)']);
+    // holder 展示短格式 view:*（与 scripts 侧 shortWild 基线一致）；p-all 不再连锁计入
+    expect([...(gone?.holders ?? [])].sort()).toEqual(['p-direct', 'p-wild(view:*)']);
+  });
+
+  it('全局 * 持有 → E-global-wildcard 独立红（Casdoor 空配置默认 * 风险；2026-08-18）', () => {
+    const d = classifyCatalogReconcile({
+      permissions: [
+        { name: '测试', resources: ['*'] },
+        { name: 'p-ok', resources: ['data-analysis:view:reports'] },
+      ],
+      catalog: CATALOG, deprecated: new Set(['data-analysis:view:gone']),
+    });
+    // 只有一条红：* 独立成条；废弃 key gone 无持有者不算红（无连锁误报）
+    expect(d.red.length).toBe(1);
+    expect(d.red[0]).toEqual({ kind: 'E-global-wildcard', key: '*', holders: ['测试'] });
+    // wildcardHolders 仍单列风险面
+    expect(d.wildcardHolders).toEqual([{ user: '测试', wildcard: '*' }]);
   });
 
   it('废弃 key 无任何持有者 → 不算红（驱逐判据之一：红区清零）', () => {

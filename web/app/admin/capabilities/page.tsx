@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  AlertTriangle, BookCheck, CheckCircle2, CircleAlert, ListTree, RefreshCw, ShieldAlert,
+  AlertTriangle, BookCheck, CheckCircle2, CircleAlert, Copy, ListTree, RefreshCw, ShieldAlert,
 } from 'lucide-react';
 
 // ================= 类型（与 /api/admin/capabilities 契约对齐） =================
@@ -17,9 +17,10 @@ type CatalogEntry = {
   key: string; group: string; label: string;
   name?: string; description?: string;
   sensitive?: boolean; source: 'auto' | 'manual';
+  displayName?: string;   // 授权名（组|通俗名，Casdoor Custom 粘贴串）
 };
 type RedEntry = {
-  kind: 'E-unknown-key' | 'E-deprecated-key' | 'C-sync-failed';
+  kind: 'E-unknown-key' | 'E-deprecated-key' | 'C-sync-failed' | 'E-global-wildcard';
   key: string; holders: string[]; error?: string;
 };
 type Payload = {
@@ -42,7 +43,30 @@ const RED_KIND_LABEL: Record<RedEntry['kind'], string> = {
   'E-unknown-key': '未知 key',
   'E-deprecated-key': '废弃仍引用',
   'C-sync-failed': '注册失败',
+  'E-global-wildcard': '全局通配(*)',
 };
+
+// 一键复制授权名（组|通俗名）：复制后到 Casdoor permission（Resource type = Custom）粘贴
+function CopyName({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      title="点击复制，到 Casdoor permission（Resource type 选 Custom）的 Resources 框粘贴"
+      onClick={() => {
+        navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {});
+      }}
+      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs transition-colors ${
+        copied ? 'border-green-200 bg-green-50 text-green-700' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50'
+      }`}
+    >
+      {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}{text}
+    </button>
+  );
+}
 
 // ================= 小部件（样式对齐 /admin/permissions 现有页面） =================
 
@@ -126,6 +150,7 @@ export default function CapabilitiesPage() {
         <span>
           能力点 catalog 单真相 = <code className="text-xs">web/lib/capability-catalog(-.generated).ts</code>；
           新增视图/路由由 scan 自动发现（本页只读）。查看本页即触发 resource 差集自愈（add-resource 幂等只补缺）。
+          <b className="block mt-1">授权操作</b>：Casdoor 建/改 permission → Resource type 选 <b>Custom</b> → Resources 框粘贴下表「授权名」（点击即复制，如 <code className="text-xs mx-1">看板|经营总览</code>）→ 保存后用户重新登录生效。资源留空/选 <code className="text-xs">*</code> 会进红区 E-global-wildcard（判定层已去特权，但仍须改勾具体资源）。
         </span>
       </div>
       {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
@@ -199,7 +224,9 @@ export default function CapabilitiesPage() {
                       <td className="px-3 py-2 text-slate-600">{r.holders.join('、') || '-'}</td>
                       <td className="px-3 py-2 text-xs text-slate-500">
                         {r.kind === 'E-deprecated-key'
-                          ? '废弃 key 仍被授权语义覆盖（直接/通配/*）——按驱逐判据处理后再下线'
+                          ? '废弃 key 仍被授权语义覆盖（直接/命名空间通配）——按驱逐判据处理后再下线'
+                          : r.kind === 'E-global-wildcard'
+                            ? 'permission 持有全局 *（Casdoor 空配置默认值）——改勾具体资源或删除；判定层已去特权，无超权效力'
                           : r.kind === 'C-sync-failed'
                             ? r.error
                             : '引用了 catalog 外的 key（反向发现）'}
@@ -267,6 +294,7 @@ export default function CapabilitiesPage() {
                 <th className="px-3 py-2 font-medium">标签</th>
                 <th className="px-3 py-2 font-medium">描述</th>
                 <th className="px-3 py-2 font-medium">key</th>
+                <th className="px-3 py-2 font-medium">授权名（复制→Casdoor）</th>
                 <th className="px-3 py-2 font-medium">敏感</th>
                 <th className="px-3 py-2 font-medium">来源</th>
                 <th className="px-3 py-2 font-medium">synced</th>
@@ -285,6 +313,7 @@ export default function CapabilitiesPage() {
                     </td>
                     <td className="px-3 py-2 text-xs text-slate-500 max-w-[260px]">{e.description ?? '—'}</td>
                     <td className="px-3 py-2 text-slate-600 text-xs">{e.key}</td>
+                    <td className="px-3 py-2">{e.displayName ? <CopyName text={e.displayName} /> : <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2">{e.sensitive ? <Badge tone="warn">敏感</Badge> : <span className="text-slate-400">-</span>}</td>
                     <td className="px-3 py-2 text-slate-500">{e.source === 'auto' ? 'auto（scan）' : 'manual'}</td>
                     <td className="px-3 py-2">

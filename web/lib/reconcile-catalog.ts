@@ -15,7 +15,11 @@ export interface CasdoorPermission {
 export type RedEntry =
   | { kind: 'E-unknown-key'; key: string; holders: string[] }
   | { kind: 'E-deprecated-key'; key: string; holders: string[] }
-  | { kind: 'C-sync-failed'; key: string; holders: string[]; error: string };
+  | { kind: 'C-sync-failed'; key: string; holders: string[]; error: string }
+  // 2026-08-18：全局 '*' 单独成红（真机取证：Casdoor 新建 permission 未选资源时默认 ['*']）。
+  // 持有 = 潜在超管意图/手滑，必须显式处理（改勾具体资源或删除）；不再连锁展开成全量 E-deprecated
+  // 红屏（上周「能力页全红」误报根因），废弃覆盖面只报命名空间通配（显式勾选的）。
+  | { kind: 'E-global-wildcard'; key: '*'; holders: string[] };
 
 export interface ReconcileResult {
   red: RedEntry[];
@@ -64,6 +68,12 @@ export function classifyCatalogReconcile({
       wildcardHolders.push({ user: p.name, wildcard: w });
   }
 
+  // E-global-wildcard：持有全局 '*' 的 permission 单独成红（holders = permission 名）
+  const globalWildHolders = permissions
+    .filter((p) => (p.resources ?? []).some((r) => String(r).replace(/^\//, '') === '*'))
+    .map((p) => p.name);
+  if (globalWildHolders.length) red.push({ kind: 'E-global-wildcard', key: '*', holders: globalWildHolders });
+
   // C-sync-failed：注册失败通道（红）
   for (const f of syncFailures)
     red.push({ kind: 'C-sync-failed', key: f.key, holders: ['resource-sync'], error: f.error });
@@ -76,17 +86,17 @@ export function classifyCatalogReconcile({
     if (!catalog.has(key)) red.push({ kind: 'E-unknown-key', key, holders });
   }
 
-  // E-deprecated-key（M2 核心）：直接引用 ∪ 命名空间通配覆盖 ∪ 全局 '*'，holders 显式展开；
+  // E-deprecated-key（M2 核心）：直接引用 ∪ 命名空间通配覆盖，holders 显式展开；
   // 无任何持有者的废弃 key 不算红（驱逐判据之一：对账红区清零）。
   for (const key of deprecated) {
     const holders = new Set<string>();
     for (const p of permissions) {
       const rs = (p.resources ?? []).map((r) => String(r).replace(/^\//, ''));
-      if (rs.includes('*')) { holders.add(`${p.name}(*)`); continue; }
       if (rs.includes(key)) holders.add(p.name);
       for (const w of rs)
         if (w !== '*' && w.endsWith(':*') && key.startsWith(w.slice(0, -1)))   // view:* 覆盖 view:xxx
           holders.add(`${p.name}(${shortWild(w)})`);
+      // 全局 '*' 不计入废弃覆盖 holders（2026-08-18）：单列 E-global-wildcard，消除连锁红屏
     }
     if (holders.size) red.push({ kind: 'E-deprecated-key', key, holders: [...holders] });
   }

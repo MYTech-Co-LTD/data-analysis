@@ -84,6 +84,13 @@ export function classifyDiff({ permissions, catalog, deprecated, syncFailures = 
     }
   }
 
+  // E-global-wildcard（2026-08-18）：持有全局 '*' 的 permission 单独成红（Casdoor 新建未选资源
+  //   时默认 resources=['*']，真机取证）——不再连锁展开成全量 E-deprecated 红屏，与 web 侧基线同步。
+  const globalWildHolders = permissions
+    .filter((p) => (p.resources ?? []).includes('*'))
+    .map((p) => p.name);
+  if (globalWildHolders.length) red.push({ kind: 'E-global-wildcard', key: '*', holders: globalWildHolders });
+
   // C-sync-failed：Task 4 resource-sync failed 通道喂入（红）
   for (const f of syncFailures)
     red.push({ kind: 'C-sync-failed', key: f.key, holders: ['resource-sync'], error: f.error });
@@ -96,14 +103,14 @@ export function classifyDiff({ permissions, catalog, deprecated, syncFailures = 
     if (!catalog.has(key)) red.push({ kind: 'E-unknown-key', key, holders });
   }
 
-  // E-deprecated-key（M2 核心）：废弃 key 仍被授权语义覆盖 = 直接引用 ∪ 命名空间通配覆盖 ∪ 全局 '*'
+  // E-deprecated-key（M2 核心）：废弃 key 仍被授权语义覆盖 = 直接引用 ∪ 命名空间通配覆盖
   //   → 红。holders 显式含通配持有者（按 key 直接审计显示不出通配覆盖——redteam M2 风险面）；
+  //   全局 '*' 不计入（单列 E-global-wildcard，2026-08-18）；
   //   无任何持有者的废弃 key 不算红（驱逐判据之一：对账红区清零）。
   for (const key of deprecated) {
     const holders = new Set();
     for (const p of permissions) {
       const rs = p.resources ?? [];
-      if (rs.includes('*')) { holders.add(`${p.name}(*)`); continue; }
       if (rs.includes(key)) holders.add(p.name);
       for (const w of rs)
         if (w !== '*' && w.endsWith(':*') && key.startsWith(w.slice(0, -1)))   // view:* 覆盖 view:xxx

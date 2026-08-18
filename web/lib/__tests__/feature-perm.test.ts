@@ -38,9 +38,12 @@ describe('hasBoardPerm / hasKpiPerm（看板/KPI 卡片级能力）', () => {
     expect(hasBoardPerm(['data-analysis:view-board:*'], 'region')).toBe(true);
     expect(hasKpiPerm(['data-analysis:view-kpi:*'], 'outbound_margin')).toBe(true);
   });
-  it('全局 * → true', () => {
+  it('全局 * 不再放行（去特权：Casdoor 空配置默认 *，防提权；2026-08-18）', () => {
+    // 纯 '*'：该命名空间未配置化 → 仍走 fail-open 全开（与旧 token 同语义，非 '*' 特权）
     expect(hasBoardPerm(['*'], 'kpi')).toBe(true);
-    expect(hasKpiPerm(['*'], 'delivery')).toBe(true);
+    // '*' 与具名配置并存 → 不扩展范围（未配的看板仍被收权）★防提权关键
+    expect(hasBoardPerm(['*', 'data-analysis:view-board:kpi'], 'region')).toBe(false);
+    expect(hasKpiPerm(['*', 'data-analysis:view-kpi:sale'], 'delivery')).toBe(false);
   });
   it('未配置任何该命名空间能力（旧 token/无登录）→ 默认全开（fail-open，避免上线即收权）', () => {
     expect(hasBoardPerm(undefined, 'kpi')).toBe(true);

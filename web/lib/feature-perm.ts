@@ -92,7 +92,11 @@ export function resolveViewKey(perms: readonly string[], view: string): { ok: bo
   const key = `data-analysis:view:${view}`;
   const pool = new Set(expandViewGroups(perms));
   const named = pool.has(key);
-  const wildcard = pool.has('data-analysis:view:*') || pool.has('*');
+  // 2026-08-18 全局 '*' 去特权：Casdoor 新建 permission 未选资源时默认 resources=['*']（真机取证），
+  // 手滑即超管。全局通配不再作为放行依据——命名空间通配（view:*）保留（那是显式勾选的）。
+  // 注意 fail-open 语义不变：'-' 或纯 '*'（该命名空间未配置化）仍走「未配置=全开」分支，
+  // 但 '*' 与具名配置并存时不再扩展授权范围（防提权）。
+  const wildcard = pool.has('data-analysis:view:*');
   if (!named && !wildcard) return { ok: false, reason: 'unknown' };           // 无命中
   // 命中（具名或通配）→ 校验解析结果粒度
   if (DEPRECATED_KEYS.has(key)) return { ok: false, reason: 'deprecated' };
@@ -149,7 +153,7 @@ export function hasBoardPerm(perms: readonly string[] | undefined, boardId: stri
   const pool = buildPermPool(perms);
   if (pool.has(key)) return true;
   if (pool.has('data-analysis:view-board:*')) return true;              // 命名空间通配
-  if (pool.has('*')) return true;                                       // 全局通配
+  // 全局 '*' 不放行（2026-08-18 去特权，见 resolveViewKey 注释：Casdoor 空配置默认 '*' 风险）
   if (!namespaceConfigured(pool, 'data-analysis:view-board:')) return true; // 未配置任何看板能力 → 全开
   return false;                                                         // 已配置化但此看板不在 → 收权
 }
@@ -162,7 +166,7 @@ export function hasKpiPerm(perms: readonly string[] | undefined, code: string): 
   const pool = buildPermPool(perms);
   if (pool.has(key)) return true;
   if (pool.has('data-analysis:view-kpi:*')) return true;                // 命名空间通配
-  if (pool.has('*')) return true;                                       // 全局通配
+  // 全局 '*' 不放行（2026-08-18 去特权，同 hasBoardPerm）
   if (!namespaceConfigured(pool, 'data-analysis:view-kpi:')) return true; // 未配置任何 KPI 能力 → 全开
   return false;                                                         // 已配置化但此卡不在 → 收权
 }
