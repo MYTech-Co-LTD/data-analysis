@@ -19,6 +19,10 @@ services:
       # InsForge SDK（服务端 API Routes 使用）
       - INSFORGE_API_BASE=http://insforge:7130
       - INSFORGE_API_KEY=${ANON_KEY}
+      # 管理 API 鉴权（lib/admin-api-auth requireAdmin）：access_token 验签需与签发方同秘密
+      # （签发端 = deno 容器 JWT_SECRET / PostgREST PGRST_JWT_SECRET 同源，见 docker-compose.yml）
+      # :? fail-fast：未配置则 web 容器启动即失败，避免运行时注入空串致全部管理 API 500（排查困难）
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET 未配置——与 deno/PostgREST 签发端同源}
       # 乐檬签名密钥（collect-lemeng function 需要）
       - LEMENG_SECRET_KEY=${LEMENG_SECRET_KEY}
       # DuckDB 服务（Parquet 转换）
@@ -41,6 +45,29 @@ services:
       - AGENT_API_KEY=${AGENT_API_KEY:-}
       # 监控兜底通道默认收件人（InsForge-down 时 web 直连企微 message/send，架构 §8.1）
       - NOTIFY_DEFAULT_TUSERS=${NOTIFY_DEFAULT_TUSERS}
+      # Task3 功能门禁兜底：BREAKGLASS_ADMINS 传递（checkFeaturePerm 读，缺此行 env 进不了容器）
+      - BREAKGLASS_ADMINS=${BREAKGLASS_ADMINS:-}
+      # W1 Task6：web 容器内 Casdoor client_credentials（web/lib/sync/casdoor-client.ts——
+      # resource-sync / reconcile-catalog（辅助页+cron）经此调 Casdoor；thin-sync 亦同源。
+      # 此前未注入 = 容器内 Casdoor 调用恒 no_access_token，synced 状态不可用）
+      - CASDOOR_API_URL=${CASDOOR_API_URL:-https://sso.shanhaiyiguo.com}
+      - CASDOOR_CLIENT_ID=${CASDOOR_CLIENT_ID:-}
+      - CASDOOR_CLIENT_SECRET=${CASDOOR_CLIENT_SECRET:-}
+      - CASDOOR_ORG=${CASDOOR_ORG:-shanhai}
+      # ── 统一推送中心（spec 2026-08-15 §5/§8.2）──
+      # 引擎三处 fail-close 均依赖这些 env；此前 compose 未传递 = 引擎在生产恒拒（2026-08-17 排查）
+      # NOVU_API_URL/KEY：run_push 触发 + admin-service 建 workflow（值在 .env，runbook §4.7）
+      - NOVU_API_URL=${NOVU_API_URL:-}
+      - NOVU_API_KEY=${NOVU_API_KEY:-}
+      # 双层验签第二层（bridge-verify.ts / engine-sig.ts）——两把密钥只存 web/bridge 侧，Novu 不知 ENGINE 侧
+      - NOVU_BRIDGE_SECRET=${NOVU_BRIDGE_SECRET:-}
+      - ENGINE_BRIDGE_SECRET=${ENGINE_BRIDGE_SECRET:-}
+      # push 引擎 PostgREST 直连（web/lib/push getConfig 无默认值 → 空串 = strict RPC 恒 NULL 全员 skipped）
+      - POSTGREST_URL=http://postgrest:3000
+      # 与 INSFORGE_API_KEY 同源（anon JWT，PostgREST anon role 走 push 表/RPC GRANT）
+      - POSTGREST_ANON_KEY=${ANON_KEY}
+      # 引擎逐 subscriber 拼 webhookUrl 的公网基址（Novu worker 回调 bridge 路由用）
+      - PUSH_BRIDGE_BASE_URL=${PUSH_BRIDGE_BASE_URL:-https://data.shanhaiyiguo.com/api/wecom-bridge}
     depends_on:
       - insforge
     networks:
@@ -72,6 +99,11 @@ services:
       # （架构文档 §4.3；值同 deploy/.env 的 AGENT_API_KEY，与 function secret 同源）
       AGENT_API_KEY: ${AGENT_API_KEY:-}
       AGENT_QUERY_URL: http://insforge:7130/functions/agent-query
+      # push-admin-plugin：服务身份 client_credentials JWT（spec §6.1，scope openclaw:push）
+      PUSH_API_URL: http://web:3000/api/push
+      CASDOOR_ORIGIN: ${CASDOOR_ISSUER:-https://sso.shanhaiyiguo.com}
+      CASDOOR_CLIENT_ID: ${CASDOOR_CLIENT_ID:-}
+      CASDOOR_CLIENT_SECRET: ${CASDOOR_CLIENT_SECRET:-}
     volumes:
       - "../openclaw/state:/home/node/.openclaw"
     cap_drop:

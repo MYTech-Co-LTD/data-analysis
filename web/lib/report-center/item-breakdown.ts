@@ -84,6 +84,7 @@ export function toBoard(
 export async function getItemBreakdownTop(
   targetId: number,
   closed?: boolean,
+  dates?: { startDate?: string; endDate?: string },
 ): Promise<ItemBreakdownResult> {
   const emptyBoard: TopBoard = { rows: [], totalAmount: 0, totalProfit: 0 };
   const empty: ItemBreakdownResult = {
@@ -98,18 +99,28 @@ export async function getItemBreakdownTop(
   try {
     const client = await getClient();
 
-    // 取目标周期，算默认日：今天在周期内->今天；今天>end->end；今天<start->start
-    const { data: t, error: tErr } = await client.database
-      .from("targets")
-      .select("start_date,end_date")
-      .eq("id", targetId)
-      .single();
-    if (tErr || !t) {
-      console.error("getItemBreakdownTop: target fetch failed:", tErr);
-      return { ...empty, status: "error", error: wrapError(tErr ?? new Error("target not found")) };
+    // 取目标周期，算默认日：今天在周期内->今天；今天>end->end；今天<start->start。
+    // 宿主已从 RLS 可见的报表视图拿到周期时透传 dates，跳过对 targets 底表的直查——
+    // targets 有 branch RLS，门店权限用户看不到 branch_num='ALL' 的全司目标（PGRST116），
+    // 曾导致 item-top 板块整板「加载失败」。
+    let startDate: string;
+    let endDate: string;
+    if (dates?.startDate && dates?.endDate) {
+      startDate = dates.startDate;
+      endDate = dates.endDate;
+    } else {
+      const { data: t, error: tErr } = await client.database
+        .from("targets")
+        .select("start_date,end_date")
+        .eq("id", targetId)
+        .single();
+      if (tErr || !t) {
+        console.error("getItemBreakdownTop: target fetch failed:", tErr);
+        return { ...empty, status: "error", error: wrapError(tErr ?? new Error("target not found")) };
+      }
+      startDate = t.start_date;
+      endDate = t.end_date;
     }
-    const startDate: string = t.start_date;
-    const endDate: string = t.end_date;
     const today = new Date().toISOString().slice(0, 10);
     const defaultDay =
       today >= startDate && today <= endDate

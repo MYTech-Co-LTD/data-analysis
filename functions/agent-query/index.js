@@ -108,18 +108,29 @@ function validateSql(raw) {
   return trimmed + " LIMIT " + MAX_ROWS;
 }
 
+// 复合键归一（186 同款）：'3120-0027' → '3120-27'（尾段去前导零，双侧对称）
+const normKey = (s) => String(s).replace(/^([0-9]+)-0+([0-9]+)$/, "$1-$2");
+
 // ④ DuckDB 路径：拼权限视图（行 branch_nums 过滤 + 列成本组脱敏；成本列/glob 来源 reg=注册表）
+// B1（185 casdoor-only 语义）：branch_nums=[] = authorized ∅ = deny——旧「无 perms=全放」宽松形状
+// 已随 data_permissions sunset 废弃；仅 ["*"]（服务身份宽松形状 / 全店授权）= 不加门店过滤。
+// ★门店键铁律 + 键形态（PR#15 家族）：parquet branch_num 是裸编号且无 sbc 列，sbc 只在
+// 文件路径（QA/c1 同款 regexp_extract(filename) 提取）；claims 授权是规范复合键——比较前
+// 双侧归一（186 同款尾段去前导零）。裸授权值（无 '-'）跨账套不唯一不参与匹配（deny 方向）。
 async function runDuckdb(userSelect, perms, reg) {
-  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.length === 0 || perms.branch_nums.includes("*");
+  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.includes("*");
+  const authKeys = [...new Set((perms.branch_nums || []).filter((v) => String(v).includes("-")).map(normKey))];
   const branchFilter = allBranches
     ? ""
-    : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
+    : authKeys.length === 0
+      ? "WHERE 1=0"
+      : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.can_see_cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
   let viewSql =
     "CREATE OR REPLACE TEMP VIEW retail_detail AS " +
     "SELECT * REPLACE (" + replaceList + ") " +
-    "FROM read_parquet('" + reg.retailGlob + "') " + branchFilter + ";";
+    "FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ";";
   // C3: dim_* carry 视图（字典全可见；敏感列如 dim_item.item_cost_price 按 can_see_cost 脱敏，与 retail_detail 同机制）
   for (const d of (reg.dimCarry || [])) {
     const sens = d.sensitiveColumns || [];
@@ -139,14 +150,21 @@ async function runDuckdb(userSelect, perms, reg) {
   return body.data;
 }
 
-// ⑤ PG 路径：代签短时 JWT（注入 branch_nums/can_see_cost）→ execute_sql_rls（SECURITY INVOKER，走 RLS）
+// ⑤ PG 路径：代签短时 JWT（185 终版 RLS 只认 data_scope 新形状——旧形状令牌=deny，S4 窗口已关）
+//    → execute_sql_rls（SECURITY INVOKER，走 RLS）。brands/categories 无 DB 镜像（185：deny 方向，
+//    权威源=登录 claims）；服务身份（未知用户）get_user_perms 宽松形状 ["*"] 全维放行。
 async function runPg(userSelect, userId, perms) {
   const now = Math.floor(Date.now() / 1000);
   const token = await signJwt(
     {
       sub: userId,
       role: "authenticated",
-      branch_nums: perms.branch_nums,
+      data_scope: {
+        branch_nums: perms.branch_nums,
+        brands: perms.brands || [],
+        categories: perms.categories || [],
+      },
+      fields: { cost: !!perms.can_see_cost },
       can_see_cost: !!perms.can_see_cost,
       iss: "agent-query",
       iat: now,
@@ -274,6 +292,44 @@ module.exports = async function (req) {
       const result = await r.json();
       return json({ success: true, result });
     } catch (e) { return json({ error: "delete_failed", detail: String(e) }, 502); }
+  }
+
+  // U7 cutover: push_report 路径切 run_push 引擎。
+  // 旧路径：wecom-push function 直接读 reports 表 + 发企微 textcard（已退役，代码保留）。
+  // 新路径：调 web /api/push API → run_push 引擎（四守卫+Novu+bridge+降级）。
+  // txnId 贯穿 trigger log → Novu → bridge 日志，全链路可追。
+  // rollback：重启用 wecom-push cron 即可回退旧路径。
+  if (body.mode === "push_report") {
+    try {
+      const webBase = Deno.env.get("WEB_BASE_URL") || "http://web:3000";
+      // Review 修复（B3）：body 字段对齐 /api/push 契约（camelCase workflowId/userId/selector.kind），
+      // 鉴权走 AGENT_API_KEY（route 已支持内部调用方双通道）。
+      const rawSel = body.selector || { type: "all" };
+      const selKind = (rawSel && typeof rawSel === "object" && rawSel.kind)
+        ? rawSel.kind
+        : (rawSel && typeof rawSel === "object" && rawSel.type === "all" ? "all" : "all");
+      const pushResp = await fetch(webBase + "/api/push", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + (AGENT_API_KEY || ""),
+        },
+        body: JSON.stringify({
+          workflowId: body.workflow_id || "scheduled_report",
+          userId: userId || "system:cron",
+          selector: { kind: selKind, ids: (rawSel && Array.isArray(rawSel.ids)) ? rawSel.ids : [] },
+          broadcastPerm: !!(body.broadcast_perm || body.broadcastPerm),
+          deliver: body.deliver !== false,
+        }),
+      });
+      const pushResult = await pushResp.json().catch(() => ({}));
+      if (!pushResp.ok) {
+        return json({ error: "push_failed", detail: pushResult }, pushResp.status || 502);
+      }
+      return json({ success: true, ...pushResult });
+    } catch (e) {
+      return json({ error: "push_failed", detail: String(e) }, 502);
+    }
   }
 
   if (!sql || !userId) return json({ error: "missing sql/userId" }, 400);

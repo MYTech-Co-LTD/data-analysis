@@ -209,7 +209,7 @@ describe('Tier1 Generator', () => {
       target_metric_codes: [],
     };
     const sql = generateTier1View(config, mockMetrics, mockSources);
-    expect(sql).toContain('request.jwt.claims.can_see_cost');
+    expect(sql).toContain('can_cost_visible()');
   });
 
   it('should respect source_filter in CTE (wholesale_pp brand)', () => {

@@ -50,6 +50,14 @@
 - 品牌归属/配送语义详见 `docs/superpowers/specs/2026-07-28-store-brand-dimension-reform-design.md`。
 - **考核战区 = `dim_war_zone` 维表**（`is_assessed` 标东/南/西/中四战区）。`is_assessed_war_zone()` 函数体查此表（数据驱动，签名不变）。增减考核战区改 `dim_war_zone` 数据，**不动代码/SQL**。语义层 `dimensions.war_zone` 注册来源。
 
+## catalog 单真相纪律（重要）
+
+**`capabilityCatalog` 只存在于 `web/lib/capability-catalog.ts`（含 scan 产出的 generated 输入）单副本；
+function（claims 构建器）只消费不内嵌复制 catalog 子集。** 新增视图/路由 = 改 view-configs / app 路由，
+catalog 由 scan 自动发现；在 function 内手写能力清单 = 违规（function-only 部署 SSH 直调不触发 catalog
+scan，内嵌副本必然漂移）。空集 = deny：claims 的 data_scope/groups 段存在但为空 = 授权确定为 ∅，
+禁止收敛 ["*"]；enforce 走 RLS 策略分支（迁移 179），严禁对空段使用 claim_match_or_star。
+
 ## 服务器 SSH 连接
 
 目标服务器连接方式：

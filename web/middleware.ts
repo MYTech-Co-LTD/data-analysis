@@ -1,7 +1,39 @@
 import { NextResponse, NextRequest } from "next/server";
 import { isWecomClient, isMobileDevice } from "@/lib/device";
-import { ADMIN_USERIDS } from "@/lib/auth";
-import { buildCasdoorAuthUrl } from "@/lib/wecom";
+import {
+  checkFeaturePerm,
+  decodePermissionsClaim,
+  catalogVCheck,
+  hasGatePerm,
+  type DecodedClaims,
+} from "@/lib/feature-perm";
+import { checkOffboard } from "@/lib/offboard-check";
+
+// Task 13（S4）：旧形状令牌（无 catalog_v）的 48h TTL——超龄 → 302 /login 刷新提示。
+// serverV 与 claims 构建器（functions/wecom-oidc-callback）同源读 CATALOG_V env，缺省 '0'。
+const CATALOG_V_SERVER = process.env.CATALOG_V ?? "0";
+const STALE_TOKEN_TTL_S = 48 * 3600;
+
+// catalog_v 快/慢路径接线：stale（无 catalog_v）且 iat 超 48h → 需刷新。
+// `==` 失败不是拒绝条件（M3.5 防全员锁死）：慢路径 rejected 仅作可观测信号，不据此 302；
+// 具体驱逐 key 由 resolveViewKey 解析期校验 + API 实查兜底挡。
+function isRefreshRequired(claim: DecodedClaims | undefined): boolean {
+  if (!claim) return false;
+  const verdict = catalogVCheck(claim, CATALOG_V_SERVER);
+  if (verdict.rejected.length > 0) {
+    console.warn("[catalog_v] slow-path rejected keys:", verdict.rejected.join(","));
+  }
+  if (!verdict.stale) return false;
+  if (typeof claim.iat !== "number") return false; // iat 缺失不强制（软门禁保守放行）
+  return Date.now() / 1000 - claim.iat > STALE_TOKEN_TTL_S;
+}
+
+// 报表中心页面门禁（2026-08-18 方案 A）：/reports* 区域（含 /reports/targets）统一由
+// gate:reports-center（门禁|报表中心，view-group：成员 view:reports + view:reports-targets）把关，
+// 不再按路径分别查 view:reports / view:reports-targets。拒 → 落地页（软门禁，实查兜底不变）。
+function isReportsPath(pathname: string): boolean {
+  return pathname === "/reports" || pathname.startsWith("/reports/");
+}
 
 export async function middleware(req: NextRequest) {
   const ua = req.headers.get("user-agent")?.toLowerCase() || "";
@@ -45,54 +77,43 @@ export async function middleware(req: NextRequest) {
   return response;
 }
 
-// redirectToCasdoor: 未登录用户统一改跳 Casdoor /login/oauth/authorize。
+// redirectToCasdoor: 未登录用户统一改跳 /auth/start（B1 CSRF 修复，单一入口）。
 //
-// - redirect_uri 与 web/app/auth/callback/route.ts 保持一致（env 优先，回退 origin）。
-// - state = URL 编码的目标路径，callback 回跳用它回到原页。
-// - provider 按 UA 路由：企微内 wxwork → wecom_silent（Silent snsapi）；
-//   PC → wecom_scan（Normal 扫码，需 Task 6 在 Casdoor 配该 provider）。
-// - Casdoor env 未配置（buildCasdoorAuthUrl 返回 ""）→ 回退到旧 /login?next 行为，
-//   保底不让用户卡死。
+// - /auth/start 生成 state nonce + 绑定 httpOnly cookie，再 307 到 Casdoor authorize；
+//   middleware 只负责指路，不重复协商 provider / redirect_uri（防两处漂移）。
+// - targetPath（pathname+search）由 NextRequest.searchParams 编码，不会破坏查询串。
 function redirectToCasdoor(req: NextRequest, targetPath: string): NextResponse {
-  const proto = req.headers.get("x-forwarded-proto") || "https";
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-  const origin = `${proto}://${host}`;
-  // 与 auth/callback 一致：env 优先，回退当前 origin。
-  const redirectUri =
-    process.env.NEXT_PUBLIC_CASDOOR_REDIRECT_URI || `${origin}/auth/callback`;
-
-  const ua = req.headers.get("user-agent")?.toLowerCase() || "";
-  // wxwork = 企微客户端内置 UA。wecom_scan 在 Task 6 配置 Casdoor provider 前是占位串，
-  // 那之前 PC 走的 Casdoor 会用其默认登录页（QR/账号），Task 6 后才精确路由到企微扫码。
-  const provider = ua.includes("wxwork") ? "wecom_silent" : "wecom_scan";
-
-  const authUrl = buildCasdoorAuthUrl(
-    redirectUri,
-    encodeURIComponent(targetPath),
-    provider
-  );
-
-  if (!authUrl) {
-    // Casdoor 未配置 → 回退到 /login 兜底页（旧路径）。
-    const url = req.nextUrl.clone();
-    url.pathname = "/login";
-    url.searchParams.set("next", targetPath);
-    return NextResponse.redirect(url);
-  }
-
-  return NextResponse.redirect(authUrl, 307);
+  const url = req.nextUrl.clone();
+  url.pathname = "/auth/start";
+  url.searchParams.set("next", targetPath);
+  return NextResponse.redirect(url);
 }
 
 async function handleWecomClient(req: NextRequest) {
   const token = req.cookies.get("insforge_access_token")?.value;
 
   if (token) {
-    // 检查 admin 路径权限
+    const claim = decodePermissionsClaim(token);
+    // 离职四 sink①（2026-08-17）：企微路径同样接入 is_active 软校验 + blacklist
+    // （此前仅 PC 路径查 blacklist，企微端——大多数用户所在端——完全不查，断链）。
+    if (await checkOffboard(token, claim?.sub)) {
+      return rejectSession(req);
+    }
+    // S4 旧形状令牌超龄 → 刷新提示（不清 cookie；重新登录即换新形状 claims）
+    if (isRefreshRequired(claim)) {
+      return redirectToRefresh(req);
+    }
+    // 检查 admin 路径权限（P0a：checkFeaturePerm 收口，claims 来自 token 不验签解码——
+    // 仅 UX 挡板，真实裁决在 API 路由内 requireAdmin）
     if (req.nextUrl.pathname.startsWith("/admin")) {
       const wecomId = req.cookies.get("wecom_userid")?.value;
-      if (!wecomId || !ADMIN_USERIDS.has(wecomId)) {
+      if (!wecomId || !(await checkFeaturePerm(wecomId, "data-analysis:admin", claim))) {
         return NextResponse.redirect(new URL("/?error=admin_required", req.url));
       }
+    }
+    // 报表中心页面门禁（方案 A）：进 /reports* 需 gate:reports-center → 拒则落地页
+    if (isReportsPath(req.nextUrl.pathname) && !hasGatePerm(claim?.permissions, "data-analysis:gate:reports-center")) {
+      return NextResponse.redirect(new URL("/?error=view_required", req.url));
     }
     return NextResponse.next({ request: req });
   }
@@ -111,58 +132,47 @@ async function handleRegularBrowser(req: NextRequest) {
     return redirectToCasdoor(req, targetPath);
   }
 
-  const isBlacklisted = await checkTokenBlacklist(token);
-  if (isBlacklisted) {
-    const response = NextResponse.redirect(new URL("/login", req.url));
-    response.cookies.delete("insforge_access_token");
-    response.cookies.delete("wecom_userid");
-    response.cookies.delete("wecom_name");
-    return response;
+  // 离职四 sink①（2026-08-17）：blacklist（token_hash + sub 双维）+ is_active 软校验统一收口 checkOffboard
+  if (await checkOffboard(token, decodePermissionsClaim(token)?.sub)) {
+    return rejectSession(req);
   }
 
-  // 检查 admin 路径权限
+  // S4 旧形状令牌超龄 → 刷新提示（不清 cookie；重新登录即换新形状 claims）
+  const claim = decodePermissionsClaim(token);
+  if (isRefreshRequired(claim)) {
+    return redirectToRefresh(req);
+  }
+
+  // 检查 admin 路径权限（P0a：同上，checkFeaturePerm 收口）
   if (req.nextUrl.pathname.startsWith("/admin")) {
     const wecomId = req.cookies.get("wecom_userid")?.value;
-    if (!wecomId || !ADMIN_USERIDS.has(wecomId)) {
+    if (!wecomId || !(await checkFeaturePerm(wecomId, "data-analysis:admin", claim))) {
       return NextResponse.redirect(new URL("/?error=admin_required", req.url));
     }
+  }
+
+  // 报表中心页面门禁（方案 A）：进 /reports* 需 gate:reports-center → 拒则落地页
+  if (isReportsPath(req.nextUrl.pathname) && !hasGatePerm(claim?.permissions, "data-analysis:gate:reports-center")) {
+    return NextResponse.redirect(new URL("/?error=view_required", req.url));
   }
 
   return NextResponse.next({ request: req });
 }
 
-async function checkTokenBlacklist(token: string): Promise<boolean> {
-  try {
-    const tokenPrefix = token.slice(0, 100);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tokenPrefix));
-    const tokenHash = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("")
-      .slice(0, 16);
+// S4 刷新提示：302 /login（软门禁——token 仍有效，重登即取到带 catalog_v 的新形状 claims）。
+function redirectToRefresh(req: NextRequest): NextResponse {
+  const url = new URL("/login", req.url);
+  url.searchParams.set("error", "refresh_required");
+  return NextResponse.redirect(url);
+}
 
-    const baseUrl = process.env.NEXT_PUBLIC_INSFORGE_URL || "http://localhost:7130";
-    const response = await fetch(
-      `${baseUrl}/rest/v1/token_blacklist?token_hash=eq.${tokenHash}&select=id`,
-      {
-        headers: {
-          "Authorization": `Bearer ${token}`,
-          "Accept": "application/json",
-        },
-        signal: AbortSignal.timeout(3000),
-      }
-    );
-
-    if (!response.ok) {
-      console.error("Blacklist query failed:", response.status);
-      return false;
-    }
-
-    const data = await response.json();
-    return data.length > 0;
-  } catch (e) {
-    console.error("Blacklist check failed:", e);
-    return false;
-  }
+// 拒会话：清 cookie + 跳 /login（离职/拉黑用户软着陆到重新登录口，重新登录即被 Casdoor disable 指回）。
+function rejectSession(req: NextRequest): NextResponse {
+  const response = NextResponse.redirect(new URL("/login", req.url));
+  response.cookies.delete("insforge_access_token");
+  response.cookies.delete("wecom_userid");
+  response.cookies.delete("wecom_name");
+  return response;
 }
 
 export const config = {

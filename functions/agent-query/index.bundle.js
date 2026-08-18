@@ -146,12 +146,14 @@ function validateSql(raw) {
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
 }
+var normKey = (s) => String(s).replace(/^([0-9]+)-0+([0-9]+)$/, "$1-$2");
 async function runDuckdb(userSelect, perms, reg) {
-  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.length === 0 || perms.branch_nums.includes("*");
-  const branchFilter = allBranches ? "" : "WHERE branch_num IN (" + perms.branch_nums.map(sqlLit).join(", ") + ")";
+  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.includes("*");
+  const authKeys = [...new Set((perms.branch_nums || []).filter((v) => String(v).includes("-")).map(normKey))];
+  const branchFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.can_see_cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
-  let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "') " + branchFilter + ";";
+  let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ";";
   for (const d of reg.dimCarry || []) {
     const sens = d.sensitiveColumns || [];
     const dimReplace = sens.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
@@ -174,7 +176,12 @@ async function runPg(userSelect, userId, perms) {
     {
       sub: userId,
       role: "authenticated",
-      branch_nums: perms.branch_nums,
+      data_scope: {
+        branch_nums: perms.branch_nums,
+        brands: perms.brands || [],
+        categories: perms.categories || []
+      },
+      fields: { cost: !!perms.can_see_cost },
       can_see_cost: !!perms.can_see_cost,
       iss: "agent-query",
       iat: now,
@@ -295,6 +302,34 @@ module.exports = async function(req) {
       return json({ success: true, result });
     } catch (e) {
       return json({ error: "delete_failed", detail: String(e) }, 502);
+    }
+  }
+  if (body.mode === "push_report") {
+    try {
+      const webBase = Deno.env.get("WEB_BASE_URL") || "http://web:3000";
+      const rawSel = body.selector || { type: "all" };
+      const selKind = rawSel && typeof rawSel === "object" && rawSel.kind ? rawSel.kind : rawSel && typeof rawSel === "object" && rawSel.type === "all" ? "all" : "all";
+      const pushResp = await fetch(webBase + "/api/push", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + (AGENT_API_KEY || "")
+        },
+        body: JSON.stringify({
+          workflowId: body.workflow_id || "scheduled_report",
+          userId: userId || "system:cron",
+          selector: { kind: selKind, ids: rawSel && Array.isArray(rawSel.ids) ? rawSel.ids : [] },
+          broadcastPerm: !!(body.broadcast_perm || body.broadcastPerm),
+          deliver: body.deliver !== false
+        })
+      });
+      const pushResult = await pushResp.json().catch(() => ({}));
+      if (!pushResp.ok) {
+        return json({ error: "push_failed", detail: pushResult }, pushResp.status || 502);
+      }
+      return json({ success: true, ...pushResult });
+    } catch (e) {
+      return json({ error: "push_failed", detail: String(e) }, 502);
     }
   }
   if (!sql || !userId) return json({ error: "missing sql/userId" }, 400);

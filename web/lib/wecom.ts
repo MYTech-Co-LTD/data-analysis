@@ -45,11 +45,12 @@ export async function exchangeWecomCode(code: string) {
 }
 
 // 调 wecom-oidc-callback function：Casdoor authorization code → PostgREST JWT。
-// 注意 redirectUri 必须与浏览器跳转 Casdoor 时用的 redirect_uri 一致。
-export async function exchangeCasdoorCode(code: string, redirectUri: string) {
+// 注意 redirectUri 必须与浏览器跳转 Casdoor 时用的 redirect_uri 一致；
+// state 原样转发（B1 CSRF：function 侧校验 `${nonce}::path` 格式，凭 nonce 绑定登录发起会话）。
+export async function exchangeCasdoorCode(code: string, redirectUri: string, state?: string) {
   const { data, error } = await insforge.functions.invoke("wecom-oidc-callback", {
     method: "POST",
-    body: { code, redirect_uri: redirectUri },
+    body: { code, redirect_uri: redirectUri, state },
   });
   return { data, error };
 }

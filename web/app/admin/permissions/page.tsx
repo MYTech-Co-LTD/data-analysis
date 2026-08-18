@@ -1,164 +1,200 @@
 // web/app/admin/permissions/page.tsx
-// 权限管理：用户角色指派（manual 不被同步覆盖）+ 生效权限预览
+// 权限管理（2026-08-18 例外废除后收口版）：本页职责 = 权限变更审计（permission_audit）。
+// 旧四维模型与例外体系均已下线——权限真相源 = Casdoor（角色 / Permission 资源勾选，
+// 门店范围 = 范围|X 资源唯一真相，2026-08-18 废除组织架构推导与例外体系）。
+// 数据契约（存活通道）：
+//   GET  /api/admin/permissions/audit?limit=20 → { items }
+//   GET  /api/admin/permissions/preview?wecom_id= → 生效权限预览（排障 API，无 UI 入口）
+// 例外（temporary_grants）与四维授权已废除（185 sunset / 197 例外废除），不再有写入口。
+
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { History, RefreshCw, ShieldCheck } from 'lucide-react';
 
-type Role = { id: number; code: string; name: string };
-type Dept = { id: string; name: string };
-type User = {
-  wecom_id: string; name: string; department_ids: string[];
-  role_id: number | null; role_source: 'auto' | 'manual';
+// ================= 类型 =================
+
+type AuditItem = {
+  id: number; actor_wecom_id: string; actor_name: string | null;
+  action: string; subject_type: string; subject_id: string | null;
+  payload_before: unknown; payload_after: unknown; created_at: string;
 };
-type Preview = {
-  effective: {
-    role_code: string | null; branch_nums: string[]; brands: string[];
-    categories: string[]; can_see_cost: boolean;
-  } | null;
-  layers: {
-    user: User | null;
-    role: Role | null;
-    departments: (Dept & { branch_nums: string[]; can_see_cost: boolean })[];
-    permissions: { subject_type: string; subject_id: string; can_see_cost: boolean; expires_at: string | null; note: string | null }[];
-  };
+
+// ================= 常量 =================
+
+const SUBJECT_LABEL: Record<string, string> = { user: '用户', dept: '部门', role: '角色' };
+const ACTION_LABEL: Record<string, string> = {
+  assign_role: '指派角色',
+  upsert_data_permission: '更新权限',
+  delete_data_permission: '删除 override',
+  update_role: '更新角色',
 };
+
+function fmtShanghai(ts: string | null): string {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(d);
+  const m: Record<string, string> = {};
+  for (const p of parts) m[p.type] = p.value;
+  return `${m.year}-${m.month}-${m.day} ${m.hour}:${m.minute}`;
+}
+
+function fmtList(v: unknown): string {
+  if (Array.isArray(v)) {
+    if (v.length === 1 && v[0] === '*') return '全部门(*)';
+    return v.length ? v.join('、') : '空';
+  }
+  return v == null ? '未配置' : String(v);
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+  return null;
+}
+
+function auditDetail(a: AuditItem): string {
+  const after = asRecord(a.payload_after);
+  const before = asRecord(a.payload_before);
+  const p = after ?? before;
+  switch (a.action) {
+    case 'assign_role': {
+      const rid = p?.role_id ?? null;
+      return rid == null ? '恢复自动角色' : `指派角色 #${String(rid)}`;
+    }
+    case 'upsert_data_permission':
+    case 'delete_data_permission': {
+      const bits: string[] = [];
+      if (p?.branch_nums !== undefined && p?.branch_nums !== null) bits.push(`门店 ${fmtList(p.branch_nums)}`);
+      if (p?.brands !== undefined && p?.brands !== null) bits.push(`品牌 ${fmtList(p.brands)}`);
+      if (p?.categories !== undefined && p?.categories !== null) bits.push(`品类 ${fmtList(p.categories)}`);
+      if (p?.can_see_cost !== undefined && p?.can_see_cost !== null) bits.push(`成本${p.can_see_cost ? '可见' : '不可见'}`);
+      if (p?.expires_at) bits.push(`至 ${String(p.expires_at).slice(0, 10)}`);
+      if (p?.note) bits.push(String(p.note));
+      if (bits.length) return bits.join('、');
+      return a.action === 'delete_data_permission' ? '删除 override（恢复继承）' : '更新权限';
+    }
+    case 'update_role': {
+      const bits: string[] = [];
+      if ('default_landing' in (after ?? {})) bits.push(`落地页 ${after?.default_landing ?? '空'}`);
+      if ('default_metric' in (after ?? {})) bits.push(`指标 ${after?.default_metric ?? '空'}`);
+      if ('is_active' in (after ?? {})) bits.push(`状态 ${after?.is_active ? '启用' : '停用'}`);
+      if (p?.branch_nums !== undefined && p?.branch_nums !== null) bits.push(`门店 ${fmtList(p.branch_nums)}`);
+      if (p?.brands !== undefined && p?.brands !== null) bits.push(`品牌 ${fmtList(p.brands)}`);
+      if (p?.categories !== undefined && p?.categories !== null) bits.push(`品类 ${fmtList(p.categories)}`);
+      if (p?.can_see_cost !== undefined && p?.can_see_cost !== null) bits.push(`成本${p.can_see_cost ? '可见' : '不可见'}`);
+      return bits.join('、') || '更新角色';
+    }
+    default:
+      return a.action;
+  }
+}
+
+// ================= 小部件 =================
+
+function AuditPanel({ items, loading, onRefresh }: {
+  items: AuditItem[]; loading: boolean; onRefresh: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-slate-200">
+        <h3 className="text-sm font-semibold text-slate-800 inline-flex items-center gap-1.5">
+          <History size={15} /> 最近变更
+        </h3>
+        <button onClick={onRefresh} disabled={loading} className="text-xs text-slate-500 hover:text-primary inline-flex items-center gap-1" title="刷新">
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> 刷新
+        </button>
+      </div>
+      <div className="max-h-[70vh] overflow-y-auto">
+        {items.length === 0 ? (
+          <div className="px-4 py-6 text-sm text-slate-400">暂无变更记录</div>
+        ) : (
+          <table className="w-full text-xs border-collapse tabular-nums">
+            <thead className="sticky top-0 bg-slate-50">
+              <tr className="text-left text-slate-500">
+                <th className="px-3 py-1.5 font-medium">时间</th>
+                <th className="px-2 py-1.5 font-medium">操作者</th>
+                <th className="px-2 py-1.5 font-medium">主体</th>
+                <th className="px-2 py-1.5 font-medium">动作</th>
+                <th className="px-3 py-1.5 font-medium">详情</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map(a => (
+                <tr key={a.id} className="border-t border-slate-100 align-top">
+                  <td className="px-3 py-1.5 text-slate-500 whitespace-nowrap">{fmtShanghai(a.created_at)}</td>
+                  <td className="px-2 py-1.5 text-slate-700 whitespace-nowrap">{a.actor_name ?? a.actor_wecom_id}</td>
+                  <td className="px-2 py-1.5 text-slate-600 whitespace-nowrap">
+                    {SUBJECT_LABEL[a.subject_type] ?? a.subject_type}
+                    {a.subject_id ? <span className="text-slate-400"> #{a.subject_id}</span> : null}
+                  </td>
+                  <td className="px-2 py-1.5 text-slate-600 whitespace-nowrap">{ACTION_LABEL[a.action] ?? a.action}</td>
+                  <td className="px-3 py-1.5 text-slate-500 break-words">{auditDetail(a)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ================= 页面 =================
 
 export default function PermissionsPage() {
-  const [users, setUsers] = useState<User[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [depts, setDepts] = useState<Dept[]>([]);
-  const [search, setSearch] = useState('');
-  const [saving, setSaving] = useState<string | null>(null);
-  const [preview, setPreview] = useState<{ id: string; data: Preview } | null>(null);
+  const [audit, setAudit] = useState<AuditItem[]>([]);
   const [error, setError] = useState('');
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
-  const deptName = useMemo(() => {
-    const m = new Map(depts.map(d => [d.id, d.name]));
-    return (ids: string[]) => ids.map(i => m.get(i) ?? i).join('、') || '-';
-  }, [depts]);
-
-  async function load() {
-    const r = await fetch('/api/admin/permissions/users', { cache: 'no-store' });
-    if (!r.ok) { setError(`加载失败 ${r.status}`); return; }
-    const d = await r.json();
-    setUsers(d.users ?? []); setRoles(d.roles ?? []); setDepts(d.departments ?? []);
-  }
-  useEffect(() => { load(); }, []);
-
-  async function assign(u: User, roleId: number | null) {
-    setSaving(u.wecom_id);
-    const r = await fetch('/api/admin/permissions/users', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wecom_id: u.wecom_id, role_id: roleId }),
-    });
-    setSaving(null);
-    if (!r.ok) { setError(`保存失败 ${r.status}`); return; }
-    await load();
+  async function loadAudit() {
+    setAuditLoading(true);
+    try {
+      const r = await fetch('/api/admin/permissions/audit?limit=20', { cache: 'no-store' });
+      if (!r.ok) { setError(`审计加载失败 ${r.status}`); return; }
+      const d = await r.json();
+      setAudit(d.items ?? []);
+    } catch { setError('审计加载失败'); }
+    finally { setAuditLoading(false); }
   }
 
-  async function showPreview(wecomId: string) {
-    const r = await fetch(`/api/admin/permissions/preview?wecom_id=${encodeURIComponent(wecomId)}`, { cache: 'no-store' });
-    if (!r.ok) { setError(`预览失败 ${r.status}`); return; }
-    setPreview({ id: wecomId, data: await r.json() });
-  }
-
-  const filtered = users.filter(u =>
-    !search || u.name?.includes(search) || u.wecom_id.toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => {
+    void (async () => {
+      try {
+        await loadAudit();
+      } finally { setInitialLoading(false); }
+    })();
+  }, []);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto font-sans">
-      <h1 className="text-xl font-semibold text-slate-800 mb-1">权限管理</h1>
-      <p className="text-sm text-slate-500 mb-4">
-        角色指派（manual 不被同步覆盖；选「自动」恢复同步赋值）。用户重新登录后新权限生效。
-      </p>
+    <div className="font-sans">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+        <h1 className="text-xl font-semibold text-slate-800 inline-flex items-center gap-2">
+          <ShieldCheck size={20} /> 权限管理
+        </h1>
+        <span className="text-xs text-slate-400">权限变更审计</span>
+      </div>
+      {/* 真相源引导横幅（185 sunset + 197 例外废除后常驻）：常规权限去 Casdoor，门店范围 = 范围|X 资源 */}
+      <div className="mb-4 flex items-start gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+        <span>
+          权限真相源已上收统一身份平台——请在
+          <a href="https://sso.shanhaiyiguo.com/login/shanhai" target="_blank" rel="noreferrer" className="mx-1 font-medium underline hover:text-blue-900">Casdoor 管理端</a>
+          配置：能力点 / 品牌 / 品类 / 字段勾选，门店范围 = `范围|X` 资源（2026-08-18 起唯一真相，无范围 = 空集 deny；例外体系已废除）。改动后用户下次登录生效。本页仅展示权限变更审计留痕。
+        </span>
+      </div>
       {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
 
-      <input
-        value={search} onChange={e => setSearch(e.target.value)}
-        placeholder="搜索姓名 / 企微 ID"
-        className="mb-4 w-72 rounded border border-slate-300 px-3 py-1.5 text-sm"
-      />
-
-      <table className="w-full text-sm border-collapse tabular-nums">
-        <thead>
-          <tr className="text-left text-slate-500 border-b border-slate-200">
-            <th className="py-2 pr-4">姓名</th>
-            <th className="py-2 pr-4">部门</th>
-            <th className="py-2 pr-4">角色</th>
-            <th className="py-2 pr-4">来源</th>
-            <th className="py-2">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map(u => (
-            <tr key={u.wecom_id} className="border-b border-slate-100">
-              <td className="py-2 pr-4 text-slate-800">{u.name ?? u.wecom_id}</td>
-              <td className="py-2 pr-4 text-slate-600">{deptName(u.department_ids)}</td>
-              <td className="py-2 pr-4">
-                <select
-                  value={u.role_source === 'manual' ? (u.role_id ?? '') : ''}
-                  disabled={saving === u.wecom_id}
-                  onChange={e => assign(u, e.target.value ? Number(e.target.value) : null)}
-                  className="rounded border border-slate-300 px-2 py-1 text-sm"
-                >
-                  <option value="">自动{u.role_source === 'auto' && u.role_id
-                    ? `（${roles.find(r => r.id === u.role_id)?.name ?? u.role_id}）` : ''}</option>
-                  {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
-              </td>
-              <td className="py-2 pr-4">
-                <span className={u.role_source === 'manual' ? 'text-blue-700' : 'text-slate-400'}>
-                  {u.role_source === 'manual' ? '手动' : '自动'}
-                </span>
-              </td>
-              <td className="py-2">
-                <button onClick={() => showPreview(u.wecom_id)}
-                  className="text-blue-700 hover:underline text-sm">生效预览</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      {preview && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center" onClick={() => setPreview(null)}>
-          <div className="bg-white rounded-lg shadow-lg p-6 w-[560px] max-h-[80vh] overflow-auto" onClick={e => e.stopPropagation()}>
-            <h2 className="text-base font-semibold text-slate-800 mb-3">生效权限 - {preview.id}</h2>
-            <PreviewView data={preview.data} />
-            <button onClick={() => setPreview(null)}
-              className="mt-4 text-sm text-slate-500 hover:underline">关闭</button>
-          </div>
+      {initialLoading ? (
+        <div className="py-16 text-sm text-slate-400 text-center">加载中…</div>
+      ) : (
+        <div>
+          <AuditPanel items={audit} loading={auditLoading} onRefresh={loadAudit} />
         </div>
       )}
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex py-1 text-sm">
-      <div className="w-28 shrink-0 text-slate-500">{label}</div>
-      <div className="text-slate-800 tabular-nums">{value}</div>
-    </div>
-  );
-}
-
-function PreviewView({ data }: { data: Preview }) {
-  const e = data.effective;
-  return (
-    <div>
-      <h3 className="text-sm font-medium text-slate-700 mt-2 mb-1">合成结果（重新登录后写入 JWT）</h3>
-      <Row label="角色" value={e?.role_code ?? '-'} />
-      <Row label="门店范围" value={e?.branch_nums?.join(', ') ?? '-'} />
-      <Row label="品牌范围" value={e?.brands?.join(', ') ?? '-'} />
-      <Row label="品类范围" value={e?.categories?.join(', ') ?? '-'} />
-      <Row label="可见成本" value={e ? (e.can_see_cost ? '是' : '否') : '-'} />
-      <h3 className="text-sm font-medium text-slate-700 mt-4 mb-1">分层来源</h3>
-      <Row label="角色层" value={data.layers.role ? `${data.layers.role.name}（${data.layers.user?.role_source}）` : '未指派'} />
-      <Row label="部门层" value={data.layers.departments.map(d =>
-        `${d.name}：门店 ${d.branch_nums?.join(',') ?? '*'}${d.can_see_cost ? '，可见成本' : ''}`).join('；') || '-'} />
-      <Row label="个人 override" value={data.layers.permissions.filter(p => p.subject_type === 'user')
-        .map(p => `${p.note ?? ''}${p.expires_at ? `（至 ${p.expires_at.slice(0, 10)}）` : ''}`).join('；') || '无'} />
     </div>
   );
 }

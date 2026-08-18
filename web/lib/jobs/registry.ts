@@ -10,7 +10,17 @@ import { dimCustomerManifest } from './dim-customer/manifest';
 import { monitorManifests } from './monitor/manifest';
 import { qaFullManifest } from './qa/manifest';
 import { dailyReconcileManifest, sourceReconcileManifest } from './reconcile/manifest';
+import { reconcileGroupsManifest } from './reconcile-groups/manifest';
+import { reconcileCatalogManifest } from './reconcile-catalog/manifest';
+import { scheduledReportsManifest } from './scheduled-reports/manifest';
 import { targetCloseManifest } from './target-close/manifest';
+// Review 修复（M16）：此前 thin-sync / drift / perm-shadow / push-contract 四个 manifest
+// 已实现但未登记进 JOBS → 调度器从不注册，薄同步/对账/契约测试/权限 shadow 全部不跑。
+import { thinSyncManifest } from './thin-sync/manifest';
+import { driftReportManifest } from './thin-sync/drift-manifest';
+import { permShadowManifest } from './perm-shadow/manifest';
+import { pushContractManifest } from './push-contract/manifest';
+import { pushTtlCleanupManifest } from './push-ttl-cleanup/manifest';
 
 export { collectManifest };
 
@@ -22,5 +32,13 @@ export const JOBS: JobManifest[] = [
   sourceReconcileManifest,
   targetCloseManifest,
   qaFullManifest,
+  scheduledReportsManifest,
+  thinSyncManifest,
+  driftReportManifest,
+  permShadowManifest,
+  pushContractManifest,
+  pushTtlCleanupManifest,
+  reconcileGroupsManifest,
+  reconcileCatalogManifest,
   ...monitorManifests,
 ];

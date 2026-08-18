@@ -2,6 +2,10 @@
 // 通讯录全量兜底同步（平台基础设施，独立于 collect_tasks）。
 // 每日 03:17 调 functions/wecom-sync-contacts 全量自愈（架构 §7.1.2）。
 // P1：函数体从 scheduler.ts registerContactSyncJob 原样搬入 run（不改进）；cron 注册由薄 scheduler 按 manifest.schedule 完成。
+//
+// 2026-08-18：auto 角色写入已随薄同步收缩删除（derive-roles.ts 删除），角色归属全量
+// manual（Casdoor UI 单写者）。wecom-sync-contacts function 内 refresh_role_assignments 调用
+// 为遗留旧路径（写本地 role_id，未删）——如需彻底移除，改 function 代码（SSH PUT）。
 import type { JobManifest, JobResult } from '../../contracts';
 import { tryAcquireLock } from '../../scheduler-lock';
 import { INSFORGE_API_BASE, INSFORGE_API_KEY } from '../env';
@@ -21,6 +25,7 @@ export const contactSyncManifest: JobManifest = {
       });
       const data = await resp.json().catch(() => ({}));
       console.log('[scheduler] 通讯录同步结果:', resp.status, data);
+      // 2026-08-18：refresh_role_assignments 调用已从 function 移除（薄同步收缩后角色全 manual）。
     } catch (e: unknown) {
       console.error('[scheduler] 通讯录同步异常:', (e as Error).message);
     } finally {

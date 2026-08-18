@@ -107,11 +107,14 @@ export interface AchievementCteConfig {
 export interface AchievementMetricConfig {
   data_ready: boolean;
   cte: string;                 // 引用 ctes 里的 CTE 名
-  cost_sensitive?: boolean;    // actual 列按 can_see_cost 脱敏（CTE 内已处理时省略）
+  cost_sensitive?: boolean;    // actual 列按 can_cost_visible()（fields.cost）脱敏（CTE 内已处理时省略）
 }
 export interface AchievementViewConfig {
   view_name: string;
   target_level: string;        // 'total'（前端只消费 total 行）
   ctes: Record<string, AchievementCteConfig>;
   metrics: Record<string, AchievementMetricConfig>;
+  /** 194：有门店级目标分解的指标（受限用户分母改用可见门店目标之和）；
+   *  其余指标受限用户隐藏达成率（数据模型无门店分解，无从收缩——方案 A） */
+  store_scoped_metrics?: string[];
 }

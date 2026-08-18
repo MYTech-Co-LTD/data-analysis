@@ -6,14 +6,105 @@
 // Casdoor 内部走企微 provider(Use id as name → sub=wecom_id)，本 function 只收 Casdoor code。
 // 所需 secrets: CASDOOR_ISSUER / CASDOOR_CLIENT_ID / CASDOOR_CLIENT_SECRET / JWT_SECRET
 //              ANON_KEY / INSFORGE_API_BASE / POSTGREST_URL
+//              env（非 secret）: CATALOG_V（catalog 版本戳，缺省 '0' = 慢路径校验，M3.5 非锁死）
 // 注意：InsForge OSS runtime 用 CommonJS + 全局注入（createClient、Deno），
 //       不要用 ESM 的 import/export（与 wecom-oauth/wecom-push 同款）。
+//
+// W3 / Task 11（spec §5.4）：claims 构建提为 claims.js 纯函数 buildClaims(ctx)，本文件只做三段组装：
+//   ① 原生 token groups（useGroupPathInToken 全路径 claim，F4——Casdoor 无用户组查询路由，组信息只从 token 读）
+//   ② get-permissions 角色链可达对象（2026-08-18 三层模型强制：只认 permission.roles 命中用户角色的 resources，直挂/groups 挂载排除）
+//   ③ 门店范围展开（范围|X 资源唯一真相，expandScopeResources 读 maps+dim_branch；
+//      2026-08-18 废除组织架构推导——无范围资源 = branch_nums: [] = B1 空集 deny）
+//   三段任一失败 → buildClaims 返回 null → 503 整体失败（C2 fail-close，禁半截 claims）。
+//   claims 新增 groups/data_scope{brands,categories,branch_nums}/fields{cost}/catalog_v；
+//   permissions 迁移为资源串（B2）；顶层旧四维 key = 全维非空镜像（B6/M1，只写非空值）。
 
 // 共享打包（P3 铺开）：b64url/signJwt 与 corsHeaders/json 提取到 ../_shared（jwt.ts / cors.ts）。
 // 源码直接 require 共享模块，部署/校验时由 esbuild --bundle --format=cjs 打进单文件
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { corsHeaders, json } = require("../_shared/cors");
+const { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions } = require("./claims");
+
+// JWT payload 解码（不验签——token 已由 Casdoor 签发且经 client_secret 换取，此处只读 claims；
+// access_token 非 JWT 形态时返回 null，调用方按 C2 处理）。
+// 注意 atob 产物是 latin-1 binary string，组名含中文——必须经 TextDecoder 按 UTF-8 还原，
+// 直接 JSON.parse(atob(...)) 会把全路径组名解成 mojibake → 展开全部 unknown → 整站 503。
+function decodeJwtPayload(token) {
+  try {
+    const part = String(token).split(".")[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+
+// ②' 角色链可达对象（2026-08-18 三层模型强制）：只取 permission.roles 命中用户角色码的 permission resources。
+//    get-permissions?owner= 全量（每项含 roles/users/groups/resources）；permission.users 直挂（roles=[]）
+//    与 permission.groups 挂载天然匹配不上 → 排除——不管直挂从 Casdoor UI / API / 脚本写入都不生效。
+//    输入 owner = token owner claim（'shanhai'），roleCodes = 登录时 userinfo roles claim（裸名，index.js 2b 提取）。
+//    失败/非数组 → null（由 buildClaims 判 C2 → 503）；空集（有角色但权限 roles 全不命中）→ []（B1 deny 载体）。
+async function fetchRolePermissions(issuer, accessToken, owner, roleCodes) {
+  try {
+    const res = await fetch(`${issuer}/api/get-permissions?owner=${encodeURIComponent(owner)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      console.error("wecom-oidc-callback: get-permissions http", res.status,
+        (await res.text().catch(() => "")).slice(0, 200));
+      return null;
+    }
+    const data = await res.json();
+    const perms = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : null);
+    if (!perms) return null;
+    return matchRolePermissions(perms, roleCodes);
+  } catch (e) {
+    console.error("wecom-oidc-callback: get-permissions failed", e);
+    return null;
+  }
+}
+
+// ③ 范围资源展开（2026-08-18 门店范围显式授权，范围资源唯一真相）：
+//    输入 = get-all-objects 里归一出的 data-analysis:branch:X 键（'*' / 包名 / branch_number / 门店中文名）。
+//    maps + dim_branch 各拉一次；resolveScopeKeys 纯解析（claims.js）；全店覆盖仍走 collapseFullStore 收敛。
+//    输出 {branch_nums, ok, error}——buildClaims 消费；未知键 ok:false → C2 登录 503。
+async function expandScopeResources(scopeKeys, pgrstUrl) {
+  try {
+    const mapsRes = await fetch(
+      `${pgrstUrl}/maps_branch_group?is_active=eq.true&select=group_id,group_type,branch_number`,
+      { headers: { "Content-Type": "application/json" } },
+    );
+    if (!mapsRes.ok) {
+      return { branch_nums: [], ok: false, error: `maps_branch_group http ${mapsRes.status}` };
+    }
+    const maps = await mapsRes.json();
+    if (!Array.isArray(maps)) {
+      return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
+    }
+    // 门店中文名解析用 dim_branch（branch_name 唯一命中；重名/未命中 fail-close）
+    const dimRes = await fetch(
+      `${pgrstUrl}/dim_branch?select=branch_number,branch_name`,
+      { headers: { "Content-Type": "application/json" } },
+    );
+    if (!dimRes.ok) {
+      return { branch_nums: [], ok: false, error: `dim_branch http ${dimRes.status}` };
+    }
+    const dimBranches = await dimRes.json();
+    if (!Array.isArray(dimBranches)) {
+      return { branch_nums: [], ok: false, error: "dim_branch non-array" };
+    }
+    const resolved = resolveScopeKeys(scopeKeys, maps, dimBranches);
+    if (resolved.ok !== true) return resolved;
+    const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
+    return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
+  } catch (e) {
+    return { branch_nums: [], ok: false, error: `scope expand fetch failed: ${e}` };
+  }
+}
 
 module.exports = async function (req) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
@@ -29,7 +120,22 @@ module.exports = async function (req) {
     const body = await req.json().catch(() => ({}));
     const code = body.code;
     const redirectUri = body.redirect_uri; // 与 web 跳 Casdoor 时用的 redirect_uri 必须一致
+    const state = body.state;
     if (!code || !redirectUri) return json({ error: "missing code or redirect_uri" }, 400);
+
+    // B1 CSRF：state 必须由 web /auth/start 生成（`${nonce}::${path}`，nonce ≥32 位安全字符）。
+    // nonce=随机会话标识，攻击者无法预知 → 认证响应无法被重放到他人会话。
+    const STATE_RE = /^[A-Za-z0-9_-]{32,}::/;
+    if (typeof state !== "string" || !STATE_RE.test(state)) {
+      return json({ error: "invalid_state" }, 400);
+    }
+
+    // redirect_uri 白名单：必须是本平台回调（https，或本地 http://localhost 调试），
+    // 不允许把 code 转发到任意站点（防 token 泄露给攻击者回调）。
+    const REDIRECT_URI_RE = /^(https:\/\/[^\s]*\/auth\/callback|http:\/\/localhost(:\d+)?\/auth\/callback)$/;
+    if (!REDIRECT_URI_RE.test(redirectUri)) {
+      return json({ error: "invalid_redirect_uri" }, 400);
+    }
 
     // 1. Casdoor code → access_token
     const tokenRes = await fetch(`${issuer}/api/login/oauth/access_token`, {
@@ -45,15 +151,41 @@ module.exports = async function (req) {
     });
     const tokenData = await tokenRes.json();
     const accessToken = tokenData.access_token;
-    if (!accessToken) return json({ error: "failed_to_get_casdoor_token", detail: tokenData }, 502);
+    if (!accessToken) {
+      // 脱敏：细节只留服务器日志，不回给客户端（防泄露 Casdoor 内部地址/错误结构）。
+      console.error("wecom-oidc-callback: casdoor token exchange failed",
+        { status: tokenRes.status, body: JSON.stringify(tokenData).slice(0, 500) });
+      return json({ error: "failed_to_get_casdoor_token" }, 502);
+    }
 
     // 2. userinfo → sub(wecom_id;依赖 provider 配了 Use id as name)
+    //    Casdoor userinfo 可能含 roles（string[]）：用户在 Casdoor 中分配的角色码。
     const userRes = await fetch(`${issuer}/api/userinfo`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const userData = await userRes.json();
-    const wecomUserId = userData.sub;
-    if (!wecomUserId) return json({ error: "failed_to_get_wecom_id", detail: userData }, 401);
+    // sub 即 wecom_id 的前提是 Casdoor 企微 provider「Use id as name」且用户 id=wecom userid
+    // （老用户手建时 id=name）。但 2026-08 后 Casdoor 新注册用户 id 是 UUID（如 ZhengXin），
+    // sub 变 UUID → org_users 查不到 → 姓名回退成 UUID、perms 全丢。
+    // 解法：sub 在 org_users 无匹配时，依次用 preferred_username / name claim（Casdoor
+    // 携带的登录名 = 企微 userid）重试；仍无匹配才沿用 sub（走原兜底分支）。
+    let wecomUserId = userData.sub;
+    if (!wecomUserId) {
+      console.error("wecom-oidc-callback: userinfo missing sub",
+        { status: userRes.status, respBody: JSON.stringify(userData).slice(0, 500) });
+      return json({ error: "failed_to_get_wecom_id" }, 401);
+    }
+    const aliasCandidates = [userData.preferred_username, userData.name]
+      .filter((v) => typeof v === "string" && v.length > 0 && v !== wecomUserId);
+
+    // 2b. 提取 roles claim（Casdoor JWT userinfo 可能含 roles 字段）
+    //     兼容 string[] / string / 缺失三种情况，统一为 string[]
+    let casdoorRoles = [];
+    if (Array.isArray(userData.roles)) {
+      casdoorRoles = userData.roles.filter((r) => typeof r === "string" && r.length > 0);
+    } else if (typeof userData.roles === "string" && userData.roles.length > 0) {
+      casdoorRoles = [userData.roles];
+    }
 
     // 3. 查 org_users 拿部门/姓名(只读,不 upsert)。
     //    org_users 由企微通讯录同步(App B 回调 + 每日全量)独占维护,登录不写,避免双写不一致。
@@ -62,11 +194,45 @@ module.exports = async function (req) {
       baseUrl: Deno.env.get("INSFORGE_API_BASE") || "http://insforge:7130",
       anonKey: Deno.env.get("ANON_KEY"),
     });
-    const { data: user } = await client.database
-      .from("org_users").select("department_ids, name")
-      .eq("wecom_id", wecomUserId).single();
+    const selectUser = (id) =>
+      client.database.from("org_users").select("is_active, department_ids, name")
+        .eq("wecom_id", id).single();
+
+    let { data: user, error: userErr } = await selectUser(wecomUserId);
+    if ((userErr || !user) && aliasCandidates.length > 0) {
+      // sub(UUID) 兜底：用登录名 claim 逐个重试，命中即采用为 wecom_userid
+      for (const alias of aliasCandidates) {
+        const retry = await selectUser(alias);
+        if (!retry.error && retry.data) {
+          console.log("wecom-oidc-callback: sub miss, resolved wecom_id by claim",
+            { aliasSource: alias === userData.preferred_username ? "preferred_username" : "name" });
+          wecomUserId = alias;
+          user = retry.data;
+          userErr = null;
+          break;
+        }
+      }
+    }
+    if (userErr && !user) {
+      console.error("wecom-oidc-callback: org_users query error", userErr?.message ?? userErr);
+    }
+    // 离职闸：通讯录已标 is_active=false 的用户拒绝签发新 token（防拿幽灵账号继续登录）。
+    if (user && user.is_active === false) {
+      return json({ error: "user_inactive" }, 403);
+    }
     const departmentIds = user?.department_ids || [];
     const userName = user?.name || wecomUserId;
+
+    // 3b. 登录写穿镜像：Casdoor roles → org_users.role_codes（Task 13 M-1 镜像列）
+    //     casdoor_writer='auto' 时由登录写穿；'manual' 时跳过（防手工配置橡皮擦，169 设计语义）
+    if (casdoorRoles.length > 0) {
+      try {
+        await client.database.from("org_users").update({
+          role_codes: casdoorRoles,
+          casdoor_synced_at: new Date().toISOString(),
+        }).eq("wecom_id", wecomUserId).eq("casdoor_writer", "auto");
+      } catch (e) { console.error("role_codes mirror write failed", e); }
+    }
 
     // 4. get_user_perms(复用 wecom-oauth 同款直连 postgrest)
     //    直连 postgrest（绕过 SDK/网关）：运行时 SDK 无 database.rpc，网关无 /rest/v1 路由(404)。
@@ -84,23 +250,75 @@ module.exports = async function (req) {
       else console.error("get_user_perms http", permRes.status, await permRes.text().catch(() => ""));
     } catch (e) { console.error("get_user_perms failed", e); }
 
-    // 5. 签 PostgREST JWT(claims 与 wecom-oauth 完全一致 → RLS 不变；仅 iss 区分来源)
-    //    claim 八字段从 perms 读，缺字段兜底保证旧用户/新用户都能登录：
-    //      role_code=null（前端再走默认）、四维默认全权 ['*']、
-    //      can_see_cost=false（敏感默认拒绝）、UI 默认值最小可用。
+    // 5. W3 三段组装（Task 11，spec §5.4）→ buildClaims → 签 PostgREST JWT。
+    //    任一段失败 → buildClaims 返回 null → 503 整体失败（C2 fail-close，禁半截 claims）。
+    // ① 原生 token groups：Casdoor 开 useGroupPathInToken 后 access_token(JWT) 自带 groups 全路径 claim
+    //    （token_jwt.go）；用户组查询路由不存在，禁调用（F4）。userinfo.groups 仅作兼容回退。
+    const tokenPayload = decodeJwtPayload(accessToken) || {};
+    const oidcGroups = Array.isArray(tokenPayload.groups) ? tokenPayload.groups
+      : (Array.isArray(userData.groups) ? userData.groups : null);
+    if (!oidcGroups) {
+      console.error("wecom-oidc-callback: groups claim missing, login denied (C2)");
+      return json({ error: "group_claim_missing_login_denied" }, 503);
+    }
+
+    // ②' 角色链可达对象（2026-08-18 三层模型强制）：只认 permission.roles 命中用户角色码的资源。
+    //    owner 取 token owner claim（构造双段 userId 的同源）；roleCodes = userinfo roles claim（2b 已提取）。
+    const casdoorOwner = tokenPayload.owner || "shanhai";
+    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles);
+
+    // ③ 门店范围展开（2026-08-18 范围资源唯一真相，fail-close）：
+    //    门店范围只从 范围|X 资源读取（expandScopeResources）；无范围资源 → branch_nums: [] →
+    //    B1 空集 deny（堵「漏配即放行」）。企微组织架构（部门组→maps）推导已废除。
+    //    expand ok:false（未知范围键）仍由 buildClaims 判 C2 → 登录 503（不变）。
+    const branchKeys = (reachable ?? [])
+      .map((k) => normalizeFriendlyPerm(k))
+      .filter((k) => typeof k === "string" && k.startsWith("data-analysis:branch:"))
+      .map((k) => k.slice("data-analysis:branch:".length));
+    const expandResult = branchKeys.length > 0
+      ? await expandScopeResources(branchKeys, pgrstUrl)
+      : { branch_nums: [], ok: true };   // 无范围资源 = authorized ∅（B1 deny）
+    console.log("wecom-oidc-callback: scope source = permission-resources",
+      { keys: branchKeys.length, ok: expandResult.ok === true });
+
+    const claims = buildClaims({
+      oidcToken: { groups: oidcGroups },
+      reachable,
+      expandResult,
+      catalogV: Deno.env.get("CATALOG_V") ?? "0",
+      legacy: {
+        // 08-15 保留字段（H5）全量透传——仍从 get_user_perms 读，缺字段兜底语义不变
+        role_code: perms.role_code ?? null,
+        default_landing: perms.default_landing || "/",
+        default_metric: perms.default_metric || "sale",
+        visible_panels: perms.visible_panels || [],
+        departments: departmentIds,
+        roles: casdoorRoles,           // Task 13: Casdoor 角色码（string[]）
+      },
+    });
+    if (!claims) {
+      // C2：三段任一失败（groups 空 / reachable 拉取失败 / 展开 ok:false）→ 登录整体失败
+      console.error("wecom-oidc-callback: group scope unavailable, login denied",
+        { expandError: expandResult?.error ?? null, reachable: Array.isArray(reachable) ? reachable.length : null });
+      return json({ error: "group scope unavailable, login denied" }, 503);
+    }
+
+    // 5b. 写穿 org_users.groups 投影（F9，迁移 178）：无会话路径（run_push/agent-query）读门店行的
+    //     唯一入口。best-effort（失败记日志不阻断登录——漂移由 Task 10/15 对账收口，与 role_codes 镜像同款语义）。
+    try {
+      await client.database.from("org_users").update({
+        groups: oidcGroups,
+      }).eq("wecom_id", wecomUserId);
+    } catch (e) { console.error("groups projection mirror write failed", e); }
+
+    // 5c. 签 PostgREST JWT：payload = buildClaims 产物（permissions=资源串 B2；groups/data_scope/fields/
+    //     catalog_v 新四段；顶层旧四维 key 镜像已摘——W6/Task 20，双氧期结束）+ 注册项（sub/role/iss/iat/exp）。
+    //     iss 区分来源；RLS 以 data_scope 段存在性鉴别（迁移 179；旧形状令牌 deny，185 终版）。
     const now = Math.floor(Date.now() / 1000);
     const jwt = await signJwt({
       sub: wecomUserId,
       role: "authenticated",
-      departments: departmentIds,
-      role_code: perms.role_code ?? null,
-      branch_nums: perms.branch_nums || ["*"],
-      brands: perms.brands || ["*"],
-      categories: perms.categories || ["*"],
-      can_see_cost: perms.can_see_cost ?? false,
-      default_landing: perms.default_landing || "/",
-      default_metric: perms.default_metric || "sale",
-      visible_panels: perms.visible_panels || [],
+      ...claims,
       iss: "casdoor-oidc",
       iat: now,
       exp: now + 7 * 86400,
@@ -108,6 +326,8 @@ module.exports = async function (req) {
 
     return json({ ok: true, wecom_userid: wecomUserId, wecom_name: userName, access_token: jwt });
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    // 脱敏：异常细节只留日志（防泄露环境/内部结构），客户端只拿通用错误。
+    console.error("wecom-oidc-callback error:", e);
+    return json({ error: "internal_error" }, 500);
   }
 };

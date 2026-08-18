@@ -8,6 +8,8 @@ import { type GetterResult } from "@/lib/report-center/types";
 import type { DataFreshness } from "@/lib/report-center/freshness";
 import { formatFreshnessChina } from "@/lib/report-center/freshness";
 import { BOARDS } from "@/lib/report-center/boards/registry";
+import { hasBoardPerm } from "@/lib/feature-perm";
+import { getServerPermissions } from "@/lib/server-claims";
 import { Header } from "@/components/layout/header";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PartialDegradeBanner } from "@/components/report-center/partial-degrade-banner";
@@ -101,10 +103,24 @@ export default async function TargetDashboard({
   // 已定格目标：各模块从 target_snapshot_breakdowns 读 close_target 冻结快照（视图不再算 closed 目标）
   const closed = t.status === "closed";
 
+  // 看板级能力过滤（用户要求：每个看板抽象成能力自由配给角色）：只渲染有权限的看板模块。
+  // 无 token/解码失败 → permissions=[] → 默认全部隐藏（fail-open 软门禁：无权限看板不渲染，不阻塞整页）；
+  // 但看板数据本身仍由 PostgREST RLS 按门店范围裁剪（数据安全不依赖本显示层过滤）。
+  const perms = await getServerPermissions();
+  const visibleBoards = BOARDS.filter((b) => hasBoardPerm(perms, b.id));
+
   // F1.2: Promise.allSettled + GetterResult——单 getter 失败不挂整页。
   // 各板块 serverGet 内部已 catch（返 status:'error'），allSettled 是双保险。
   const results = await Promise.allSettled(
-    BOARDS.map((board) => board.serverGet(targetId, { closed })),
+    visibleBoards.map((board) =>
+      // 透传目标周期（t 来自 RLS 可见的报表视图）：item-top 等 getter 不再直查 targets 底表，
+      // 避免门店权限用户被 targets 的 branch RLS 挡掉 ALL 目标（PGRST116 → 整板加载失败）。
+      board.serverGet(targetId, {
+        closed,
+        startDate: t.start_date,
+        endDate: t.end_date,
+      }),
+    ),
   );
   const outcome = (i: number) =>
     results[i].status === "fulfilled" ? results[i].value : errResult();
@@ -142,7 +158,7 @@ export default async function TargetDashboard({
   const banner = (
     <>
       {failCount > 0 && (
-        <PartialDegradeBanner failCount={failCount} total={BOARDS.length} />
+        <PartialDegradeBanner failCount={failCount} total={visibleBoards.length} />
       )}
       {/* F5：最近查询停留超 6h（系统停）→ 红色横幅；数据旧（源头没数据）不告警 */}
       <FreshnessStaleBanner
@@ -202,13 +218,13 @@ export default async function TargetDashboard({
       <div
         className={`md:col-span-2 ${
           isMobile
-            ? "sticky top-0 z-10 border-b border-slate-200 bg-white px-4 py-3"
+            ? "sticky top-0 z-20 border-b border-slate-200 bg-white px-4 py-3"
             : ""
         }`}
       >
         {header}
       </div>
-      {BOARDS.map((board, i) => {
+      {visibleBoards.map((board, i) => {
         const Comp = isMobile ? (board.Mobile ?? board.Desktop) : board.Desktop;
         return (
           <Comp
@@ -219,9 +235,15 @@ export default async function TargetDashboard({
             progress={progress}
             targetMonth={targetMonth}
             isMobile={isMobile}
+            permissions={perms}
           />
         );
       })}
+      {visibleBoards.length === 0 && (
+        <div className="md:col-span-2 rounded-lg border border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-400">
+          你没有可查看的看板模块——请联系管理员分配看板能力
+        </div>
+      )}
     </div>
   );
 

@@ -1,0 +1,138 @@
+// web/lib/__tests__/feature-perm.test.ts
+// checkFeaturePerm 单模块（plan Task 3 Step 1，spec §6.2）：
+// claims 命中 true / BREAKGLASS 命中 true+审计 / 双无 false。
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { checkFeaturePerm, hasBoardPerm, hasKpiPerm, hasGatePerm, buildPermPool } from '../feature-perm';
+
+afterEach(() => {
+  delete process.env.BREAKGLASS_ADMINS;
+  vi.restoreAllMocks();
+});
+
+describe('checkFeaturePerm', () => {
+  it('claims 含权限 → true', async () => {
+    expect(await checkFeaturePerm('u1', 'data-analysis:admin',
+      { permissions: ['data-analysis:admin'] })).toBe(true);
+  });
+
+  it('无 claims 但在 BREAKGLASS → true 且记审计', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env.BREAKGLASS_ADMINS = 'u9';
+    expect(await checkFeaturePerm('u9', 'data-analysis:admin')).toBe(true);
+    expect(warn).toHaveBeenCalledWith('[breakglass]', 'u9', 'data-analysis:admin');
+  });
+
+  it('两者皆无 → false', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await checkFeaturePerm('u1', 'data-analysis:admin', {})).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasBoardPerm / hasKpiPerm（看板/KPI 卡片级能力）', () => {
+  it('具名命中 → true', () => {
+    expect(hasBoardPerm(['data-analysis:view-board:kpi'], 'kpi')).toBe(true);
+    expect(hasKpiPerm(['data-analysis:view-kpi:sale'], 'sale')).toBe(true);
+  });
+  it('命名空间通配 view-board:* / view-kpi:* → true', () => {
+    expect(hasBoardPerm(['data-analysis:view-board:*'], 'region')).toBe(true);
+    expect(hasKpiPerm(['data-analysis:view-kpi:*'], 'outbound_margin')).toBe(true);
+  });
+  it('全局 * 不放行；未配置 = 不可见（2026-08-18 门禁拆分 fail-close，用户裁决 A：系统未上线）', () => {
+    // 纯 '*'：不再作为看板放行依据（防 Casdoor 空配置默认 '*' 提权）
+    expect(hasBoardPerm(['*'], 'kpi')).toBe(false);
+    expect(hasKpiPerm(['*'], 'sale')).toBe(false);
+    // 配置了具名看板 → 只放行具名的（'*' 不扩展范围）
+    expect(hasBoardPerm(['*', 'data-analysis:view-board:kpi'], 'kpi')).toBe(true);
+    expect(hasBoardPerm(['*', 'data-analysis:view-board:kpi'], 'region')).toBe(false);
+    expect(hasKpiPerm(['*', 'data-analysis:view-kpi:sale'], 'delivery')).toBe(false);
+  });
+  it('未配置任何看板/KPI 能力 → 全部不可见（fail-close；页面进入由 门禁|报表中心 单独裁决）', () => {
+    expect(hasBoardPerm(undefined, 'kpi')).toBe(true);   // perms 缺省（未登录渲染兜底）保留全开
+    expect(hasBoardPerm([], 'kpi')).toBe(false);          // 已登录空配置 = 不可见
+    expect(hasBoardPerm(['data-analysis:view:reports', 'data-analysis:field:cost'], 'region')).toBe(false);
+    expect(hasKpiPerm(['data-analysis:view:reports'], 'sale')).toBe(false);
+    // view:* 不等于 view-board:*（命名空间隔离）
+    expect(hasBoardPerm(['data-analysis:view:kpi'], 'kpi')).toBe(false);
+  });
+  it('已配置部分能力 → 只裁剪到配置集（收权生效）', () => {
+    const perms = ['data-analysis:view-board:kpi', 'data-analysis:view-board:region']; // 只配 2 看板
+    expect(hasBoardPerm(perms, 'kpi')).toBe(true);
+    expect(hasBoardPerm(perms, 'region')).toBe(true);
+    expect(hasBoardPerm(perms, 'brand')).toBe(false);   // 未配的看板被收权
+    expect(hasBoardPerm(perms, 'wholesale')).toBe(false);
+    const kperms = ['data-analysis:view-kpi:sale', 'data-analysis:view-kpi:delivery'];
+    expect(hasKpiPerm(kperms, 'sale')).toBe(true);
+    expect(hasKpiPerm(kperms, 'outbound_amt')).toBe(false);
+  });
+  it('未知 boardId/code（单真相防御）→ false', () => {
+    expect(hasBoardPerm(['data-analysis:view-board:*'], 'nonexistent')).toBe(false);
+    expect(hasKpiPerm(['data-analysis:view-kpi:*'], 'nonexistent')).toBe(false);
+  });
+  it('方案甲：permissions 含组|label（Casdoor 下拉选中写入）→ 归一命中（防静默失效）', () => {
+    // 管理员在 Casdoor 下拉选中组|label → permission.resources 里是「看板|指标概览」/「看板|门店零售」
+    expect(hasBoardPerm(['看板|指标概览', 'data-analysis:view-board:region'], 'kpi')).toBe(true);
+    // 组|label 收权：只配组|label → 未配的看板仍被收权（归一后命名空间已配置化）
+    expect(hasBoardPerm(['看板|指标概览'], 'brand')).toBe(false);
+  });
+});
+
+describe('buildPermPool 全量通俗名归一 + 覆盖视图注入（方案 C 统一视图/看板）', () => {
+  it('通俗名 → key：具名能力（brand/category/field/admin/门禁）', () => {
+    // 2026-08-18 方案 A：view:reports（经营总览）/view:reports-targets（目标达成）已删，不再映射
+    const pool = buildPermPool(['品牌|熊喵鲜生', '品类|水果', '字段|成本可见', '门禁|管理台', '门禁|报表中心']);
+    expect(pool.has('data-analysis:brand:3120')).toBe(true);
+    expect(pool.has('data-analysis:category:水果')).toBe(true);
+    expect(pool.has('data-analysis:field:cost')).toBe(true);
+    expect(pool.has('data-analysis:admin')).toBe(true);
+    expect(pool.has('data-analysis:gate:reports-center')).toBe(true);
+  });
+
+  it('看板能力通俗名 → 覆盖的报表视图 key 注入（报表授权 ⇒ 视图访问）', () => {
+    const pool = buildPermPool(['看板|品牌×指标', '看板|外部批发']);
+    expect(pool.has('data-analysis:view-board:brand')).toBe(true);
+    expect(pool.has('data-analysis:view:report_brand_metric_gen')).toBe(true);   // 覆盖注入
+    expect(pool.has('data-analysis:view-board:wholesale')).toBe(true);
+    expect(pool.has('data-analysis:view:report_wholesale_customer_gen')).toBe(true);
+    expect(pool.has('data-analysis:view:report_wholesale_daily_gen')).toBe(true);
+    expect(pool.has('data-analysis:view:report_wholesale_daily_customer_gen')).toBe(true);
+  });
+
+  it('覆盖注入幂等：同 key 不重复', () => {
+    const pool = buildPermPool(['看板|品牌×指标', 'data-analysis:view:report_brand_metric_gen']);
+    expect([...pool].filter((k) => k === 'data-analysis:view:report_brand_metric_gen').length).toBe(1);
+  });
+
+  it('门禁通俗名「报表中心」→ 反查 gate key（2026-08-18 方案 A：普通能力非 view-group，不再展开成员）', () => {
+    const pool = buildPermPool(['门禁|报表中心']);
+    expect(pool.has('data-analysis:gate:reports-center')).toBe(true);   // 普通门禁 key 原样保留
+    expect(pool.has('data-analysis:view:reports')).toBe(false);         // view:reports 已删
+    expect(pool.has('data-analysis:view:reports-targets')).toBe(false); // view:reports-targets 已删
+  });
+
+  it('看板覆盖注入对 hasBoardPerm 语义闭环：配看板即能访问对应报表视图', () => {
+    // 页面级视图解析：permissions 里只有看板通俗名（无 view:reports）→ resolveViewKey 通过覆盖注入命中
+    // （hasBoardPerm 本身看 view-board 命名空间；覆盖注入在 buildPermPool 层，供 resolveViewKey 复用）
+    const pool = buildPermPool(['看板|门店战区']);
+    expect(pool.has('data-analysis:view:report_region_breakdown_gen')).toBe(true);
+  });
+});
+
+describe('hasGatePerm — 报表中心页面门禁（2026-08-18 方案 A）', () => {
+  it('具名 gate key 命中 → true', () => {
+    expect(hasGatePerm(['data-analysis:gate:reports-center', 'data-analysis:view:reports'], 'data-analysis:gate:reports-center')).toBe(true);
+  });
+
+  it('门禁通俗名「门禁|报表中心」→ 映射反查命中 → true', () => {
+    expect(hasGatePerm(['门禁|报表中心'], 'data-analysis:gate:reports-center')).toBe(true);
+  });
+
+  it('只有 经营总览(view:reports) 无门禁 → false（视图不再单独解锁页面）', () => {
+    expect(hasGatePerm(['data-analysis:view:reports', 'data-analysis:view:reports-targets'], 'data-analysis:gate:reports-center')).toBe(false);
+  });
+
+  it('空/未定义 → fail-close false（middleware 场景）', () => {
+    expect(hasGatePerm(undefined, 'data-analysis:gate:reports-center')).toBe(false);
+    expect(hasGatePerm([], 'data-analysis:gate:reports-center')).toBe(false);
+  });
+});

@@ -36,14 +36,12 @@ export default async function LoginPage({
   const casdoorRedirectUri =
     process.env.NEXT_PUBLIC_CASDOOR_REDIRECT_URI || `${origin}/auth/callback`;
 
-  // Casdoor provider 路由（与 middleware 同款）：企微内 Silent，PC 扫码。
+  // Casdoor 是否已配置（用 buildCasdoorAuthUrl 非空探针；登录统一走 /auth/start 单一入口，
+  // state nonce + cookie 绑定由它负责——review B1 CSRF 修复，此处不再直接拼 authorize URL）。
   const uaLower = ua.toLowerCase();
   const provider = uaLower.includes("wxwork") ? "wecom_silent" : "wecom_scan";
-  const casdoorUrl = buildCasdoorAuthUrl(
-    casdoorRedirectUri,
-    encodeURIComponent(safeNext),
-    provider
-  );
+  const casdoorConfigured = !!buildCasdoorAuthUrl(casdoorRedirectUri, "/", provider);
+  const casdoorStartUrl = `/auth/start?next=${encodeURIComponent(safeNext)}`;
 
   // 旧路径 fallback（仅 Casdoor 未配置时显示，避免双入口困惑）。
   const wecomRedirectBase = process.env.NEXT_PUBLIC_WECOM_REDIRECT_URI || "";
@@ -62,11 +60,11 @@ export default async function LoginPage({
           <p className="text-sm text-red-600 mb-4 break-all">登录失败：{error}</p>
         ) : null}
 
-        {casdoorUrl ? (
-          // 主路径：Casdoor 登录（middleware 通常已直接 307，落到这多为兜底）。
+        {casdoorConfigured ? (
+          // 主路径：Casdoor 登录（middleware 通常已直接 307 到 /auth/start，落到这多为兜底）。
           <div className="space-y-4">
             <a
-              href={casdoorUrl}
+              href={casdoorStartUrl}
               className="block w-full bg-blue-600 text-white rounded-md py-3 text-sm font-medium hover:bg-blue-700"
             >
               使用企业微信登录

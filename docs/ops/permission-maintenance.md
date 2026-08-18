@@ -1,27 +1,89 @@
-# 报表权限运维手册（2026-08-03 权限收口后）
+# 权限运维手册（2026-08-17 平台级权限标准化后）
 
-## 模型
-生效权限 = 个人 override > 角色 ∪ 部门（get_user_perms 合成，登录时写入 JWT，
-用户重新登录后新权限生效）。行过滤在 report_*_gen 视图（claim_match_or_star），
-列脱敏 can_see_cost CASE。claim 缺失/含 "*" = 放行。
+> 旧版（2026-08-13 data_permissions 四维模型口径）已随 185 sunset 作废。
+> 当前模型：**Casdoor = 管理面真相源，data-analysis = 执行面（合成/缓存/强制）**。
+> 架构真相源总表见 `docs/architecture.md` §6.0。
+> 权限体系配置（初始化/维护）：[permission-onboarding.md](./permission-onboarding.md)。
 
-## 常见操作（生产 psql：docker exec deploy-postgres-1 psql -U postgres -d insforge）
+## 模型（谁管什么）
 
-### 收窄某部门可见门店
-UPDATE org_departments SET branch_nums='["3","5","8"]'::jsonb WHERE id='<企微部门id>';
--- 门店号跨账套重复，brands 维度经角色层控制；收窄后通知该部门用户重新登录。
+| 改什么 | 去哪改 | 生效时机 |
+|---|---|---|
+| 组织架构 / 部门组挂载（=门店可见范围） | Casdoor（企微通讯录同步组树，`sso.shanhaiyiguo.com`） | 用户下次登录 |
+| 角色 / 看板-品牌-品类-成本能力勾选 | Casdoor → Permission（role-boss / zone_manager / finance / manager / buyer）resources | 用户下次登录 |
+| **看板模块 / KPI 卡片级能力**（view-board:\*/view-kpi:\*） | Casdoor → Permission resources（默认全开通配，可收权到具名 key） | 用户下次登录 |
+| **带到期临时例外**（≤90 天） | 本系统 `/admin/permissions`「例外」 | RLS 每请求实查，**即时生效/即时收口** |
+| 权限怎么被执行（RLS/视图/过滤逻辑） | data-analysis 代码（architecture.md §6.2） | 发版 |
 
-### 放开/收回某部门成本可见
-UPDATE org_departments SET can_see_cost=true WHERE id='<id>';   -- 收回置 false
+- 生效权限合成：登录时 callback 产 claims（`permissions` 资源串 + `groups` + `data_scope{brands,categories,branch_nums}` + `fields.cost`）；行过滤 `scope_match_v2`、列脱敏 `can_cost_visible`、能力面 `checkFeaturePerm`。
+- 门店键铁律不变：`branch_num` 跨账套重复，执行面永远用 `branch_number` 复合键（'3120-0027'，尾段前导零归一两侧对称）。
 
-### 给个人临时授权（如临时看成本 7 天）
-INSERT INTO data_permissions (subject_type, subject_id, can_see_cost, expires_at, note)
-VALUES ('user', '<wecom_id>', true, NOW() + INTERVAL '7 days', '临时成本核对');
+## 例外通道（本系统唯一权限写入口）
 
-### 指派/恢复角色
--- 优先用 /admin/permissions 页面；SQL 等效：
-UPDATE org_users SET role_id=<roles.id>, role_source='manual' WHERE wecom_id='<id>';
-UPDATE org_users SET role_id=NULL, role_source='auto' WHERE wecom_id='<id>';  -- 恢复自动
+- 页面 `/admin/permissions`（管理员）：授予 / 撤销 / 审计，单维 ≤50 条、到期 ≤90 天。
+- API：`POST/DELETE /api/admin/permissions/grants`；`GET .../audit` 留痕。
+- 消费面：`get_user_perms` RPC 实查（agent-query / PG 会话路径）+ `web/lib/exception-grants.ts`（middleware 快判，5min TTL，撤销主动失效）。
 
-### 排障：看某人当前生效权限
-SELECT get_user_perms('<wecom_id>');
+## 看板 / KPI 卡片级能力（2026-08-17）
+
+每个看板抽象成能力（`data-analysis:view-board:<id>`，7 个），每个 KPI 指标卡同理
+（`data-analysis:view-kpi:<code>`，6 个含 2 派生比率卡）。单真相在
+`web/lib/capability-board.ts`（纯数据：key/通俗命名/描述）；BOARDS 各 manifest 与
+capability-catalog 都引用它。
+
+- **默认全开（fail-open，用户拍板「避免上线即收权」）**：用户 permissions 未配置任何
+  该命名空间能力（旧 token / 未登录 / 未配置）→ 全部看板/卡片可见；**只有明确配置了
+  「部分具名能力」的角色才裁剪到配置集**。判定实现 `hasBoardPerm` / `hasKpiPerm`
+  （web/lib/feature-perm.ts）。
+- **分层设计**：页面级 `view:*`（页面访问）与看板级 `view-board:*`（看板模块）解耦。
+- **数据范围由 RLS 兜底**：显示层过滤为软门禁，真实行裁剪靠 PostgREST RLS 按
+  branch_nums 实施（战区负责人只看自己战区，天然成立）。
+- **Casdoor 配置**：5 角色 permission 均已追加 `view-board:*` + `view-kpi:*` 通配
+  （默认全开）；收权时改成具名 key 列表即可（update-permission 必须带全字段防
+  AllCols 清空，见 casdoor-role-permission-mechanism.md 教训）。
+
+## 方案 C：统一视图/看板 + 全量通俗名（2026-08-17）
+
+**核心语义：报表授权 ⇒ 视图访问（能看板 = 能访问该看板的报表视图）。**
+
+- **退役 11 个零消费 `view:*` 死 key**（8 个 `report_*_gen` + `view:mobile` +
+  `view:reports-items` + `view:wholesale-customers`）：无任何消费面，统一由
+  看板能力覆盖。清单见 `web/lib/capability-catalog.ts` 的 `DEPRECATED`。
+- **看板覆盖视图**：`web/lib/capability-board.ts` 的 `BOARD_VIEW_COVERAGE` 声明
+  每个看板覆盖的底层报表视图名。消费侧（`buildPermPool` / claims.js）命中看板
+  能力时注入对应 `view:*` key → 报表授权闭环。
+- **页面级保留 2 个 `view:*`**：`view:reports`（经营总览）/ `view:reports-targets`
+  （目标达成）仍作页面级 middleware 门禁（`/reports*` 路由）。
+- **permission.resources 存通俗名**：5 角色 permission 的具名资源改写为通俗名
+  （如「经营总览」「成本可见」），get-all-objects 返回通俗名 → claims.js/前端
+  `FRIENDLY_TO_KEY`/`LABEL_TO_KEY` 反查 key。**通配（`view-board:*` / `view-kpi:*`）
+  恒为 key**（无法通俗化）。
+- **迁移脚本**：`scripts/migrate-perms-friendly.mjs`（dry-run 默认，`--live` 写入，
+  update-permission 全字段防 AllCols 清空）。
+
+## 对账与门禁（自动化，勿手工干预）
+
+- `__reconcile_groups` 每日 03:37 UTC：组→门店投影 vs 期望源（dim 考核门店 × 区域经理覆盖）。红区=未覆盖门店；白名单人工审批在 `group_reconcile_history.detail.whitelist`。
+- `__reconcile_catalog` 每日 03:47 UTC：Casdoor permission.resources vs capability catalog。
+- 7 天门禁（W2 退出判据）：连续 7 行 `whitelist_outside_diff=0 ∧ red=0`。
+
+## 排障
+
+```sql
+-- 生效权限合成（DB 视角；branch_nums=组投影展开，can_see_cost=例外实查）
+SELECT * FROM get_user_perms('<wecom_id>');
+```
+
+- 登录 claims 排障：`GET /api/admin/permissions/preview?wecom_id=<id>`（管理员）。
+- Casdoor 可达对象（登录链路同源）：`GET {sso}/api/get-all-objects?userId=shanhai/<name>`。
+- 管理台门禁 = `data-analysis:admin` 能力（能力页授权名「门禁|管理台」）+ BREAKGLASS_ADMINS env 兜底。
+- **BREAKGLASS 用后即清（2026-08-18 约定）**：该名单 = 全权限旁路（绕过 Casdoor 一切判定，含管理台），仅限 Casdoor 故障期临时加人，恢复后立即清空。
+  能力页顶部非空即显琥珀横幅。改法：服务器 `deploy/.env` 改空 → `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d web` 重建。反面教材：调试期间加入 ZhangDuo 后长期未清，导致无论 Casdoor 怎么配他都是隐形超管。
+
+## 已下线（勿再引用）
+
+- `data_permissions` 表（已 DROP）/ 个人 override / 部门四维 / 角色默认范围 / `/admin/permissions` 用户-部门-角色三 tab / 对应 PUT API。
+- 旧四维 JWT 顶层 key（B6 摘除；旧形状令牌 = RLS deny）。
+- **退役 11 个 `view:*` 死 key**（方案 C，2026-08-17）：`view:mobile`、8 个
+  `report_*_gen`、`view:reports-items`、`view:wholesale-customers`——勿再引用，
+  报表授权由对应看板能力覆盖。

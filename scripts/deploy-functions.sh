@@ -61,6 +61,21 @@ deploy_one() {
   fi
 
   echo "▶ function: $slug"
+  # 服务端已停用（status != active）的 function 不重新部署：
+  # 运维手动停用（如 wecom-push 停用旧通道）后，此前 PUT body 恒带 status:"active"
+  # 会在每次 GHA 部署时悄悄复活（2026-08-17 排查：wecom-push 被重激活）。
+  # 已存在且非 active → 保留服务端状态，跳过（更新代码也一并跳过，避免隐性变更）。
+  local existing
+  existing=$(curl -s -H "$AUTH" "$API_URL/api/functions/$slug" 2>/dev/null || true)
+  local existing_status=""
+  if [ -n "$existing" ] && echo "$existing" | jq -e '.slug' >/dev/null 2>&1; then
+    existing_status=$(echo "$existing" | jq -r '.status // "active"')
+  fi
+  if [ -n "$existing_status" ] && [ "$existing_status" != "active" ]; then
+    echo "  ⊘ 跳过 ${slug}（服务端已停用 status=${existing_status}，不重新激活；如需恢复：控制台/PUT status=active）"
+    return 0
+  fi
+
   local body
   body=$(jq -n \
     --arg slug "$slug" \
@@ -69,7 +84,7 @@ deploy_one() {
     --rawfile code "$deploy_code" \
     '{slug:$slug, name:$name, description:$desc, code:$code, status:"active"}')
 
-  if curl -sf -H "$AUTH" "$API_URL/api/functions/$slug" >/dev/null 2>&1; then
+  if [ -n "$existing_status" ]; then
     echo "  · 已存在 → PUT 更新"
     if ! curl -sf -X PUT -H "$AUTH" -H "Content-Type: application/json" \
       -d "$body" "$API_URL/api/functions/$slug" >/dev/null; then
@@ -169,5 +184,16 @@ set_secret "REPORT_URL" "${REPORT_URL:-https://${DOMAIN:-localhost}}"
 set_secret "CASDOOR_ISSUER" "${CASDOOR_ISSUER:-}"
 set_secret "CASDOOR_CLIENT_ID" "${CASDOOR_CLIENT_ID:-}"
 set_secret "CASDOOR_CLIENT_SECRET" "${CASDOOR_CLIENT_SECRET:-}"
+# W1 Task6（DW2 跟踪#3）：CATALOG_V = catalog 内容 hash——wecom-oidc-callback 签 claims catalog_v
+# 版本戳（Task 13 快/慢路径比对基准）。与 scripts/deploy.sh（web 构建侧 build-arg）同公式；
+# 令牌 catalog_v === server 端值 → 快路径，catalog 变更自动 bump 触发慢路径。
+# fix-round-1：GHA functions job 预注入（该 job 不 rsync web/，服务器侧算会拿到上轮残留的旧
+# catalog 树 → 与 build-web 侧漂移）；未注入时回退从本代码树计算（与 deploy.sh 同公式）。
+if [ -z "${CATALOG_V:-}" ]; then
+  CATALOG_V="$(cat "$ROOT/web/lib/capability-catalog.ts" "$ROOT/web/lib/capability-catalog.generated.ts" \
+    | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-8)"
+fi
+set_secret "CATALOG_V" "$CATALOG_V"
+echo "  · CATALOG_V=$CATALOG_V（catalog 内容 hash，与 web 构建侧同树同值）"
 
 echo "✅ function 部署完成"

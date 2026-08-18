@@ -52,9 +52,217 @@ var require_cors = __commonJS({
   }
 });
 
+// functions/wecom-oidc-callback/claims.js
+var require_claims = __commonJS({
+  "functions/wecom-oidc-callback/claims.js"(exports2, module2) {
+    function buildClaims2(ctx) {
+      const oidcGroups = ctx.oidcToken?.groups ?? null;
+      if (!Array.isArray(oidcGroups) || oidcGroups.length === 0) return null;
+      if (!Array.isArray(ctx.reachable)) return null;
+      const expanded = ctx.expandResult;
+      if (!expanded || expanded.ok !== true) return null;
+      const normReach = ctx.reachable.map((k) => normalizeFriendlyPerm2(k));
+      const withCoverage = new Set(normReach);
+      for (const k of normReach) {
+        const covered = BOARD_VIEW_COVERAGE[k];
+        if (covered) for (const v of covered) withCoverage.add(v);
+      }
+      const permissions = [...new Set([...withCoverage].filter((k) => k === "*" || k.startsWith("data-analysis:") || k.startsWith("push:")))];
+      const brands = permissions.filter((k) => k.startsWith("data-analysis:brand:")).map((k) => k.slice("data-analysis:brand:".length));
+      const categories = permissions.filter((k) => k.startsWith("data-analysis:category:")).map((k) => k.slice("data-analysis:category:".length));
+      const data_scope = { brands, categories, branch_nums: [...expanded.branch_nums ?? []] };
+      const fields = { cost: permissions.includes("data-analysis:field:cost") };
+      return {
+        ...ctx.legacy,
+        // H5：08-15 保留字段（role_code 等）全量透传
+        permissions,
+        // B2 资源串
+        groups: oidcGroups,
+        // F4：原生 token 全路径（判定用，禁中文 label 派生）
+        data_scope,
+        // B1：空段 = deny 语义载体
+        fields,
+        catalog_v: ctx.catalogV
+      };
+    }
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveScopeKeys: resolveScopeKeys2 };
+    var FRIENDLY_TO_KEY = {
+      // 2026-08-18 方案 A：view:reports（经营总览）/view:reports-targets（目标达成）已删——
+      // 报表中心入口由 gate:reports-center 单一把关，不再映射这两个 view。
+      "\u54C1\u724C|\u718A\u55B5\u9C9C\u751F": "data-analysis:brand:3120",
+      "\u54C1\u724C|\u54C1\u54C1\u751C": "data-analysis:brand:64188",
+      "\u54C1\u7C7B|\u6C34\u679C": "data-analysis:category:\u6C34\u679C",
+      "\u54C1\u7C7B|\u6807\u54C1": "data-analysis:category:\u6807\u54C1",
+      "\u54C1\u7C7B|\u8017\u6750": "data-analysis:category:\u8017\u6750",
+      "\u5B57\u6BB5|\u6210\u672C\u53EF\u89C1": "data-analysis:field:cost",
+      "\u95E8\u7981|\u7BA1\u7406\u53F0": "data-analysis:admin",
+      "\u95E8\u7981|\u62A5\u8868\u4E2D\u5FC3": "data-analysis:gate:reports-center",
+      // 2026-08-18 门禁拆分：仅页面门禁；看板能力单独配置
+      // 看板层 7（BOARD_CAPABILITIES）
+      "\u770B\u677F|\u6307\u6807\u6982\u89C8": "data-analysis:view-board:kpi",
+      "\u770B\u677F|\u54C1\u724C\xD7\u6307\u6807": "data-analysis:view-board:brand",
+      "\u770B\u677F|\u95E8\u5E97\u6218\u533A": "data-analysis:view-board:region",
+      "\u770B\u677F|\u5546\u54C1 TOP": "data-analysis:view-board:item-top",
+      "\u770B\u677F|\u7C7B\u522B\u51FA\u5E93": "data-analysis:view-board:category",
+      "\u770B\u677F|\u4F9B\u5E94\u94FE\u51FA\u5E93": "data-analysis:view-board:supply-chain",
+      "\u770B\u677F|\u5916\u90E8\u6279\u53D1": "data-analysis:view-board:wholesale",
+      // KPI 卡层 6（KPI_CARD_CAPABILITIES）
+      "\u770B\u677F|\u95E8\u5E97\u96F6\u552E": "data-analysis:view-kpi:sale",
+      "\u770B\u677F|\u95E8\u5E97\u914D\u9001": "data-analysis:view-kpi:delivery",
+      "\u770B\u677F|\u4F9B\u5E94\u94FE\u51FA\u5E93\u91D1\u989D": "data-analysis:view-kpi:outbound_amt",
+      "\u770B\u677F|\u4F9B\u5E94\u94FE\u6BDB\u5229": "data-analysis:view-kpi:outbound_profit",
+      "\u770B\u677F|\u603B\u914D\u9500\u6BD4": "data-analysis:view-kpi:delivery_sale_ratio",
+      "\u770B\u677F|\u6BDB\u5229\u7387": "data-analysis:view-kpi:outbound_margin"
+    };
+    var BOARD_VIEW_COVERAGE = {
+      "data-analysis:view-board:brand": ["data-analysis:view:report_brand_metric_gen"],
+      "data-analysis:view-board:region": ["data-analysis:view:report_region_breakdown_gen"],
+      "data-analysis:view-board:item-top": ["data-analysis:view:report_item_breakdown_gen"],
+      "data-analysis:view-board:category": ["data-analysis:view:report_category_summary_gen"],
+      "data-analysis:view-board:supply-chain": ["data-analysis:view:report_supply_chain_outbound_gen"],
+      "data-analysis:view-board:wholesale": [
+        "data-analysis:view:report_wholesale_customer_gen",
+        "data-analysis:view:report_wholesale_daily_customer_gen",
+        "data-analysis:view:report_wholesale_daily_gen"
+      ]
+    };
+    function normalizeFriendlyPerm2(value) {
+      if (typeof value === "string" && value.startsWith("\u8303\u56F4|")) {
+        return "data-analysis:branch:" + value.slice("\u8303\u56F4|".length);
+      }
+      return FRIENDLY_TO_KEY[value] ?? value;
+    }
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE, matchRolePermissions: matchRolePermissions2 };
+    function resolveScopeKeys2(scopeKeys, maps, dimBranches) {
+      const results = /* @__PURE__ */ new Set();
+      const mapsByGroup = /* @__PURE__ */ new Map();
+      for (const m of maps ?? []) {
+        if (!m.group_id || !m.branch_number) continue;
+        if (!mapsByGroup.has(m.group_id)) mapsByGroup.set(m.group_id, []);
+        mapsByGroup.get(m.group_id).push(m.branch_number);
+      }
+      const branchNums = new Set((maps ?? []).map((m) => m.branch_number).filter(Boolean));
+      const byName = /* @__PURE__ */ new Map();
+      for (const d of dimBranches ?? []) {
+        if (!d.branch_name || !d.branch_number) continue;
+        if (!byName.has(d.branch_name)) byName.set(d.branch_name, []);
+        byName.get(d.branch_name).push(d.branch_number);
+      }
+      for (const raw of scopeKeys ?? []) {
+        const key = String(raw);
+        if (key === "*" || key === "\u5168\u5E97") return { branch_nums: ["*"], ok: true };
+        const pack = mapsByGroup.get(key);
+        if (pack) {
+          for (const b of pack) results.add(b);
+          continue;
+        }
+        if (branchNums.has(key)) {
+          results.add(key);
+          continue;
+        }
+        const named = byName.get(key);
+        if (named && named.length === 1) {
+          results.add(named[0]);
+          continue;
+        }
+        if (named && named.length > 1) {
+          return { branch_nums: [], ok: false, error: `ambiguous store name: ${key} (${named.length} \u5BB6\u91CD\u540D)` };
+        }
+        return { branch_nums: [], ok: false, error: `unknown scope key: ${key}` };
+      }
+      return { branch_nums: [...results].sort(), ok: true };
+    }
+    function collapseFullStore2(branchNums, allStoreNums) {
+      const uniq = [...new Set(branchNums ?? [])];
+      const universe = new Set(allStoreNums ?? []);
+      if (uniq.length === 0 || universe.size === 0) return [...uniq].sort();
+      const covered = uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
+      return covered ? ["*"] : [...uniq].sort();
+    }
+    function matchRolePermissions2(perms, myRoleCodes) {
+      const mine = new Set((myRoleCodes ?? []).map((r) => String(r)));
+      const out = /* @__PURE__ */ new Set();
+      for (const p of perms ?? []) {
+        const pr = Array.isArray(p.roles) ? p.roles.map((r) => String(r)) : [];
+        const hit = pr.some((r) => mine.has(r) || mine.has(String(r).split("/").pop()));
+        if (!hit) continue;
+        for (const res of p.resources ?? []) if (typeof res === "string") out.add(res);
+      }
+      return [...out];
+    }
+  }
+});
+
 // functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
+var { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions } = require_claims();
+function decodeJwtPayload(token) {
+  try {
+    const part = String(token).split(".")[1];
+    if (!part) return null;
+    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b64 + "=".repeat((4 - b64.length % 4) % 4));
+    const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return null;
+  }
+}
+async function fetchRolePermissions(issuer, accessToken, owner, roleCodes) {
+  try {
+    const res = await fetch(`${issuer}/api/get-permissions?owner=${encodeURIComponent(owner)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    });
+    if (!res.ok) {
+      console.error(
+        "wecom-oidc-callback: get-permissions http",
+        res.status,
+        (await res.text().catch(() => "")).slice(0, 200)
+      );
+      return null;
+    }
+    const data = await res.json();
+    const perms = Array.isArray(data) ? data : data && Array.isArray(data.data) ? data.data : null;
+    if (!perms) return null;
+    return matchRolePermissions(perms, roleCodes);
+  } catch (e) {
+    console.error("wecom-oidc-callback: get-permissions failed", e);
+    return null;
+  }
+}
+async function expandScopeResources(scopeKeys, pgrstUrl) {
+  try {
+    const mapsRes = await fetch(
+      `${pgrstUrl}/maps_branch_group?is_active=eq.true&select=group_id,group_type,branch_number`,
+      { headers: { "Content-Type": "application/json" } }
+    );
+    if (!mapsRes.ok) {
+      return { branch_nums: [], ok: false, error: `maps_branch_group http ${mapsRes.status}` };
+    }
+    const maps = await mapsRes.json();
+    if (!Array.isArray(maps)) {
+      return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
+    }
+    const dimRes = await fetch(
+      `${pgrstUrl}/dim_branch?select=branch_number,branch_name`,
+      { headers: { "Content-Type": "application/json" } }
+    );
+    if (!dimRes.ok) {
+      return { branch_nums: [], ok: false, error: `dim_branch http ${dimRes.status}` };
+    }
+    const dimBranches = await dimRes.json();
+    if (!Array.isArray(dimBranches)) {
+      return { branch_nums: [], ok: false, error: "dim_branch non-array" };
+    }
+    const resolved = resolveScopeKeys(scopeKeys, maps, dimBranches);
+    if (resolved.ok !== true) return resolved;
+    const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
+    return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
+  } catch (e) {
+    return { branch_nums: [], ok: false, error: `scope expand fetch failed: ${e}` };
+  }
+}
 module.exports = async function(req) {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
   const issuer = Deno.env.get("CASDOOR_ISSUER");
@@ -67,7 +275,16 @@ module.exports = async function(req) {
     const body = await req.json().catch(() => ({}));
     const code = body.code;
     const redirectUri = body.redirect_uri;
+    const state = body.state;
     if (!code || !redirectUri) return json({ error: "missing code or redirect_uri" }, 400);
+    const STATE_RE = /^[A-Za-z0-9_-]{32,}::/;
+    if (typeof state !== "string" || !STATE_RE.test(state)) {
+      return json({ error: "invalid_state" }, 400);
+    }
+    const REDIRECT_URI_RE = /^(https:\/\/[^\s]*\/auth\/callback|http:\/\/localhost(:\d+)?\/auth\/callback)$/;
+    if (!REDIRECT_URI_RE.test(redirectUri)) {
+      return json({ error: "invalid_redirect_uri" }, 400);
+    }
     const tokenRes = await fetch(`${issuer}/api/login/oauth/access_token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -81,20 +298,71 @@ module.exports = async function(req) {
     });
     const tokenData = await tokenRes.json();
     const accessToken = tokenData.access_token;
-    if (!accessToken) return json({ error: "failed_to_get_casdoor_token", detail: tokenData }, 502);
+    if (!accessToken) {
+      console.error(
+        "wecom-oidc-callback: casdoor token exchange failed",
+        { status: tokenRes.status, body: JSON.stringify(tokenData).slice(0, 500) }
+      );
+      return json({ error: "failed_to_get_casdoor_token" }, 502);
+    }
     const userRes = await fetch(`${issuer}/api/userinfo`, {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     const userData = await userRes.json();
-    const wecomUserId = userData.sub;
-    if (!wecomUserId) return json({ error: "failed_to_get_wecom_id", detail: userData }, 401);
+    let wecomUserId = userData.sub;
+    if (!wecomUserId) {
+      console.error(
+        "wecom-oidc-callback: userinfo missing sub",
+        { status: userRes.status, respBody: JSON.stringify(userData).slice(0, 500) }
+      );
+      return json({ error: "failed_to_get_wecom_id" }, 401);
+    }
+    const aliasCandidates = [userData.preferred_username, userData.name].filter((v) => typeof v === "string" && v.length > 0 && v !== wecomUserId);
+    let casdoorRoles = [];
+    if (Array.isArray(userData.roles)) {
+      casdoorRoles = userData.roles.filter((r) => typeof r === "string" && r.length > 0);
+    } else if (typeof userData.roles === "string" && userData.roles.length > 0) {
+      casdoorRoles = [userData.roles];
+    }
     const client = createClient({
       baseUrl: Deno.env.get("INSFORGE_API_BASE") || "http://insforge:7130",
       anonKey: Deno.env.get("ANON_KEY")
     });
-    const { data: user } = await client.database.from("org_users").select("department_ids, name").eq("wecom_id", wecomUserId).single();
+    const selectUser = (id) => client.database.from("org_users").select("is_active, department_ids, name").eq("wecom_id", id).single();
+    let { data: user, error: userErr } = await selectUser(wecomUserId);
+    if ((userErr || !user) && aliasCandidates.length > 0) {
+      for (const alias of aliasCandidates) {
+        const retry = await selectUser(alias);
+        if (!retry.error && retry.data) {
+          console.log(
+            "wecom-oidc-callback: sub miss, resolved wecom_id by claim",
+            { aliasSource: alias === userData.preferred_username ? "preferred_username" : "name" }
+          );
+          wecomUserId = alias;
+          user = retry.data;
+          userErr = null;
+          break;
+        }
+      }
+    }
+    if (userErr && !user) {
+      console.error("wecom-oidc-callback: org_users query error", userErr?.message ?? userErr);
+    }
+    if (user && user.is_active === false) {
+      return json({ error: "user_inactive" }, 403);
+    }
     const departmentIds = user?.department_ids || [];
     const userName = user?.name || wecomUserId;
+    if (casdoorRoles.length > 0) {
+      try {
+        await client.database.from("org_users").update({
+          role_codes: casdoorRoles,
+          casdoor_synced_at: (/* @__PURE__ */ new Date()).toISOString()
+        }).eq("wecom_id", wecomUserId).eq("casdoor_writer", "auto");
+      } catch (e) {
+        console.error("role_codes mirror write failed", e);
+      }
+    }
     const pgrstUrl = Deno.env.get("POSTGREST_URL") || "http://postgrest:3000";
     let perms = {};
     try {
@@ -108,25 +376,62 @@ module.exports = async function(req) {
     } catch (e) {
       console.error("get_user_perms failed", e);
     }
+    const tokenPayload = decodeJwtPayload(accessToken) || {};
+    const oidcGroups = Array.isArray(tokenPayload.groups) ? tokenPayload.groups : Array.isArray(userData.groups) ? userData.groups : null;
+    if (!oidcGroups) {
+      console.error("wecom-oidc-callback: groups claim missing, login denied (C2)");
+      return json({ error: "group_claim_missing_login_denied" }, 503);
+    }
+    const casdoorOwner = tokenPayload.owner || "shanhai";
+    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles);
+    const branchKeys = (reachable ?? []).map((k) => normalizeFriendlyPerm(k)).filter((k) => typeof k === "string" && k.startsWith("data-analysis:branch:")).map((k) => k.slice("data-analysis:branch:".length));
+    const expandResult = branchKeys.length > 0 ? await expandScopeResources(branchKeys, pgrstUrl) : { branch_nums: [], ok: true };
+    console.log(
+      "wecom-oidc-callback: scope source = permission-resources",
+      { keys: branchKeys.length, ok: expandResult.ok === true }
+    );
+    const claims = buildClaims({
+      oidcToken: { groups: oidcGroups },
+      reachable,
+      expandResult,
+      catalogV: Deno.env.get("CATALOG_V") ?? "0",
+      legacy: {
+        // 08-15 保留字段（H5）全量透传——仍从 get_user_perms 读，缺字段兜底语义不变
+        role_code: perms.role_code ?? null,
+        default_landing: perms.default_landing || "/",
+        default_metric: perms.default_metric || "sale",
+        visible_panels: perms.visible_panels || [],
+        departments: departmentIds,
+        roles: casdoorRoles
+        // Task 13: Casdoor 角色码（string[]）
+      }
+    });
+    if (!claims) {
+      console.error(
+        "wecom-oidc-callback: group scope unavailable, login denied",
+        { expandError: expandResult?.error ?? null, reachable: Array.isArray(reachable) ? reachable.length : null }
+      );
+      return json({ error: "group scope unavailable, login denied" }, 503);
+    }
+    try {
+      await client.database.from("org_users").update({
+        groups: oidcGroups
+      }).eq("wecom_id", wecomUserId);
+    } catch (e) {
+      console.error("groups projection mirror write failed", e);
+    }
     const now = Math.floor(Date.now() / 1e3);
     const jwt = await signJwt({
       sub: wecomUserId,
       role: "authenticated",
-      departments: departmentIds,
-      role_code: perms.role_code ?? null,
-      branch_nums: perms.branch_nums || ["*"],
-      brands: perms.brands || ["*"],
-      categories: perms.categories || ["*"],
-      can_see_cost: perms.can_see_cost ?? false,
-      default_landing: perms.default_landing || "/",
-      default_metric: perms.default_metric || "sale",
-      visible_panels: perms.visible_panels || [],
+      ...claims,
       iss: "casdoor-oidc",
       iat: now,
       exp: now + 7 * 86400
     }, Deno.env.get("JWT_SECRET"));
     return json({ ok: true, wecom_userid: wecomUserId, wecom_name: userName, access_token: jwt });
   } catch (e) {
-    return json({ error: String(e) }, 500);
+    console.error("wecom-oidc-callback error:", e);
+    return json({ error: "internal_error" }, 500);
   }
 };
