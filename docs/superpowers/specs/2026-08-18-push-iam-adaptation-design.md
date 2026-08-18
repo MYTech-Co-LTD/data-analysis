@@ -1,6 +1,8 @@
 # 推送系统适配：数据范围持久投影（方案 A）· 设计
 
-日期：2026-08-18 · 状态：**用户已批准方案（A = DB 持久投影）** · 关联：[[2026-08-15-platform-casbin-novu-unified-design]]、[[2026-08-16-platform-iam-standardization-design]]、[[2026-08-18-claims-role-chain-failclose-design]]
+日期：2026-08-18 · 状态：**用户已批准方案（A = DB 持久投影）+ spec-forge 评估修订已应用（M1-M13）** · 关联：[[2026-08-15-platform-casbin-novu-unified-design]]、[[2026-08-16-platform-iam-standardization-design]]、[[2026-08-18-claims-role-chain-failclose-design]]
+
+> **2026-08-18 spec-forge 评估修订**：4 透镜 + 3 panel + 红队共 9 agent 评审，13 条「必须改」已应用（M1-M13，文中以 `(M#/spec-forge)` 标注）：双形过渡+M6、裸 `*` 删全权、写时 fail-close、归一单源对拍、薄同步/对账接线、scope-signature 读路径、SQL NULL 毒化、Wave 部署+覆盖守卫、reconcile 护栏、回滚方案、temp-grant 裁决、测试链/CI、分支测试。完整报告：`.spec-forge/push-iam-a-eval/final-evaluation.md`。
 
 ---
 
@@ -80,10 +82,19 @@ COMMENT ON COLUMN org_users.scope_resources IS
 callback 在 buildClaims 后已持有 `permissions`（角色链资源串）。新增一步：把范围相关资源键（`范围|X` 归一前键、`data-analysis:brand:*`、`category:*`、`field:*`）PATCH 落 `org_users.scope_resources`（PostgREST，与现有 role_codes/groups 写穿同款）。**写失败不阻断登录**（console.error + 进对账 diff 兜底）。
 
 ### 5.2 薄同步（每日 03:17，与 group-sync/derive-roles 同批）
-org-wide `get-permissions?owner=`（casdoor-client.ts，5min token 缓存）→ 逐人 `matchRolePermissions(user.role_codes)` → 范围相关键 → upsert `scope_resources`。失败入 outbox（幂等键 wecom_id+date）+ 对账告警。**逐人资源计算 = 登录同款逻辑，从「每次推送」搬到「每日后台批」**。
+org-wide `get-permissions?owner=`（casdoor-client.ts，5min token 缓存）→ 逐人 `matchRolePermissions(user.role_codes)` → 归一化范围键 → **写时 fail-close 验证（§6）** → upsert `scope_resources`。失败入 outbox（幂等键 wecom_id+date）+ 对账告警。**逐人资源计算 = 登录同款逻辑，从「每次推送」搬到「每日后台批」**。
+
+接线（M5/spec-forge，仿 reconcile-groups 完整链）：`web/lib/jobs/reconcile-scope-resources/manifest.ts`（JobManifest，**进 JOBS registry**——M16 教训：不进 registry 不被注册）+ 迁移 201 `scope_resources_reconcile_history`（date PK，UPSERT 幂等）+ cron route（薄同步 03:17 / 对账）+ `notifyWecom` 红区/失败告警。
 
 ### 5.3 drift 对账（每日）
-新增/扩展 `scripts/reconcile-scope-resources.mjs`：Casdoor 逐人有效资源 vs `scope_resources` 投影 → diff 分级（C/E/M）+ **24h 未收敛告警**（对账机制沿用 reconcile-groups）。未知键 / 解析失败 → 红区显式反馈，不静默。
+对账（接线见 §5.2）：Casdoor 逐人有效资源 vs `scope_resources` 投影 → **在原始资源键层面对比**（Casdoor 资源→归一→scope 前缀过滤 → 与投影比；不做归一后的二次对比，否则 catalog 缺展示名静默丢弃时 diff=0 无告警）→ diff 分级（C/E/M）+ **24h 未收敛告警**。
+
+护栏（M9/S2/spec-forge，防灾难）：
+- **org-wide 非空护栏**：`get-permissions` 返回 `[]`/空（owner 错/401/配置期）→ **abort 不清库**（仿 claims.js `!isArray(reachable)→整体失败`），绝不把全量 active 用户投影清成 `[]`。
+- **diff 熔断**：changed 超阈值（如 >50% 用户）→ abort + 告警，防一次清全量。
+- **解析结果漂移检测（S2）**：同键集合解析后的门店集与上次对账相比变化 → 告警（缓解门店重编号/停用静默指向新店）。
+
+未知键 / 解析失败 → 红区显式反馈，不静默。
 
 ## 6. get_user_perms 新形状（SQL 解析）
 
@@ -107,12 +118,14 @@ org-wide `get-permissions?owner=`（casdoor-client.ts，5min token 缓存）→ 
 
 解析规则（SQL 实现，语义对齐 claims.js resolveScopeKeys + collapseFullStore）：
 - **branch_nums**：`data-analysis:branch:X`（X=`范围|` 后的原值）→ ①`'*'`/`全店`→`['*']` 短路；②maps_branch_group.group_id 精确命中 → 包内门店并集；③branch_number 直映；④dim_branch.branch_name 唯一命中；⑤中文名重名 → **fail-close 空集**；⑥未知键 → **fail-close 空集 + 告警**。无 branch 资源 → `[]`（B1 空集 = deny）。
+- **裸 `*` 非投影键（M2/spec-forge）**：SQL **不设** `@> ARRAY['*']` 全权分支；唯一通配 = `范围|全店` → `data-analysis:branch:全店`（与 `范围|*` → `data-analysis:branch:*`）。裸 `*` 被所有前缀过滤忽略，与 claims.js 对 `*` 的 scope 贡献为空逐位一致（防同输入登录 deny、推送全权）。
+- **写穿时 fail-close 验证（M3/spec-forge）**：任一范围键 `resolveScopeKeys` ok:false（未知/歧义）→ **整单投影写 `[]` + 红区告警**；未知键永不进投影。投影因此只含有效键，SQL 解析与键序无关（消解 claims.js 逐键短路 vs SQL 任意命中的顺序依赖）。
 - **brands/categories**：`data-analysis:brand:*` / `category:*` 键剥离前缀。
 - **cost**：`data-analysis:field:cost` ∈ scope_resources → true；否则 false。
 - **全店收敛**：解析结果与 maps 门店全集**集合相等** → 收敛 `['*']`（胖 cookie 修复语义，collapseFullStore）。
 - **system:% 服务身份**：`['*']` 宽松形状保留（185 语义）。
 - **NOT FOUND 真实用户（离职/不存在）**：deny 形状（189 语义不变）。
-- **`get_user_perms_strict`**：前置 NULL 闸（无 role_codes ∧ 无 groups ∧ 无活跃临时授权 → NULL）保持不变；返回委托 get_user_perms 新形状。
+- **`get_user_perms_strict`**：前置 NULL 闸判定源改为**无 role_codes ∧ 无 scope_resources**（M3 迁移：门店范围源从 groups 切到 scope_resources）；**移除 temporary_grants 子句（M11/spec-forge）**——197 已冻结，范围唯一真相 = scope_resources，temp grant 不构成授权面，避免「过闸但函数不读」的自相矛盾。返回委托 get_user_perms 新形状。
 
 ## 7. 代签 JWT 升级（generateScopedJwt）
 
@@ -139,15 +152,18 @@ payload 从旧形状改为新形状：
 | `web/lib/push/index.ts` getPermsStrict | 解析旧形状 `{brands, branch_nums, categories, can_see_cost}` | 解析 `data_scope` + `fields.cost` |
 | `web/lib/push/push-variables.ts` matchesScope / Perms 类型 | 读 perms.brands/branch_nums/categories | Perms 类型对齐新形状（数据来自 data_scope） |
 | `web/lib/push/render.ts` generateScopedJwt | 旧形状 payload | 新形状（§7） |
-| `functions/agent-query` | 读 get_user_perms 旧形状 | 迁移 data_scope |
-| web preview / 权限页 preview | 读 get_user_perms（如有） | 同上 |
-| `web/lib/push/shadow.ts` / cutover 测试 | 旧形状断言 | 更新形状断言 |
+| `functions/agent-query` | 读 get_user_perms 旧形状 | 迁移 data_scope（归一为 runner 期望形状，**只搬字段不重算 branch_nums**） |
+| web preview / 权限页 preview | 读 get_user_perms（如有） | **必须迁移（S9）**：`web/app/api/admin/permissions/preview/route.ts` 的 `effective` 透传读 `data_scope`/`fields`，防 M3 后 undefined |
+| `web/lib/push/shadow.ts` / cutover 测试 | 旧形状断言 | **入 Task 6 Files（S10）**：内联 `RenderedGroup.perms` 类型对齐新形状 |
 
 ## 9. 对账与契约（防漂移）
 
-- **reconcile-scope-resources**：Casdoor 逐人有效资源 vs 投影 diff → 分级 + 24h 告警（§5.3）。
-- **登录 claims ↔ get_user_perms 一致性**：同一用户、同一 scope_resources 输入下，登录 claims 的 `data_scope`（function 侧 resolveScopeKeys 解析）与 `get_user_perms` 的 `data_scope`（SQL 解析）必须相等——契约/shadow 测试钉死（防 SQL 解析与 JS 解析漂移）。
+- **reconcile-scope-resources**：Casdoor 逐人有效资源 vs 投影 diff → 分级 + 24h 告警 + 非空护栏 + 熔断（§5.2/§5.3）。
+- **登录 claims ↔ get_user_perms 一致性**：同一用户、同一 scope_resources 输入下，登录 claims 的 `data_scope`（function 侧 resolveScopeKeys 解析）与 `get_user_perms` 的 `data_scope`（SQL 解析）必须相等——契约/shadow 测试钉死（防 SQL 解析与 JS 解析漂移）。**契约链钉全**：claims.js ↔ scope-expand.ts ↔ SQL（golden fixture 生成 JSON 快照，CI 比对；不只在两个镜像之间比）。
 - **scope-expand.ts（web 侧 JS 解析镜像）**：作为一致性契约的**参照实现**（与 claims.js resolveScopeKeys 同语义），供 SQL 解析契约测试共享 fixtures，不做独立消费路径。
+- **归一化单源（M4/spec-forge）**：web 侧统一 `import { DISPLAY_NAME_TO_KEY }`（capability-catalog.ts 已导出，单真相）；**FRIENDLY_TO_KEY ↔ DISPLAY_NAME_TO_KEY 全表对拍契约**（claims.js 静态表 vs catalog 展示名逐字相等，含 `组|` 前缀，真实 CATALOG_KEYS round-trip）；catalog 未命中 → 红区（静默丢弃变显式）。
+- **scope-signature 读路径（M6/spec-forge）**：`scopeSignature` 改读 `scope.data_scope.brands/branch_nums/categories` + `scope.fields.cost`，canonical key（b/br/c/cost）不变；契约测试钉「不同门店集→不同签名」「不同 cost→不同签名」「`['*']` vs 388 明细→不同签名」（防签名碰撞 → 同组用首用户 scope 渲染全员）。
+- **双形过渡 + M6 sunset（M1/spec-forge）**：get_user_perms 过渡期**同源同值双形输出**（旧顶层四维 + 新 data_scope/fields，同一组 SQL 变量推导，杜绝两形漂移）；消费端逐一迁新形状；**M6 显式摘旧 key**，前置 = 全部消费端（agent-query/wecom-oauth/push 引擎/权限预览）确认读新形状。**消费端兜底恒 deny**：`?? []` / `?? false`，禁 `|| ["*"]` fail-open。
 
 ## 10. 测试
 
@@ -159,18 +175,26 @@ payload 从旧形状改为新形状：
 
 前置（CLAUDE.md 铁律）：**architecture.md §6.2/§7.4 先更新**（投影机制、get_user_perms 新形状、代签 JWT 形状）。
 
-| 里程碑 | 内容 | 部署方式 |
-|---|---|---|
-| M1 | 迁移 199 加列 | GHA |
-| M2 | 写穿三径：callback 登录写穿（function-only）+ 薄同步/对账（web） | SSH（function）+ GHA（web） |
-| M3 | get_user_perms 新形状 + SQL 解析 | GHA（迁移） |
-| M4 | generateScopedJwt 新形状 + 消费侧迁移（index/render/push-variables/agent-query） | GHA（web）+ SSH（function） |
-| M5 | 契约/对账/端到端验证 | — |
+### 部署（M8/spec-forge：Wave 5 段——migrate.sh 每次重跑全部迁移，「backfill 先于 M3」是开发序非部署序，必须按 Wave 拆发布）
 
-WIP=1：M1→M5 顺序执行，任一时刻一条轨。
+| Wave | 内容 | 部署方式 |
+|---|---|---|
+| Wave 0 | **SSH function-only 前置加固**：wecom-oauth 兜底 `\|\| ["*"]` → `?? []`（fail-open 翻转修正）+ 清 Deno 缓存 | SSH |
+| Wave 1 | 迁移 199 加列 + 登录写穿 + role-scope.ts/契约测试 + 薄同步/对账 cron 接线 + 迁移 201 history 表。**不含 M3（迁移 200）** | GHA |
+| Wave 1.5 | **生产 backfill** `backfill-scope-resources.mjs --write` → `guard-scope-projection.mjs`（活跃用户非空投影 ≥90%）→ psql 抽样（boss 含 `branch:全店`、manager 对应键）。**硬门禁，不过不推 Wave 2** | 服务器 ops |
+| Wave 2 | 迁移 200（get_user_perms 双形 + strict 闸）+ agent-query/wecom-oauth 消费新形状 + push 引擎/scope-signature/matchesScope 全量 | GHA（迁移+web+functions） |
+| Wave 3 | 契约/对账/端到端验证（Task 8） | — |
+
+WIP=1：Wave 0→3 顺序执行，任一时刻一条轨。
+
+### 回滚（M10/spec-forge）
+- **部署前备份函数体**：`pg_get_functiondef` 导出 get_user_perms / get_user_perms_strict 留档。
+- **M3 与 strict 闸成对回滚**；**M4 必须先于 M3 回滚**（两方向均为破坏窗：M3 回滚旧形状 + M4 新解析 → 崩溃；M3 留新形状 + M4 回滚旧 JWT → 全 deny）。
+- **双形过渡使回滚简化**：不部署 M6 = 旧 key 仍输出，旧消费端不破。
+- 投影列回滚后**残留无害**（死数据，可留或清空）。
 
 ## 12. 后续独立任务（不在本设计）
 
-1. **数值指标取值**（缺口 3）：`getVariableValue` 在代签 JWT 下查 `metric_code` 语义视图真值（M7 守卫放开前置）。
+1. **数值指标取值**（缺口 3）：`getVariableValue` 在代签 JWT 下查 `metric_code` 语义视图真值。**硬约束（S1/spec-forge）**：M7 守卫（live 拒投 `{{code}}` 占位）**放开必须与 per-user 真值过滤实现同窗绑定，禁止单独放开**；方案 A 的 M4 只放开品牌/品类 `*_url` 链接变量，数值变量维持 pre-M4 抑制（避免 M7 拦截面从 branch 扩到 brand/category 的功能回归）。
 2. **detail_url 路由**（缺口 2）：指向当前报表中心路由（`/reports/targets/[id]` 等）+ scope 参数。
 3. **Casdoor 授权数据配置**（用户）：角色挂载 + `范围|X` 分区资源 + 品牌/品类/成本资源。
