@@ -240,10 +240,20 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       return resp.json();
     },
     getUsersByRole: async (roleId) => {
+      // 2026-08-18：role_id 过渡列已冻结（refresh_role_assignments 移除，§6.2 sunset），
+      // 收件人改按 role_codes（casdoor 镜像，登录/drift 写穿）解析：roles.id → code → org_users.role_codes 数组包含。
       const { postgrestUrl, postgrestKey } = getConfig();
       if (!postgrestUrl || !postgrestKey) return [];
+      const roleResp = await fetch(
+        `${postgrestUrl}/roles?id=eq.${roleId}&select=code`,
+        { headers: { Authorization: `Bearer ${postgrestKey}` } }
+      );
+      if (!roleResp.ok) return [];
+      const roles = (await roleResp.json()) as Array<{ code?: string }>;
+      const code = roles?.[0]?.code;
+      if (!code) return [];
       const resp = await fetch(
-        `${postgrestUrl}/org_users?role_id=eq.${roleId}&is_active=eq.true&select=id,wecom_id,is_active,role_id`,
+        `${postgrestUrl}/org_users?role_codes=cs.${encodeURIComponent(JSON.stringify([code]))}&is_active=eq.true&select=id,wecom_id,is_active`,
         { headers: { Authorization: `Bearer ${postgrestKey}` } }
       );
       if (!resp.ok) return [];

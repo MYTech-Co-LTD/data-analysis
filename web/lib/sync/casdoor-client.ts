@@ -172,7 +172,7 @@ export async function syncUserGroups(
   const missing = expectedGroups.filter((g) => !current.includes(g));
   if (missing.length === 0) return { ok: true, changed: false };
 
-  const next = [...current, ...missing]; // 只增不删（保留 Casdoor 侧手配组，assignRoles 同款保护哲学）
+  const next = [...current, ...missing]; // 只增不删（保留 Casdoor 侧手配组，防橡皮擦）
   const result = await casdoorWrite(
     `/api/update-user?id=${CASDOOR_ORG}/${encodeURIComponent(wecomId)}`,
     { method: 'POST', body: JSON.stringify({ ...user, groups: next }) },
@@ -181,89 +181,6 @@ export async function syncUserGroups(
     console.error('[casdoor-client] syncUserGroups failed:', wecomId, result.error);
   }
   return { ok: result.ok, changed: true, error: result.error };
-}
-
-/**
- * 写角色：设置用户的 Casdoor 角色（Casdoor-first）
- * 幂等：先查当前角色，diff 后批量增删
- *
- * 2026-08-17（T6 真机 + 源码 v3.150.0 双证据）：本版本 Casdoor 无 add-role-for-user /
- *   delete-role-for-user API（routers 只注册 get/add/update/delete-role），旧实现调它恒 404。
- *   源码确认（object/role.go getRolesByUserInternal + permission_enforcer.go
- *   getRuntimeGroupingPolicies）：角色-用户绑定存 **Role.Users**（角色下挂用户），casbin g 策略
- *   运行时从 Role.Users 实时读。因此正确姿势 = update-role 全量写 Role.Users（merge/remove），
- *   改后立即生效（已真机验证：Role.Users 挂人 → get-all-objects 并集即变）。
- */
-export async function assignRoles(
-  wecomId: string,
-  roleCodes: string[],
-): Promise<{ ok: boolean; error?: string; changed?: boolean }> {
-  const target = new Set(roleCodes);
-  const errors: string[] = [];
-  let changed = false;
-
-  // 拿到该用户当前所在角色：遍历 get-roles 检查 Role.Users（与 getRolesByUserInternal 同源）
-  const rolesResp = await casdoorFetch(`/api/get-roles?owner=${encodeURIComponent(CASDOOR_ORG)}`, {});
-  const rolesBody = rolesResp?.data as { data?: unknown } | null;
-  const roles = Array.isArray(rolesBody?.data) ? (rolesBody.data as Array<{
-    name?: string; users?: unknown; isEnabled?: boolean;
-  }>) : [];
-  const currentMembership: string[] = [];
-  const rolesById = new Map<string, { name: string; users: string[] }>();
-  for (const r of roles) {
-    const name = String(r.name ?? '');
-    if (!name) continue;
-    const users = Array.isArray(r.users)
-      ? r.users.map((x: unknown) => String(x)).filter(Boolean)
-      : [];
-    rolesById.set(name, { name, users });
-    const memberId = `${CASDOOR_ORG}/${wecomId}`;
-    if (users.some((u) => u === memberId || u === wecomId)) currentMembership.push(name);
-  }
-
-  // diff：目标角色集 vs 当前所在角色集
-  const toAdd = [...target].filter((r) => !currentMembership.includes(r));
-  const toRemove = currentMembership.filter((r) => !target.has(r));
-
-  if (toAdd.length === 0 && toRemove.length === 0) {
-    return { ok: true, changed: false }; // 无变化，幂等
-  }
-
-  // 逐角色 update-role 全量 Users（每次 update 前重读该角色，降低竞态）
-  for (const role of [...toAdd, ...toRemove]) {
-    const roleResp = await casdoorFetch(`/api/get-role?id=${encodeURIComponent(`${CASDOOR_ORG}/${role}`)}`, {});
-    const roleBody = roleResp?.data as { data?: { name?: string; users?: unknown; owner?: string } | null } | null;
-    const rObj = roleBody?.data as { name?: string; users?: unknown; owner?: string } | null;
-    const name = String(rObj?.name ?? role);
-    const cur = Array.isArray(rObj?.users)
-      ? (rObj!.users as unknown[]).map((x) => String(x)).filter(Boolean)
-      : [];
-    const memberId = `${CASDOOR_ORG}/${wecomId}`;
-    let next: string[];
-    if (toAdd.includes(role)) {
-      next = cur.includes(memberId) ? cur : [...cur, memberId];
-    } else {
-      next = cur.filter((u) => u !== memberId && u !== wecomId);
-    }
-    const wr = await casdoorWrite('/api/update-role?id=' + encodeURIComponent(`${CASDOOR_ORG}/${role}`), {
-      method: 'POST',
-      body: JSON.stringify({
-        owner: CASDOOR_ORG,
-        name,
-        users: next,
-        isEnabled: true,
-      }),
-    });
-    if (!wr.ok) errors.push(`${role}: ${wr.error}`);
-    else changed = true;
-  }
-
-  if (errors.length) {
-    console.error('[casdoor-client] assignRoles partial failure:', wecomId, errors);
-    return { ok: false, error: errors.join('; ') };
-  }
-
-  return { ok: true, changed };
 }
 
 /**

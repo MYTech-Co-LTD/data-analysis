@@ -5,7 +5,7 @@ import { GENERATED_CATALOG } from './capability-catalog.generated';
 import { BOARD_CAPABILITIES, KPI_CARD_CAPABILITIES } from './capability-board';
 
 export interface CatalogEntry {
-  key: string;            // data-analysis:view:reports / field:cost / brand:3120 / view-board:kpi / view-kpi:sale / ...
+  key: string;            // data-analysis:gate:reports-center / field:cost / brand:3120 / view-board:kpi / view-kpi:sale / ...
   group: string;          // 辅助页分组：看板 / 字段 / 品牌 / 品类 / 门禁
   label: string;          // 展示名/通俗名（唯一真相：驱动 Casdoor resource.name + KEY_TO_LABEL/LABEL_TO_KEY）
   description?: string;   // 一句话描述（能力页「描述」列）
@@ -15,9 +15,8 @@ export interface CatalogEntry {
 
 // 人工覆盖层：只改展示属性与标记，不增删 key（增删走 view-configs/路由 + scan）
 const OVERRIDES: Partial<Record<string, Partial<CatalogEntry>>> = {
-  'data-analysis:view:reports':        { group: '看板', label: '经营总览' },
-  // 2026-08-17 方案 C 退役：view:reports-items（零消费）——已移入 DEPRECATED，不再由 OVERRIDES 保护
-  'data-analysis:view:reports-targets':{ group: '看板', label: '目标达成' },
+  // 2026-08-18 方案 A：view:reports（经营总览）/view:reports-targets（目标达成）已删除——
+  // 报表中心入口由 gate:reports-center 单一把关，两个 view 不再作为能力存在（scan 已排除 /reports 路由）。
   // 2026-08-17 方案 C 退役：view:wholesale-customers（零消费）——已移入 DEPRECATED，不再由 OVERRIDES 保护
   'data-analysis:field:cost':          { group: '字段', label: '成本可见', sensitive: true },
 };
@@ -133,13 +132,6 @@ export const DISPLAY_NAME_TO_KEY: ReadonlyMap<string, string> = new Map(
 }
 
 // 授权组（spec §5.5）：映射在 catalog（app 侧），不复制进 Casdoor policy
-export const VIEW_GROUPS = Object.freeze({
-  // 2026-08-18 门禁拆分：原 view-group:reports-all（看板全组，名不符实）改为纯页面门禁组。
-  // 语义：仅可进入报表中心/目标页；看板可见性由 view-board:*（hasBoardPerm fail-close）单独裁决。
-  'data-analysis:gate:reports-center': {
-    label: '报表中心',
-    members: [
-      'data-analysis:view:reports', 'data-analysis:view:reports-targets',
-    ],
-  },
-} as const);
+// 2026-08-18 方案 A：gate:reports-center 不再是 view-group（原成员 view:reports/view:reports-targets 已删）——
+// 它是普通页面门禁能力（MANUAL 直配），hasGatePerm 查原始 key 生效；看板可见性由 view-board:* 单独裁决。
+export const VIEW_GROUPS = Object.freeze({} as const);

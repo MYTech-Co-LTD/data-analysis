@@ -22,11 +22,11 @@ const addOk = { status: 'ok', data: 'Affected' };
 
 describe('resource 同步 adapter（spec §5.1 ③，fork 裸 name 语义）', () => {
   it('差集只插缺口 + name 不加 "/" 前缀（fork 裸 name）', async () => {
-    mockFetch.mockResolvedValueOnce(remoteHas(['data-analysis:view:reports']));       // 现有
+    mockFetch.mockResolvedValueOnce(remoteHas(['data-analysis:view-board:brand']));       // 现有
     mockFetch.mockResolvedValueOnce(addOk);                                           // add 成功
-    const r = await syncResources('shanhai', ['data-analysis:view:reports', 'data-analysis:view:x']);
+    const r = await syncResources('shanhai', ['data-analysis:view-board:brand', 'data-analysis:view:x']);
     expect(r.added).toEqual(['data-analysis:view:x']);
-    expect(r.skippedExisting).toEqual(['data-analysis:view:reports']);
+    expect(r.skippedExisting).toEqual(['data-analysis:view-board:brand']);
     expect(mockFetch).toHaveBeenLastCalledWith('/api/add-resource', expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ owner: 'shanhai', name: '|data-analysis_view_x', description: 'data-analysis:view:x' }),
@@ -59,17 +59,17 @@ describe('resource 同步 adapter（spec §5.1 ③，fork 裸 name 语义）', (
     mockFetch.mockResolvedValueOnce(addOk);                                // add field:cost
     mockFetch.mockResolvedValueOnce(addOk);                                // add view-board:brand
     const r = await syncResources('shanhai', [
-      'data-analysis:view:reports',
-      'data-analysis:field:cost',
       'data-analysis:view-board:brand',
+      'data-analysis:field:cost',
+      'data-analysis:gate:reports-center',
     ]);
     expect(r.added).toEqual([
-      'data-analysis:view:reports', 'data-analysis:field:cost', 'data-analysis:view-board:brand',
+      'data-analysis:view-board:brand', 'data-analysis:field:cost', 'data-analysis:gate:reports-center',
     ]);
-    // name 用组|label（Casdoor 下拉显示）：看板|经营总览 / 字段|成本可见 / 看板|品牌×指标；description 恒存 key 原文
+    // name 用组|label（Casdoor 下拉显示）：看板|品牌×指标 / 字段|成本可见 / 门禁|报表中心；description 恒存 key 原文
     const calls = mockFetch.mock.calls.filter((c) => c[0] === '/api/add-resource').map((c) => c[1].body);
-    expect(JSON.parse(calls[0])).toMatchObject({ name: '看板|经营总览', description: 'data-analysis:view:reports' });
+    expect(JSON.parse(calls[0])).toMatchObject({ name: '看板|品牌×指标', description: 'data-analysis:view-board:brand' });
     expect(JSON.parse(calls[1])).toMatchObject({ name: '字段|成本可见', description: 'data-analysis:field:cost' });
-    expect(JSON.parse(calls[2])).toMatchObject({ name: '看板|品牌×指标', description: 'data-analysis:view-board:brand' });
+    expect(JSON.parse(calls[2])).toMatchObject({ name: '门禁|报表中心', description: 'data-analysis:gate:reports-center' });
   });
 });

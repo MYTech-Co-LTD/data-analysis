@@ -169,3 +169,12 @@ export function hasKpiPerm(perms: readonly string[] | undefined, code: string): 
   // 2026-08-18 门禁拆分 fail-close（同 hasBoardPerm）：未配置 = 不可见
   return false;
 }
+
+/** 页面门禁能力（2026-08-18 方案 A）：/reports* 区域入口由 gate:reports-center 单一把关。
+ *  与 hasBoardPerm/hasKpiPerm 不同——门禁 key 本身是 view-group（buildPermPool 会展开消费掉），
+ *  故直接查映射后的原始 permission key；空/未配置 = fail-close 拒绝（middleware 场景）。 */
+export function hasGatePerm(perms: readonly string[] | undefined, gateKey: string): boolean {
+  if (!perms || perms.length === 0) return false;                       // fail-close：无权限信息 → 拒绝
+  const keys = perms.map((p) => DISPLAY_NAME_TO_KEY.get(p) ?? p);
+  return keys.includes(gateKey);
+}

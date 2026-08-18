@@ -4,7 +4,7 @@ import {
   checkFeaturePerm,
   decodePermissionsClaim,
   catalogVCheck,
-  resolveViewKey,
+  hasGatePerm,
   type DecodedClaims,
 } from "@/lib/feature-perm";
 import { checkOffboard } from "@/lib/offboard-check";
@@ -28,13 +28,11 @@ function isRefreshRequired(claim: DecodedClaims | undefined): boolean {
   return Date.now() / 1000 - claim.iat > STALE_TOKEN_TTL_S;
 }
 
-// view 快判（M2 解析期校验）：/reports* 落到 catalog 具体 view key——
-// 通配持有者对已驱逐 key 在此被挡（resolveViewKey）。拒 → 落地页（软门禁，实查兜底不变）。
-function viewFromPath(pathname: string): string | undefined {
-  if (pathname === "/reports" || pathname.startsWith("/reports/")) {
-    return pathname.startsWith("/reports/targets") ? "reports-targets" : "reports";
-  }
-  return undefined;
+// 报表中心页面门禁（2026-08-18 方案 A）：/reports* 区域（含 /reports/targets）统一由
+// gate:reports-center（门禁|报表中心，view-group：成员 view:reports + view:reports-targets）把关，
+// 不再按路径分别查 view:reports / view:reports-targets。拒 → 落地页（软门禁，实查兜底不变）。
+function isReportsPath(pathname: string): boolean {
+  return pathname === "/reports" || pathname.startsWith("/reports/");
 }
 
 export async function middleware(req: NextRequest) {
@@ -113,9 +111,8 @@ async function handleWecomClient(req: NextRequest) {
         return NextResponse.redirect(new URL("/?error=admin_required", req.url));
       }
     }
-    // view 快判（Task 13 M2）：拒 → 落地页
-    const view = viewFromPath(req.nextUrl.pathname);
-    if (view && !resolveViewKey(claim?.permissions ?? [], view).ok) {
+    // 报表中心页面门禁（方案 A）：进 /reports* 需 gate:reports-center → 拒则落地页
+    if (isReportsPath(req.nextUrl.pathname) && !hasGatePerm(claim?.permissions, "data-analysis:gate:reports-center")) {
       return NextResponse.redirect(new URL("/?error=view_required", req.url));
     }
     return NextResponse.next({ request: req });
@@ -154,9 +151,8 @@ async function handleRegularBrowser(req: NextRequest) {
     }
   }
 
-  // view 快判（Task 13 M2）：拒 → 落地页
-  const view = viewFromPath(req.nextUrl.pathname);
-  if (view && !resolveViewKey(claim?.permissions ?? [], view).ok) {
+  // 报表中心页面门禁（方案 A）：进 /reports* 需 gate:reports-center → 拒则落地页
+  if (isReportsPath(req.nextUrl.pathname) && !hasGatePerm(claim?.permissions, "data-analysis:gate:reports-center")) {
     return NextResponse.redirect(new URL("/?error=view_required", req.url));
   }
 

@@ -5,14 +5,15 @@ import { describe, it, expect } from 'vitest';
 import { expandViewGroups, validateViewGroupMembers } from '../view-groups';
 
 describe('view-group 展开（spec §5.5，S1/M1）', () => {
-  it('组键展开为成员 view:* 键；非组键原样保留', () => {
+  it('2026-08-18 方案 A：gate:reports-center 不再是 view-group → 非组键原样保留', () => {
+    // VIEW_GROUPS 已清空（view:reports/view:reports-targets 删除），门禁 key 不再被展开
     const out = expandViewGroups([
       'data-analysis:gate:reports-center', 'data-analysis:admin',
     ]);
-    expect(out).toContain('data-analysis:view:reports');
-    expect(out).toContain('data-analysis:view:reports-targets');  // 方案 C：成员收敛为保留页面视图
+    expect(out).toContain('data-analysis:gate:reports-center');   // 普通门禁 key 原样保留
     expect(out).toContain('data-analysis:admin');
-    expect(out).not.toContain('data-analysis:gate:reports-center');   // 组键被展开消费
+    expect(out).not.toContain('data-analysis:view:reports');
+    expect(out).not.toContain('data-analysis:view:reports-targets');
   });
 
   it('嵌套组递归展开（A 组含 B 组 → B 的成员也出现）', async () => {
@@ -45,9 +46,9 @@ describe('view-group 展开（spec §5.5，S1/M1）', () => {
     ]);
   });
 
-  it('转正接线：resolveViewKey 对组持有者放行成员视图', async () => {
+  it('2026-08-18 方案 A：gate:reports-center 不再展开为成员视图（resolveViewKey 对 reports 已不可解析）', async () => {
     const { resolveViewKey } = await import('../feature-perm');
     const r = resolveViewKey(['data-analysis:gate:reports-center'], 'reports');
-    expect(r.ok).toBe(true);
+    expect(r.ok).toBe(false);   // 门禁是普通 key，view:reports 已删，不构成成员视图放行
   });
 });

@@ -114,20 +114,9 @@ module.exports = async function (req) {
       }
     }
 
-    // 5.3 role_id 自动赋值：新部门补 dept_role_mapping + auto 用户重算（manual 不覆盖）
-    //     直连 postgrest（同 wecom-oauth 模式：SECURITY DEFINER + GRANT anon，无需 ANON_KEY；
-    //     运行时 SDK 无 database.rpc）。失败不阻断同步主流程，下次同步重试。
-    let roleAssign = null;
-    try {
-      const pr = await fetch(
-        `${Deno.env.get("POSTGREST_URL") || "http://postgrest:3000"}/rpc/refresh_role_assignments`,
-        { method: "POST", headers: { "Content-Type": "application/json" } }
-      );
-      roleAssign = await pr.json().catch(() => null);
-      console.log("[sync-contacts] refresh_role_assignments:", roleAssign);
-    } catch (e) {
-      console.error("[sync-contacts] refresh_role_assignments failed:", e);
-    }
+    // 5.3 (已删 2026-08-18) role_id 自动赋值（refresh_role_assignments）——薄同步收缩后
+    //     角色归属全量 manual（Casdoor UI 单写者），不再由通讯录同步推导角色。role_id 列保留
+    //     为过渡列（§6.2 sunset），由登录/薄同步/drift 写穿的 role_codes 镜像取代。
 
     // 6. 离职对齐：企微没有但库里 is_active=true 的 → 标离职（纠正回调漏的离职）
     //    守卫：仅当本次同步到数据才对齐——防 API 异常空返回（errcode=0 但 department=[]）
@@ -179,7 +168,6 @@ module.exports = async function (req) {
       ok: true,
       departments: departments.length,
       users: userRows.length,
-      role_assign: roleAssign,
     });
   } catch (e) {
     return json({ error: String(e) }, 500);

@@ -119,6 +119,8 @@
 - Role：`anon`（匿名）、`authenticated`（已登录）、`admin`（管理员）
 - RLS：行级安全策略，按部门过滤数据
 
+> 上表仅列核心表。另有 `report_daily_delivery` / `report_daily_wholesale` / `report_daily_item_sales` / `report_daily_item_outbound` / `report_daily_wholesale_customer` / `report_weekly_trend`（§10.5/§10.9 聚合表）、`targets` / `target_snapshots`（目标）、`metric_registry` / `metric_sources` / `dimensions`（语义层）、`datasets` / `dataset_columns`（数据注册中心 §4.3）、`monitor_rules` / `monitor_alerts` / `external_request_logs` / `qa_logs` / `collect_stall`（§8.1 监控/QA）、`dim_customer` / `dim_brand`、`retail_query_user_perms`（§4.3 按人 override）等。**完整 schema 单一事实源 = `database/migrations/`（172 个幂等迁移，`migrate.sh` 每次部署全量重跑）**，本表不再逐一维护。
+
 **连接方式**：
 ```bash
 # SSH 到服务器后
@@ -177,13 +179,23 @@ POST /collect_logs            → 写入采集日志
 - 60s 超时限制
 - Secrets 通过 InsForge API 注入
 
-**已部署 Function**：
+**已部署 Function**（`functions/` 目录，10 个 + `_shared` 打包共享）：
 | Function | 用途 | 状态 |
 |----------|------|------|
-| `wecom-oauth` | 企微登录 | ✅ |
-| `wecom-sync-contacts` | 通讯录同步 | ✅ |
+| `wecom-oidc-callback` | Casdoor OIDC 回调→自签 PostgREST JWT（登录主链路，§6.1） | ✅ |
+| `wecom-sync-contacts` | 通讯录全量同步（每日 03:17 兜底，§7.1.2） | ✅ |
+| `wecom-notify` | 统一消息通知（App B，§7.1.1） | ✅ |
+| `wecom-push` | 企微主动推送 | ✅ |
+| `agent-query` | 智能问数网关（认证/授权/白名单/权限视图/审计，§4.2） | ✅ |
+| `collect-lemeng` | **历史遗留**：现行乐檬采集在 `web/lib/collectors/lemeng`（P1 collectors registry，jobs/collect 分发），本 function 无调用方；`collect_tasks.function_slug` 仅作任务类型标识（如 qa progress-guard 用它筛选销售明细任务） | 🗄 遗留保留 |
+| `encrypt-credentials` | 数据源凭证加密存储 | ✅ |
+| `cleanup-blacklist` | 黑名单清理 | ✅ |
+| `mcp` | InsForge MCP 接入 | ✅ |
+| `wecom-oauth` | **已退役**：登录职责由 Casdoor provider + `wecom-oidc-callback` 取代（§6.1）；文件保留仅作历史参考，`signJwt` 已抽到 `functions/_shared/jwt.ts`（agent-query 复用的是 `_shared`，非本文件） | 🔒 退役保留 |
 
-> 定时调度由 web 端 `web/lib/scheduler.ts` 承担（instrumentation 自启动 + node-cron），不使用 edge function。
+> `_shared/`：Edge Function 共享打包层（jwt.ts / cors.ts，agent-query 等 `require("../_shared/...")`），属 P3 模块化产物（§九 2026-08-11）。
+
+> 定时调度由 web 端 jobs registry（`web/lib/scheduler.ts` 宿主 + `web/lib/jobs/*`，instrumentation 自启动 + node-cron）承担，不使用 edge function。
 > 曾有的 `functions/scheduler` 因用 ik_ key 当 Bearer 查 PostgREST（只认 JWT）必 401、长期失能，已于 2026-07-05 移除。
 
 **注意事项**：
@@ -225,16 +237,20 @@ POST /collect_logs            → 写入采集日志
 │  └── 状态：✅ 已实现                                             │
 │                                                                 │
 │  角色 3：个性化查询                                               │
-│  端点：POST /query                                               │
+│  端点：POST /query                                                │
 │  ├── 输入：SQL（OpenClaw 生成）                                   │
 │  ├── 处理：网关建权限视图（行+列脱敏）→ read_parquet → 执行（见 §4.2）                       │
 │  ├── 输出：查询结果                                               │
-│  ├── 鉴权：✅ 已设计（见 §4.2）                                  │
-│  └── 状态：⏳ 待实现                                             │
+│  ├── 鉴权：AGENT_API_KEY（仅网关可调）+ 每请求独立连接隔离临时视图  │
+│  └── 状态：✅ 已实现（2026-07-05 上线，§4.2）                     │
 │                                                                 │
 │  其他端点：                                                      │
 │  ├── GET /health → 健康检查                                     │
-│  └── GET /schema → OOS 文件列表                                 │
+│  ├── GET /schema → OOS 文件列表                                 │
+│  ├── POST /carry-dims → 维表物化 parquet（C3，§4.4；cron 04:33 兜底 + 变更回调） │
+│  ├── POST /derive-dim-customer → 批发客户维表派生（3120）        │
+│  ├── POST /import → 数据导入                                    │
+│  └── 鉴权：/query /transform /merge /compute /carry-dims 均校验 AGENT_API_KEY │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -255,6 +271,8 @@ POST /collect_logs            → 写入采集日志
 ### 3.1 Next.js Web（web:3000）
 
 **职责**：前端应用 + API Routes
+
+> 页面与路由随迭代增长较快，下表仅列骨架；**完整清单以代码为准**：页面 `web/app/**`（另有 `/admin/semantic` 语义层管理、`/admin/qa` QA 看板、`/admin/sources/monitor` 监控大盘、`/admin/targets` 目标管理、`/admin/branches`/`/admin/items`/`/admin/permissions`/`/admin/sources`、`/help` 等），API `web/app/api/**`（admin 下 20+ 路由：branches/brands/items/regions/permissions/data-sources/collect-*/collect-backfill/qa-*/semantic/targets/scheduler/reports 等）。
 
 **主要页面**：
 
@@ -286,10 +304,10 @@ POST /collect_logs            → 写入采集日志
 | `DUCKDB_URL` | DuckDB 服务地址 |
 | `WECOM_*` | 企微配置 |
 
-**定时调度**（`lib/scheduler.ts`，node-cron，Asia/Shanghai）：
+**定时调度**（架构现状 = **`web/lib/jobs/*` 注册表**，宿主 `web/lib/scheduler.ts`，node-cron，Asia/Shanghai，详见 §5.1）：
 - **自初始化**：server 启动时 `web/instrumentation.ts` 的 `register()` 调 `ensureSchedulerInitialized`（带退避重试），web 容器重启后 cron 不再静默停止；首次 `/api/admin` 调用兜底
-- **防重入**：`runningTasks` 集合（globalThis 跨 chunk 单例），并发触发跳过
-- **任务配置**：`collect_tasks` 表（schedule_cron / enabled / params / 运行时水位线 watermark）
+- **防重入**：`runningTasks`/`scheduledJobs`（globalThis 跨 chunk 单例），并发触发跳过
+- **任务注册**：固定 job 在 `web/lib/jobs/registry.ts` 尾部追加（各目录 manifest 声明 schedule）；动态采集任务读 `collect_tasks` 表（schedule_cron / enabled / params / 运行时水位线 watermark）
 - **零售明细两模式**：
   - 全量（full）：新一天 / 距上次全量≥55min / 无水位线 → count → 全部分页 → `/transform` 覆盖 all.parquet（每小时核对一次）
   - 增量（incremental）：其余每 5 分钟 → count → 若总数 > 水位线则从上次页（重叠 1 页）续采尾部 → `/merge` 合并去重写回
@@ -338,7 +356,9 @@ POST /collect_logs            → 写入采集日志
          → DuckDB /query 或 PostgreSQL（详见 §4.2）
 ```
 
-### 4.2 智能问数查询与鉴权架构（已设计 + 已验证，2026-07-05）
+### 4.2 智能问数查询与鉴权架构（✅ 已实现并部署，2026-07-05）
+
+> 本节为设计存档；实现以 `functions/agent-query/` + `services/server.js` 现状为准。
 
 对标业界 Text-to-SQL 治理共识（RLS + 身份注入 session + 永不信任 LLM）。权限作用于**数据范围（行级）+ 敏感列（列级）**，不限定"能问什么"，保留自由分析能力。
 
@@ -368,7 +388,8 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
 
 **行级权限（底座 = branch_nums 门店，§6.2）：**
 - DuckDB：权限视图 `WHERE branch_num IN ('54','127',...)`（branch_num 是 VARCHAR，已实测）
-- PostgreSQL：汇总表 RLS 用 `request.jwt.claims.branch_nums`（claim 由网关代签短时 JWT 注入，复用 wecom-oauth 的 signJwt + JWT_SECRET）
+  - ⚠️ **已知限制（以代码为准如实记录）**：明细 parquet 无 `system_book_code` 列（品牌只在文件路径里，§10.9 brand 取自 `regexp_extract(filename,...)`），故 DuckDB 行级过滤只能用 `branch_num` 单键，无法区分品牌。`branch_num` 跨账套重复（§1.1 门店键铁律，128 个共享），perms 被授权某品牌共享号门店时，另一品牌同号门店的行也会被放行。网关侧 PG 路径走真 RLS 不受影响。如需根治：需先在 /transform 物化 sbc 列再改复合过滤（架构变更，待立项）。
+- PostgreSQL：汇总表 RLS 用 `request.jwt.claims.branch_nums`（claim 由网关代签短时 JWT 注入，复用 `_shared/jwt.ts` 的 signJwt + JWT_SECRET）
 - brands/categories 维在语义层/视图侧过滤；数据源已收编 `data_permissions` 单表（167），网关只消费 `get_user_perms` 结果
 - **演进（2026-08-16 IAM 标准化，W 轴；2026-08-18 门店范围唯一真相）**：门店范围**唯一真相 = `范围|X` 资源**（挂 permission.resources → `expandScopeResources` → `data_scope.branch_nums`；**废除组织架构 Group tree 挂组推导**，无范围资源 = 空集 deny，B1 fail-close）；`data_permissions` 双氧期保留，W5 DB 级写关闭、W6 sunset。消费点（get_user_perms / RLS）机制不变，输入源切换（PERMS_INPUT 同模式）
 
@@ -401,8 +422,8 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
 - ✅ read_parquet glob 跨品牌/日期、全 VARCHAR、CASE 列脱敏、多语句分号提交、`db.connect()` 跨连接隔离、跨引擎小表搬运 JOIN（行/列权限在 JOIN 下均 hold）
 - ✅ OpenClaw 企微 channel 已接通（日志实况：ZhangDuo 真实提问）、框架成熟（tool/skill/plugin/cron）
 - ✅ PG RLS + PostgREST jwt.claims（005 在跑）、网关代签 JWT（wecom-oauth 在跑）
-- ⏳ PG 嵌套 claim 列脱敏视图（`request.jwt.claims.can_see_cost`）：机制标准，实现时验
 - ⏳ DeepSeek-V4-Flash SQL 质量：靠 skill 优化（搁置实测）
+- ✅ PG 列级脱敏：未采用独立的 `report_*_v` claim 视图路线（C0 原设计），实际由生成视图模板统一注入（§10.10 权限过滤：permFilterFact/permFilterTarget + maskCost，迁移 155 已 DROP 旧手写视图）；agent-query PG 路径改查生成视图 + 注册表 costColumns 应用层兜底
 
 **MVP 范围：**
 - 开：DuckDB 明细自由探索（权限视图）+ PG 汇总表查询（RLS）+ 跨引擎小维表搬运 JOIN
@@ -482,7 +503,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 **C2 取数路由（纯引导）**：SKILL.md 加优先级规则（能命中 report_* 汇总就别扫 retail_detail 明细），复用 B 的 list_datasets。不做网关自动重写（YAGNI）。
 
-**C3 carry 维表（物化 parquet）**：维表 dim_*(+ext) → duckdb-service `/carry-dims`（**pgPool 读 → DuckDB COPY parquet S3，全程不 attach、DuckDB 不连 PG**）→ 查询侧 read_parquet 维表 parquet，明细按需 JOIN 维表。**定时（scheduler cron 兜底）+ 变更回调（采集维表后 / ext 编辑后）双触发**，对齐通讯录同步（§4.3 registerContactSyncJob）模式。维表 `carry_enabled` 翻 true。否决 attach（绕过 report_* 风险）与 pg_duckdb（见下）。
+**C3 carry 维表（物化 parquet）**【✅ 已实现】：维表 dim_*(+ext) → duckdb-service `/carry-dims`（**pgPool 读 → DuckDB COPY parquet S3，全程不 attach、DuckDB 不连 PG**）→ 查询侧 read_parquet 维表 parquet，明细按需 JOIN 维表。**定时（cron 04:33 兜底，`web/lib/jobs/carry-dims`）+ 变更回调双触发**，对齐通讯录同步模式。维表 `carry_enabled` 已翻 true；agent-query 查询侧已消费 dim parquet（含敏感列脱敏，§4.2）。否决 attach（绕过 report_* 风险）与 pg_duckdb（见下）。
 
 **C4 定时应用（触发判定本地化 + run_push 引擎闸，2026-08-15 改写）**：OpenClaw cron turn **天生不带身份**（requesterSenderId 只来自 inbound，源码证实；现存「建水3店业绩」cron 已踩坑禁用）。解法在我们可控层：
 - **run_as 反查（问数 cron）**：`scheduled_reports(cron_job_id → run_as=创建者)` 绑定，后端可信会话写入。plugin 的 query_retail_data 在 requesterSenderId 空时透传 `cronSessionKey=ctx.sessionKey`（cron turn 的 sessionKey 含 `cron:<jobid>:`），agent-query parse job_id 反查 run_as → get_user_perms → 裁剪+脱敏。run_as **不在 LLM 参数**（query_retail_data.parameters 只有 sql）、钉死=创建者。
@@ -519,16 +540,18 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 ### 5.1 采集流程
 
+> **架构现状（P1 模块化，§九 2026-08-11）**：采集与定时任务已重构为 **`web/lib/jobs/*` 注册表架构**（`registry.ts` 尾部追加式登记，各 job 目录自带 `manifest.ts` 声明 `schedule`）；动态采集任务（`collect_tasks` 每行）经 `collectManifest(task)` 工厂注册。固定 job 节奏（Asia/Shanghai）：contact-sync 03:17 / dim-customer 04:20 / carry-dims 04:33 / target-close 05:10 / source-reconcile 09:07 / qa-full 09:15 / daily-reconcile 02:00,12:00,19:00 / monitor（分桶）+ 动态 collect_tasks（零售明细 8–24 点，迁移 166 修正；旧迁移 013 曾注释 8-24 实写 8-23）。采集器实现在 `web/lib/collectors/*`；手动触发仍走 `/api/admin/collect-lemeng` 等 API Route。
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                                                                         │
-│  定时触发（node-cron）                                                   │
-│  └── 凌晨 2:00                                                          │
+│  定时触发（node-cron，jobs registry）                                   │
+│  └── 零售明细：8–24 点每 5 分钟增量 + 每小时全量核对                  │
 │       │                                                                 │
 │       ▼                                                                 │
-│  Next.js API Route                                                       │
+│  Next.js API Route（手动触发）                                         │
 │  ├── /api/admin/collect-lemeng                                          │
-│  ├── 调用乐檬 API（分页拉取）                                            │
+│  ├── 调用乐檬 API（分页拉取，web/lib/jobs/collect/manifest.ts）        │
 │  ├── 扁平化嵌套数据                                                      │
 │       │                                                                 │
 │       ▼                                                                 │
@@ -571,7 +594,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 |---|---|---|---|
 | 人是谁 | Casdoor | 企微 provider / JIT / 薄同步建户 | 不变 |
 | 组织架构（部门/区域/门店组） | **Casdoor Group tree** | Casdoor UI + 组同步器（auto） | **★ 中心化：原「企微通讯录→org_departments」**；本地表降级只读投影 |
-| 职位（Role） | Casdoor | Casdoor UI（manual）+ 薄同步（auto） | 不变；闭环经 Group 挂 Role |
+| 职位（Role） | Casdoor | Casdoor UI（manual，唯一写者；薄同步 2026-08-18 起不再写角色） | 不变；闭环经 Group 挂 Role |
 | 能力点（功能资源） | Casdoor Permission + resource 表 | Casdoor UI / **catalog 同步 adapter**（§6.4） | **★ 新增 catalog 动态发现** |
 | 数据范围-静态枚举（品牌/品类/字段） | **Casdoor resource** | catalog 同步 adapter | **★ 原 `data_permissions` 各维内** |
 | 数据范围-动态门店 | **`范围|X` 资源**（permission.resources） | Casdoor UI 挂资源 | **★ 原 `data_permissions.branch_nums` 内；2026-08-18 废除 Group 归属推导** |
@@ -586,7 +609,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 > **核心原则——四层模型：帽子 × 座位 × 口径**：
 > ```
 > ① 身份层（不动）      Casdoor OIDC（企微 provider）→ wecom_id（JIT 建户）
-> ② 帽子层（改造）      Casdoor：人→角色（UI 人工 + 薄同步 auto，单写者原则）
+> ② 帽子层（改造）      Casdoor：人→角色（UI 人工，Casdoor 单写者；薄同步不写角色）
 >                       角色×功能资源：data-analysis:<模块>:<动作>（casbin Permission，§6.4）
 > ③ 座位层（W2 上收）   Casdoor Group tree 中心化（部门树 + 区域-门店树，组同步器，§7.1.2）
 >                       org_departments / org_users 降级只读投影（不再被写）
@@ -636,32 +659,29 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 **claims 契约扩展（W3，2026-08-16 IAM 标准化；与 U2 登录切换同一发布窗）**：claims 构建 function（`functions/wecom-oidc-callback`）在既有字段（sub/org/roles/permissions + role_code/visible_panels/default_landing/default_metric/departments，08-15 八字段全保留）之上**新增四段**——`groups`（用户挂组完整路径精确数组；Casdoor 原生 `useGroupPathInToken` 后 token 自带，或 get-account 读 `user.Groups`；「get-user-groups」路由不存在禁止调用）、`data_scope`（brands/categories/branch_nums，由 resource 判定 + **`范围|X` 资源展开派生**（2026-08-18 废除 groups 叶子展开/组织架构推导）；**段存在但空 = authorized ∅ = deny，不收敛 `["*"]`**）、`fields`（掩码开关，如 `{cost:true}`）、`catalog_v`（代码/部署版本戳，只做 key 级按需 fail-close，不做全局版本拒绝）。**顶层旧 key 双氧保留至 W6 不删**（072/114 扁平化下旧 key 变 NULL 会致既有 RLS 静默全放）；新 claims 顶层旧 key 值 = 全维非空镜像。`permissions` 值从四维维度 key 迁移为 `data-analysis:*` 资源串 + `push:` 裸 key（B2/H4）。例外门店**不折叠进 claims**（`temporary_grants` RT 实查，§6.5）。
 
-**三层模型强制（消费侧 fail-close，2026-08-18 用户裁定）**：授权模型铁律 = **资源挂权限 → 权限挂角色 → 角色挂人**，`permission.users` 直挂（及 `permission.groups` 挂载）**禁止产生作用**。claims 取数由此从 `GET /api/get-all-objects?userId=`（并集，含直挂，来源不可区分）改为**角色链取数**：`GET /api/get-permissions?owner=` 全量 → 只取 `permission.roles` 命中用户角色码（登录时 userinfo `roles` claim，已有）的 `resources` 并集。直挂权限（`roles=[]`）与 groups 挂载天然匹配不上即排除——**不管从 Casdoor UI / API / 脚本哪种来源写入，直挂一律不生效**。语义与现状对齐：拉取失败 → `null` → C2 503 fail-close；用户无角色 → 空集 → B1 空集 = deny（无角色即无授权）；`isEnabled` 不滤（get-all-objects 原语义）。`reachable` 输出形态不变，下游（normalizeFriendlyPerm / 门店范围展开 / buildClaims / RLS）零改动。配套存量清理（一次性写 Casdoor）：测试权限改挂 `test-role` 角色、清 `users`；`role-zone_manager` 清 ZhengXin 直挂。
-
 **WeCom provider 双模式**（Casdoor provider 级 `method` 是单值，故配两个 provider 都指向 App A）：
 - `wecom_silent`（Silent）：企微内静默（`snsapi_base`）。App A 登录凭证（`WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET`）已挪入 Casdoor 此 provider，`functions/wecom-oauth` 的登录职责由 `functions/wecom-oidc-callback` 取代。
 - `wecom_scan`（Normal）：PC 外部扫码。
 
-> `functions/wecom-oauth` 的 `signJwt` 能力仍被 `agent-query` 网关复用（§4.2），文件保留不删。
+> `functions/wecom-oauth` 已退役（登录职责由 Casdoor provider + `functions/wecom-oidc-callback` 取代）。其 `signJwt` 已抽到 `functions/_shared/jwt.ts`，`agent-query` 网关复用的是 `_shared` 版本；文件保留仅作历史参考。
 >
 > 端到端企微登录验证待部署后进行（Casdoor WeCom provider 源码已实测 + postgres 部署已验证；公网 `sso` 域名 + 企微可信域名配置属部署后验证）。
 
-**薄同步链（2026-08-15 spec，U1 起；单写者原则，挂 §7.1.2 通讯录同步链）：**
+**薄同步链（2026-08-15 spec，U1 起；2026-08-18 收缩——仅同步「人 + 组织架构」，角色写入全删；单写者原则，挂 §7.1.2 通讯录同步链）：**
 
 ```
 企微回调（实时增量）+ 每日 03:17 全量（兜底）
-   → 推导（dept_role_mapping → 角色；共享模块单实现，refresh 与薄同步同调，禁双推导引擎）
-   → Casdoor-first 写三动作：provisioning（JIT 建户）/ auto 角色写入 / 离职 disable
-   → 写镜像 org_users.role_codes（casdoor_writer = auto|manual）
+   → Casdoor-first 写：provisioning（JIT 建户）/ 离职 disable / 组对账（部门组补挂）
+   → 写镜像 org_users.role_codes（仅登录/drift 回写；casdoor_writer 现全量 manual）
    → 写 Casdoor 失败 → sync_outbox（幂等键 wecom_id+action+day）→ 下次同步先清 outbox
 每日 drift 三向对账：
-   diff1（Casdoor−企微，manual 除外）= Casdoor 手工配置 → 回写镜像标 manual，永不反向覆盖
+   diff1（Casdoor−企微）= Casdoor 手工配置 → 回写镜像标 manual，永不反向覆盖
    diff2（企微−Casdoor）= 写失败 → outbox 重放，>48h 页级告警
    diff3（Casdoor−镜像）= 镜像滞后 → 回写，24h 未收敛告警（直接影响 run_push 分组正确性）
 ```
 
-- **单写者**：`org_users.casdoor_writer` 标记——auto = dept_role_mapping 推导写 Casdoor；manual = Casdoor UI 人工配置 → 薄同步写豁免（防手工配置橡皮擦）。既有本地角色写者（152 refresh cron / `/api/admin/permissions/users` PUT 的 role 字段）U1 起收编/冻结（同一 PR）。
-- **动作分顺序落地**：① 离职四 sink 最先（安全刚需，§7.1.2）；② auto 角色写入先「对账告警+人工确认」两周再自动写；③ provisioning 先 JIT 建户+人工配角色。
+- **单写者**：**角色归属全量 manual（Casdoor UI 人工配置，唯一写者）**——auto 角色写入（`dept_role_mapping` 推导、`derive-roles.ts`、`assignRoles`）已随 2026-08-18 收缩删除；`casdoor_writer` 现存值即 manual/disabled 两种（生产实测 45 个 active 用户全 manual）。既有本地角色写者（152 refresh cron / `/api/admin/permissions/users` PUT 的 role 字段）U1 起收编/冻结。
+- **动作分顺序落地**：① 离职四 sink 最先（安全刚需，§7.1.2）；② provisioning 先 JIT 建户（角色人工配，Casdoor UI）。
 - **输入源切换（U2，最高风险独占窗口）**：`PERMS_INPUT=casdoor|legacy` 配置开关（秒级回滚不发版）；shadow 对账门禁 = 预期差异白名单（drift manual 集派生，逐条人工确认）+ 非预期差异双清零；切换执行瞬间重跑增量 diff=0；回滚预案含 Casdoor→legacy 角色回放脚本。
 
 ### 6.2 数据权限合成与 PostgreSQL RLS 鉴权（2026-08-15 改写：subject_id=code + role_codes 持久投影 + 多角色 UNION）
@@ -717,7 +737,8 @@ PostgreSQL RLS 策略（执行点机制不变；W3 起新增策略分支，见�
 
 **功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1）。数据授权目标态 = **二分流**（静态枚举→resource / **门店→`范围|X` 资源**（2026-08-18 演进，废除 Group 挂组推导与例外体系，无例外通道）；`data_permissions` 双氧期保留、W6 sunset（§6.2）——casbin 是单次判定引擎、无 policy→SQL。**门店范围 resource 化 = `范围|X` 粗粒度键**（`范围|全店`/战区包名/单店编号/门店名）挂 permission.resources，登录经 `expandScopeResources`（读 maps + dim_branch）展开成门店集——范围键数量 O(授权组合数) 而非 O(门店数×组合)，不逐店建 policy（原「不 resource 化门店」顾虑据此不成立，08-16 spec §5.2 有演进标注）。
 
-- **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual）+ 薄同步 auto（§6.1 单写者）。
+- **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual，§6.1 单写者，薄同步不写角色）。
+- **报表中心页面门禁（2026-08-18 方案 A）**：`/reports*` 区域入口统一由 **`gate:reports-center`**（`门禁|报表中心`，普通页面门禁能力）把关——middleware 对 `/reports*` **直接查 `gate:reports-center`**（hasGatePerm）。`view:reports`（经营总览）/`view:reports-targets`（目标达成）**已从 catalog 删除**（scan 排除 `/reports` 路由 + OVERRIDES/VIEW_GROUPS/claims 映射清除，消除「配了经营总览只进列表不进详情」的两道困惑）；VIEW_GROUPS 全量清空。看板可见性仍由 `view-board:*`（hasBoardPerm fail-close）单独裁决；门店数据仍由 `范围|X` 裁决。**进入报表中心 = 仅需 `门禁|报表中心`**；首页 `/`（目标列表 total 行）无 view 门禁，恒可见。
 - **checkFeaturePerm 单模块**：`web/lib/feature-perm.ts` 单函数收口所有功能门禁（禁散落 `userid === '...'` 硬编码）——P0a 读 claims + BREAKGLASS；U2 后读 claims + casbin 实查。切 casbin 是 1 处切换，非 N 处 hunt-and-replace。
 - **BREAKGLASS env**：`ADMIN_USERIDS` 常驻白名单 P0a 即收敛为 `BREAKGLASS_ADMINS` env（默认空；启用走兜底并写审计）——常驻白名单 = 永久 Casdoor 旁路，撤权不收口。
 - **高危实查（裁决-1 已裁：启用，随 U2 生效）**：admin / `push:broadcast` / 临时授权类服务端实查（5min 缓存 + fail-close + 24h stale 宽限+告警）——这是 `JWT_SECRET` 自签 admin 的真兜底（RT-7）；低危（菜单/只读）维持 7 天随自签 JWT。
@@ -836,12 +857,12 @@ functions/wecom-sync-contacts（兜底全量；JSON 调用，不受 body 限制�
 - **限**：依赖企微回调可达 + 企微「通讯录同步」功能已开启；回调漏的消息靠每日全量兜底（最长次日纠正）。`functions/wecom-contacts-webhook` 废弃（逻辑移至 web/api）。
 
 **🆕 Casdoor 薄同步三动作 + 离职四 sink（2026-08-15 spec，U1 起，详见 §6.1 薄同步链）：**
-- 同步链扩展为**薄同步**：在 upsert 本地表之外，按 `casdoor_writer`（auto|manual）单写者原则向 Casdoor 写三动作——① **provisioning**（JIT 建户，角色人工配，有需求再自动化）；② **auto 角色写入**（dept_role_mapping 推导；先「对账告警+人工确认」两周再自动写）；③ **离职 disable**（Casdoor 新登录即时拦截）。写 Casdoor 失败入 `sync_outbox`（幂等键 wecom_id+action+day）重放，>48h 页级告警；每日 drift 三向对账。
+- 同步链扩展为**薄同步（2026-08-18 收缩：仅同步人 + 组织架构）**：在 upsert 本地表之外向 Casdoor 写——① **provisioning**（JIT 建户，带部门组；角色人工配，Casdoor UI 唯一写者）；② **离职 disable**（Casdoor 新登录即时拦截）；③ **组对账**（`actionSyncGroups` 按企微部门补挂用户组）。**auto 角色写入（dept_role_mapping → assignRoles）已删除**（生产实测 0 auto 用户，角色归属全量 manual）。写 Casdoor 失败入 `sync_outbox`（幂等键 wecom_id+action+day）重放，>48h 页级告警；每日 drift 三向对账。
 - **离职四 sink（收权分层，诚实口径）**：① web API 面——middleware `is_active` 软校验 + `token_blacklist` 按 sub 拉黑（**即时**）；② 推送面——run_push 存在性守卫 + 订阅 owner 再校验（**即时**）+ **Novu subscriber delete**（消除残留投递，§7.4）；③ Casdoor 新登录 disable（**即时**）；④ 数据面（PostgREST/RLS）——旧 7 天 JWT 继续有效，**最长 7 天窗口（裁决-4 已裁：接受，与现状等价非新债）**；即时化真执行点为 pgrst_pre_request 扩展，留作未来选项。
 
-**🆕 组同步双轨：用户同步（原生）+ 组同步器（自写）（2026-08-16 IAM 标准化，W2 起，spec §5.3）：**
-- **用户同步走 Casdoor 原生 wecom syncer**（源码验证）；Casdoor 原生 `GetOriginalGroups/GetOriginalUserGroups` 返回空带 TODO（`object/syncer_wecom.go`）→ **组织/门店 Group 上收必须自写组同步器（唯一自写组件，范围仅此一处，不 fork）**。
-- **两通道显式分离（H2）**：① 部门树——企微 webhook / 03:17 全量 → upsert 部门组；② **门店树——由 diff(`dim_branch` vs `maps_branch_group` vs Group 树) 驱动，不挂企微 webhook**（门店在企微未必有部门，企微通知到不了新店/改名；改名 = 新名 upsert + 旧名摘挂/标 deprecated）。两通道命名空间分离防互串。
+**组同步（2026-08-16 IAM 标准化，W2 起，spec §5.3；2026-08-18 收缩）——仅部门树，门店组树已废弃：**
+- **用户同步走 Casdoor 原生 wecom syncer**（源码验证）；Casdoor 原生 `GetOriginalGroups/GetOriginalUserGroups` 返回空带 TODO（`object/syncer_wecom.go`）。
+- **部门树单通道（2026-08-17 用户裁定 + 2026-08-18 落地）**：组织架构严格按企微——企微无门店层部门，Casdoor 即不建门店组；门店范围不依赖组织架构（`范围|X` 资源唯一真相）。**门店树组同步器 `web/lib/sync/group-sync.ts` 已删除**（零引用死代码）；用户挂组由薄同步 `actionSyncGroups`（`syncUserGroups`）按 `department_ids` 补挂维护（只增不删，防橡皮擦）。
 - **建树先父后子（H1，硬约束）**：`ParentId` 存父 Name，父子链断裂（重命名/中断/先子后父）触发原生 `GetUserFullGroupPath` return error → **该组所有用户 JWT 签发失败、登录崩**——每日父链完整性校验 + 组树完整性指标（辅助页亮灯，fail 告警）。
 - **门店自省映射 `maps_branch_group`**（迁移 178）：`(branch_number, group_id) UNIQUE`——`dim_branch` 与 Casdoor Group 双向可查；登记新店 = dim_branch 建档 + 同步器建 Group + 映射行（3 处一致，对账盯）。**门店键一律用 `branch_number`**（复合键铁律，CLAUDE.md）。映射只校验「门店→组」存在；「谁该挂哪组」靠独立期望源「人→门店」成员级对账（期望源≠org_departments 自投影，防循环自证）。
 - **组类型三态（H13）**：门店叶子组 → 直映 branch_number；区域组 → 子孙门店叶子并集；部门/职能组 → 不参与 branch 展开。空集 = 空 scope 非 NULL（消费侧可区分）；未知组类型 → fail-close + 告警。
@@ -931,16 +952,17 @@ spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md
 - `external_request_logs`：`callLemengApi` 每次调用埋点，`request_fail` 数据源（>7 天清理）。
 - ⚠️ 前置修复：`collect_logs` 加 `duration_ms`/`response_summary`（现代码写这两列但表没有，写入静默失败、大盘耗时列恒空）。
 
-**七个 check_type**（每个一个纯函数 evaluator：读数据源 → 比 threshold → 产出 firing/alert_key/context）：
-| check_type | 数据源 | 触发 |
-|---|---|---|
-| `token_expire` | `auth_credentials` JWT，解 payload `exp` | 剩余 < before_hours；token 缺失/无法解析也 firing（evaluator 给 `message` 覆盖模板，避免静默"恢复"致盲） |
-| `collect_fail` | `collect_logs` | 连续失败 ≥ consecutive |
-| `request_fail` | `external_request_logs` | 窗口失败率 > failure_rate |
-| `service_down` | 主动探活 web/duckdb/insforge/postgres/deno/openclaw（应用级，5s 超时） | 任一不可达 |
-| `data_freshness` | PG 汇总表 + DuckDB parquet 最新日期 | 距今 > stale_hours |
-| `data_integrity` | DuckDB 明细 count vs PG 汇总 | 差异率 > diff_rate |
-| `contact_sync` | `org_users.updated_at` + 回调最近时间 | 距上次同步 > max_age_hours |
+**check_type 清单（实现状态以 `web/lib/monitor/evaluators/` 为准，2026-08 审计）**（每个一个纯函数 evaluator：读数据源 → 比 threshold → 产出 firing/alert_key/context）：
+| check_type | 数据源 | 触发 | 状态 |
+|---|---|---|---|
+| `token_expire` | `auth_credentials` JWT，解 payload `exp` | 剩余 < before_hours；token 缺失/无法解析也 firing（evaluator 给 `message` 覆盖模板，避免静默"恢复"致盲） | ✅ 已实现 |
+| `collect_fail` | `collect_logs` | 连续失败 ≥ consecutive | ✅ 已实现 |
+| `service_down` | 主动探活 web/duckdb/insforge/postgres/deno/openclaw（应用级，5s 超时） | 任一不可达 | ✅ 已实现 |
+| `collect_stall`（🆕 迁移 165，设计清单外新增） | `collect_tasks.last_run_at`（rule.target = task_id） | enabled=true 且 now - last_run_at > 阈值（采集卡死/未跑） | ✅ 已实现 |
+| `request_fail` | `external_request_logs` | 窗口失败率 > failure_rate | ⏳ 未实现 |
+| `data_freshness` | PG 汇总表 + DuckDB parquet 最新日期 | 距今 > stale_hours | ⏳ 未实现 |
+| `data_integrity` | DuckDB 明细 count vs PG 汇总 | 差异率 > diff_rate | ⏳ 未实现（部分职能由 QA 体系承担，§10.10 L4） |
+| `contact_sync` | `org_users.updated_at` + 回调最近时间 | 距上次同步 > max_age_hours | ⏳ 未实现 |
 
 **告警生命周期**：firing → upsert `monitor_alerts`(active) + `occurrence_count++`；`suppress_window`（默认 30min）内不重复发；问题消失 → 转 resolved + 发「已恢复」。规则改阈值/收件人/模板/级别/开关走表，不发版。
 
@@ -949,7 +971,7 @@ spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md
 - **兜底通道（关键）**：`service_down` 探到 InsForge 不可达时，wecom-notify 也发不出（它跑在 InsForge 上）→ web `notifyWecomDirect()` 用 `WECOM_OPS_SECRET` 直连企微 `message/send` 绕开 InsForge。仅此一条路径直连。
 - InsForge 不可达 = 大故障，兜底通道是唯一能让外界知道它挂了的手段。
 
-**只读大盘**：新建 `/admin/monitor`（实时活跃告警 + 事件流 + 7 类健康灯 + 采集日志），走 PostgREST 只读。
+**只读大盘**：已上线 **`/admin/sources/monitor`**（实时活跃告警 + 事件流 + 健康灯 + 采集日志），走 PostgREST 只读。
 
 **v1 非目标**：任意表达式规则引擎、规则 CRUD UI、值班/升级/静默时段、指标时序存储、自愈。
 
@@ -1015,6 +1037,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | 身份/权限分层 | Casdoor 管身份（`wecom_id`）+ SSO 会话；data-analysis 拿 `wecom_id` 后本地合成 `perms` 自签 PostgREST JWT（`JWT_SECRET` / RLS / 权限表不变）——2026-08-15 起细化为帽子×座位×口径四层（§6.1） | 2026-08-08 |
 | Casdoor 独立化 | Casdoor 从 data-analysis 寄生迁到控制面（113.249.101.33 `/opt/casdoor`，独立 docker compose + **独立 postgres**），成平台级身份基础设施；data-analysis 退化为普通 OIDC client；Caddy 反代 sso 域名（specs/2026-08-09-casdoor-independent-design.md） | 2026-08-09 |
 | 代码组织规范 | A+B-lite：目录即模块（collectors/jobs/report-center-boards）+ 尾部追加式注册表 + 契约单源（web/lib/contracts）；不引入运行时插件框架、不拆服务、不改部署拓扑。P0–P5 分阶段（spec `docs/superpowers/specs/2026-08-11-modular-plugin-design.md`，评审 `docs/design/modular-plugin-architecture-review.md`） | 2026-08-11 |
+| 语义层 Cube 全替代 | Cube headless 成为查询引擎与语义定义唯一手写层（schema YAML，git）；metric_registry 冻结新增、生成器按"物化上移 + 退役清单"退出（四硬口径移 /compute 跑批）。**已确认的三条让步**：报表可用性绑 Cube 常驻（迁移期保留视图逃生通道）；报表路径行级权限由 RLS 上移至 securityContext（data_scopes 同源，RLS 退守 PostgREST 管理路径）；QA 围绕 /v1/sql + 对账 diff 重建。spec `docs/superpowers/specs/2026-08-15-semantic-query-middleware-design.md`（v2）。关联同日权限三层、Novu 推送平台两 spec | 2026-08-15 |
 | 功能授权进 Casdoor casbin（D1/D2） | casbin 只管功能授权（资源三段式 `data-analysis:<模块>:<动作>`，§6.4）；人→角色在 Casdoor 配（UI 人工+薄同步 auto 单写者）；角色码两侧契约锁定（role 行 subject_id=code）；数据范围留 `data_permissions`，RLS/视图/claims/pgrst_pre_request 执行点零改动。spec `docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md` | 2026-08-15 |
 | 通讯录薄同步（D3） | Casdoor 三动作（provisioning JIT 建户 / auto 角色写入 / 离职 disable）挂 wecom-sync-contacts 链；`casdoor_writer` 单写者 + `sync_outbox` 幂等重放 + 每日 drift 三向对账（§6.1/§7.1.2）；本地角色写者 U1 起收编/冻结 | 2026-08-15 |
 | Novu 自部署统一推送中心（D4/D5/D7） | 社区版、控制面 113.249.101.33、org=shanhai；企微投递 = chat-webhook 官方扩展点 + 自建 wecom-bridge（web api route，双层验签）；只切业务推送（系统告警留 wecom-notify），wecom-push 退役（停 cron 不删码）；不 fork 不自研 provider（§7.4） | 2026-08-15 |
@@ -1033,6 +1056,8 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | catalog 动态发现机制（原则确认） | catalog 自动发现（代码派生）+ 部署钩子 + cron 对账 + 校验器（认 catalog∪`*`，未知 key 拒绝）双向通道（§6.4） | 2026-08-16 |
 | 门店上收 Group tree（D1） | 每门店一组、人挂组；组织架构中心化 = Casdoor Group tree，本地 org 表降级只读投影（§6.0/§7.1.2 组同步器） | 2026-08-16 |
 | 门店范围废除组织架构推导（2026-08-18） | 范围唯一真相 = `范围\|X` 资源（permission.resources，直接挂现有 permission）；无范围资源 = 空集 deny（B1 fail-close）；删 `expandGroupsToBranches`/`resolveGroupBranches`；组织目录（Group tree/组同步器/reconcile-groups 审计）保留仅目录用途 | 2026-08-18 |
+| 薄同步收缩为仅同步人+组织架构（2026-08-18） | 删 auto 角色写入链路（`derive-roles.ts`/`assignRoles`/outbox `assign_role`）与门店树组同步器（`group-sync.ts`）；薄同步保留 provision（JIT 建户）/ disable（离职）/ 组对账（部门组补挂）；角色归属全量 manual（Casdoor UI 唯一写者，生产实测 0 auto 用户）；`wecom-sync-contacts` 的 `refresh_role_assignments` 调用已删（已部署）；`role_id` 过渡列停更——`get_user_perms` 本就走 casdoor-only（185 终版读 `role_codes`）不受影响；**push 按角色收件人已切 `roles.id→code→role_codes` 解析**；perm-shadow legacy 对比属过渡影子（W6 sunset 清） | 2026-08-18 |
+| 报表中心页面门禁统一为 gate（2026-08-18 方案 A） | `/reports*` 入口由 `gate:reports-center` 单一把关（middleware hasGatePerm），不再按路径查 `view:reports`/`view:reports-targets`；**两 view key 已从 catalog/claims 删除**（scan 排除 /reports 路由、VIEW_GROUPS 清空，消除「经营总览/目标达成分开配」困惑）；看板 `view-board:*`、数据 `范围|X` 分层不变；middleware 门禁拒绝落首页显示提示条 | 2026-08-18 |
 | data_permissions 全撤（D2） | 数据范围三分流后目标 sunset：W5 DB 级写关闭 → W6 删表（§6.2 迁移态）；只留例外表；回滚路径 = 例外表扩容，**不反向恢复四维表** | 2026-08-16 |
 | 品牌/品类独立 resource 化（D3） | 静态枚举（品牌/品类/字段）→ Casdoor resource，不并入 `view:*` 判定（§6.4 命名空间） | 2026-08-16 |
 | 授权组 view-group（D4） | 要（易用层）：catalog 内映射、Casdoor 只见组名 resource、成员禁通配 + 环引用检测（§6.5） | 2026-08-16 |
@@ -1108,11 +1133,18 @@ CREATE TABLE report_definitions (
 
 ### 10.5 已配置报表
 
+（report_definitions 实际 8 项，以 `database/migrations/` 为准：010 基础 3 项 + 058 配送/批发 2 项 + 108/109–111/157 商品/客户级 3 项）
+
 | report_type | 名称 | 目标表 | 状态 |
 |-------------|------|--------|------|
 | daily_sales | 每日门店销售汇总 | report_daily_sales | ✅ |
 | daily_category | 每日门店品类汇总 | report_daily_category | ✅ |
 | weekly_trend | 周销售趋势汇总 | report_weekly_trend | ✅ |
+| daily_delivery | 每日门店品类配送汇总 | report_daily_delivery | ✅（迁移 058） |
+| daily_wholesale | 每日门店品类批发汇总 | report_daily_wholesale | ✅（迁移 058） |
+| item_sales | 销售商品级汇总 | report_daily_item_sales | ✅（迁移 108，§10.9） |
+| item_outbound | 出库商品级汇总 | report_daily_item_outbound | ✅（迁移 108/110/111/157） |
+| wholesale_customer | 批发客户级汇总 | report_daily_wholesale_customer | ✅（迁移 108/109/110/111） |
 
 ### 10.6 新增报表示例
 
@@ -1238,6 +1270,8 @@ POST /compute {"report_type":"daily_supplier","date_from":"2026-07-02","date_to"
 
 ### 10.10 视图生成器（构建期，2026-07-31）
 
+> **⚠️ 退役计划（2026-08-15，spec 待合并）**：本节所述生成器进入退役流程——metric_registry 冻结新增，新指标一律直写 Cube schema（`docs/superpowers/specs/2026-08-15-semantic-query-middleware-design.md` §6 退役清单）。四个硬口径（目标范围 join / lateral_pick / FULL JOIN 合并 / closed 快照）逐步物化上移到 /compute 后，对应生成视图删除；清单清空即下线生成器与 database/generated。退役完成前本节铁律继续有效。
+
 spec：`docs/superpowers/specs/2026-07-31-semantic-layer-generator-wiring-design.md`。回归 07-22 初衷补建构建期生成器（**取代 07-29 的「文档型真相源」措辞**——metric_registry 从"文档型"升级为"构建期生成器输入"）。
 
 - **形态**：Node/TS 脚本 `services/semantic-generator/`，读 `metric_registry`+`metric_sources`+`dimensions`，产出静态视图 SQL 到 `database/generated/`（入 git，可 review 可回滚）。
@@ -1348,17 +1382,20 @@ spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.m
 
 | 项目 | 状态 | 备注 |
 |------|------|------|
-| DuckDB /compute 端点 | ✅ 已实现 | 标准报表计算 |
+| DuckDB /compute 端点 | ✅ 已实现 | 标准报表计算（8 项报表，§10.5） |
 | PostgreSQL 汇总表 | ✅ 已创建 | report_daily_sales 等 |
-| 采集后自动触发计算 | ⏳ 待实现 | transform → compute |
-| DuckDB /query 鉴权 | ✅ 已设计（§4.2） | 待实现：server.js 每请求连接 + AGENT_API_KEY |
-| OpenClaw 集成 | ✅ 已设计（§4.2） | 待实现：agent-query 网关 + skill/tool 配置 |
-| 列级脱敏（成本组） | ✅ 已设计（§4.2） | 待实现：视图 CASE + PG claim 视图 |
-| 跨引擎小表搬运 JOIN | ✅ 已验证（§4.2） | 待实现：网关编排（Appender 注入临时表） |
+| 采集后自动触发计算（C1） | ✅ 已实现 | `web/lib/jobs/collect/manifest.ts` triggerCompute，verified 后按 params.dates 调 /compute；个别采集器例外（先落明细后补汇总，见 manifest 注释） |
+| DuckDB /query 鉴权 | ✅ 已实现 | server.js 每请求连接 + AGENT_API_KEY（/transform /merge /compute /carry-dims 同鉴权） |
+| OpenClaw 集成 | ✅ 已实现 | agent-query 网关 + data-query-plugin（tool+skill）已上线（§4.2/§4.3） |
+| 列级脱敏（成本组） | ✅ 已实现 | DuckDB 视图 CASE + 生成视图模板统一注入（§10.10 权限过滤；旧 claim 视图已由迁移 155 下线） |
+| 跨引擎小表搬运 JOIN | ✅ 已实现（网关 PG 路径） | agent-query PG 路径：代签短时 JWT → execute_sql_rls 走 RLS |
+| carry 维表物化（C3） | ✅ 已实现 | /carry-dims（cron 04:33 兜底 + 变更回调），agent-query 查询侧读 dim parquet |
 | 美团数据源接入 | ⏳ 待讨论 | 架构待确认 |
 | 饿了么数据源接入 | ⏳ 待讨论 | 架构待确认 |
-| 监控告警体系 v1 | ✅ 已设计（§8.1） | 待实现：详见 `docs/superpowers/specs/2026-07-08-monitoring-system-design.md` |
-| 模块化+插件化重构 | ✅ 已设计（spec 2026-08-11） | A+B-lite，P0–P5 分阶段；架构评审通过（D1–D6），P0 先行（契约止血+单源+CI） |
+| 监控告警体系 v1 | 🔶 部分实现 | 已实现 4/8：token_expire/collect_fail/service_down/collect_stall；未实现：request_fail/data_freshness/data_integrity/contact_sync（§8.1 状态表） |
+| 监控待实现 4 项 evaluator | ⏳ 待排期 | §8.1；data_integrity 部分职能已由 QA 体系承担（§10.10 L4） |
+| 模块化+插件化重构 | 🔶 进行中 | A+B-lite，P0–P5；P1（jobs/collectors 目录化+注册表）已落地，P3（function _shared 共享打包）已落地 |
+| 语义层 Cube 全替代 | ⏳ spec 已确认待实施 | §九 2026-08-15；生成器退役清单见 §10.10 |
 
 ## 十二、架构变更流程
 

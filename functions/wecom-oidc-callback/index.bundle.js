@@ -87,9 +87,8 @@ var require_claims = __commonJS({
     }
     module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveScopeKeys: resolveScopeKeys2 };
     var FRIENDLY_TO_KEY = {
-      // 页面级报表视图（方案 C 保留的 2 个）+ 具名资源
-      "\u770B\u677F|\u7ECF\u8425\u603B\u89C8": "data-analysis:view:reports",
-      "\u770B\u677F|\u76EE\u6807\u8FBE\u6210": "data-analysis:view:reports-targets",
+      // 2026-08-18 方案 A：view:reports（经营总览）/view:reports-targets（目标达成）已删——
+      // 报表中心入口由 gate:reports-center 单一把关，不再映射这两个 view。
       "\u54C1\u724C|\u718A\u55B5\u9C9C\u751F": "data-analysis:brand:3120",
       "\u54C1\u724C|\u54C1\u54C1\u751C": "data-analysis:brand:64188",
       "\u54C1\u7C7B|\u6C34\u679C": "data-analysis:category:\u6C34\u679C",

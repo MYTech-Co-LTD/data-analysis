@@ -1,16 +1,16 @@
 // web/lib/jobs/thin-sync/manifest.ts
-// 薄同步 job（spec §4.5 / Task 12）：
+// 薄同步 job（spec §4.5 / Task 12）——2026-08-18 收缩：仅同步「人 + 组织架构」。
 //   ① drain outbox（先清积压再写新操作）
-//   ② 三动作：provisioning(JIT) / assign_role(auto) / disable(离职)
+//   ② 三动作：provisioning(JIT 建户) / disable(离职) / sync_groups(组对账)
+//   auto 角色写入（assign_role）已删除——角色归属全量 manual（Casdoor UI 单写者），薄同步不再写角色。
 //   失败一律入 outbox 计数（不丢弃）
-// spec: 动作分顺序——离职四 sink 最先；auto 角色写入先「对账告警+人工确认」两周再自动写；provisioning 先 JIT。
+// spec: 动作分顺序——离职四 sink 最先；provisioning 先 JIT。
 import type { JobManifest, JobResult } from '../../contracts';
 import { notifyWecom } from '../../notify';
 import { tryAcquireLock } from '../../scheduler-lock';
 import { POSTGREST_URL, INSFORGE_API_KEY } from '../env';
 import { runningTasks } from '../state';
-import { deriveRoleForUser } from '../../sync/derive-roles';
-import { provisionUser, assignRoles, disableUser, syncUserGroups, casdoorGroupsFromDepts } from '../../sync/casdoor-client';
+import { provisionUser, disableUser, syncUserGroups, casdoorGroupsFromDepts } from '../../sync/casdoor-client';
 import { enqueue, drain, type DrainResult } from '../../sync/outbox';
 
 const PG_H = (): Record<string, string> => ({
@@ -64,59 +64,6 @@ async function actionDisable(): Promise<{ processed: number; enqueued: number }>
     }
   }
   return { processed: inactive.length, enqueued };
-}
-
-// ---- auto 角色写入 ----
-// 对 casdoor_writer='auto' 的 active 用户，推导角色 → 写 Casdoor → 写镜像
-async function actionAssignRoles(): Promise<{ processed: number; changed: number; enqueued: number }> {
-  const autoUsers: Array<{
-    wecom_id: string; name: string | null;
-    department_ids: string[]; role_codes: string[];
-  }> = await fetch(
-    `${POSTGREST_URL}/org_users?select=wecom_id,name,department_ids,role_codes&is_active=eq.true&casdoor_writer=eq.auto`,
-    { headers: PG_H(), cache: 'no-store' },
-  ).then(r => r.json()).catch(() => []);
-
-  let changed = 0;
-  let enqueued = 0;
-
-  for (const user of autoUsers) {
-    const deptIds = Array.isArray(user.department_ids) ? user.department_ids : [];
-    const derivedCode = await deriveRoleForUser(deptIds);
-    if (!derivedCode) continue;
-
-    // 只在角色变化时写 Casdoor
-    const currentCodes = user.role_codes ?? [];
-
-    // Review 修复（M12）：当前镜像含推导码之外的附加角色 → 视为 Casdoor 侧手工配置，
-    // 跳过写入（assignRoles 会删除附加角色 = 橡皮擦），交给 drift 翻转 manual 保护。
-    const extras = currentCodes.filter((c) => c !== derivedCode);
-    if (extras.length > 0) continue;
-
-    if (currentCodes.length === 1 && currentCodes[0] === derivedCode) continue;
-
-    const casdoorResult = await assignRoles(user.wecom_id, [derivedCode]);
-    if (!casdoorResult.ok) {
-      // 写失败 → 入 outbox（B6：只在实际入队时计数；入队失败不标任何状态，下轮重算重试）
-      const q = await enqueue(user.wecom_id, 'assign_role', { role_codes: [derivedCode], name: user.name });
-      if (q.enqueued) enqueued++;
-      else console.error('[thin-sync] assign_role 失败且 outbox 入队失败，下轮重试:', user.wecom_id);
-      continue;
-    }
-
-    // 写成功 → 更新本地镜像
-    await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(user.wecom_id)}`, {
-      method: 'PATCH',
-      headers: PG_H(),
-      body: JSON.stringify({
-        role_codes: [derivedCode],
-        casdoor_synced_at: new Date().toISOString(),
-      }),
-    }).catch(() => {});
-    changed++;
-  }
-
-  return { processed: autoUsers.length, changed, enqueued };
 }
 
 // ---- 部门 id → 名称 映射（组对账/建户共用） ----
@@ -249,15 +196,7 @@ export const thinSyncManifest: JobManifest = {
         console.error('[thin-sync] disable action error:', (e as Error).message);
       }
 
-      // ③ auto 角色写入
-      let assignResult = { processed: 0, changed: 0, enqueued: 0 };
-      try {
-        assignResult = await actionAssignRoles();
-      } catch (e) {
-        console.error('[thin-sync] assign action error:', (e as Error).message);
-      }
-
-      // ④ provisioning JIT
+      // ③ provisioning JIT
       let provisionResult = { processed: 0, enqueued: 0 };
       try {
         provisionResult = await actionProvision();
@@ -265,7 +204,7 @@ export const thinSyncManifest: JobManifest = {
         console.error('[thin-sync] provision action error:', (e as Error).message);
       }
 
-      // ⑤ 组对账（2026-08-17 陈润补挂：provision 漏组自愈 + 存量空组补挂）
+      // ④ 组对账（2026-08-17 陈润补挂：provision 漏组自愈 + 存量空组补挂）
       let groupsResult = { processed: 0, changed: 0 };
       try {
         groupsResult = await actionSyncGroups();
@@ -274,11 +213,10 @@ export const thinSyncManifest: JobManifest = {
       }
 
       // 汇总
-      const totalEnqueued = disableResult.enqueued + assignResult.enqueued + provisionResult.enqueued;
+      const totalEnqueued = disableResult.enqueued + provisionResult.enqueued;
       const summary = [
         `drain=${drainResult.succeeded}/${drainResult.total}`,
         `disable=${disableResult.processed}(fail=${disableResult.enqueued})`,
-        `assign=${assignResult.processed}/changed=${assignResult.changed}(fail=${assignResult.enqueued})`,
         `provision=${provisionResult.processed}(fail=${provisionResult.enqueued})`,
         `groups=${groupsResult.changed}/${groupsResult.processed}`,
       ].join(' | ');
