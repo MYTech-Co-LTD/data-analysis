@@ -3,6 +3,9 @@
 // 每日 03:37（错开既有采集 8-23 每5min / 对账 02:00 / perm-shadow 03:30 / 门店树 03:17 窗口）：
 //   期望源（独立，防循环自证 H10）= dim_war_zone 考核门店 × org_users.position 店长/督导岗位清单
 //     —— 均为企微/lemeng dim 原始数据，不经 Group 树；org_departments 投影已被 spec 降级为被测对象，禁用。
+//   ⚠ 2026-08-18 口径脱钩：本 job「实际集」仍用 expandGroupsToBranches（组织架构推导）——门店数据范围
+//   已改为「范围|X 资源唯一真相」，本 job 仅剩组织卫生审计价值（企微树 vs 岗位覆盖漂移告警），
+//   missing/extra 不再代表授权一致性（授权以范围|X 资源为准），勿误读为授权证明。
 //   实际集 = org_users.groups（F9 投影列）经 T9 expandGroupsToBranches 三态展开。
 //   差异分级（classifyMembershipDiff）→ UPSERT group_reconcile_history（date PK）→ red>0 发企微 collect_fail 同款告警。
 // ⚠️ 数据现实约束（详见 report）：库内不存在独立于 Group 链的「精确人→门店」表（org_departments 被禁），

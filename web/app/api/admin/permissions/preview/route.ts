@@ -37,12 +37,17 @@ export async function GET(req: NextRequest) {
     const reach = (reachRes.data as { data?: string[] } | null)?.data;
     if (Array.isArray(reach)) {
       const resources = reach.filter((r): r is string => typeof r === 'string');
-      const scopeKeys = resources.filter((r) => r.startsWith('范围|')).map((r) => r.slice('范围|'.length));
+      // 登录侧 normalizeFriendlyPerm 同时接受两种形态（范围|X 前缀规则 / 已归一 data-analysis:branch:X 原样透传），
+      // preview 须同口径提取，否则 key 形态资源被漏 → 预览显示 deny 而登录放行（review I1）。
+      const scopeRes = resources.filter((r) => r.startsWith('范围|') || r.startsWith('data-analysis:branch:'));
+      const scopeKeys = scopeRes.map((r) =>
+        r.startsWith('范围|') ? r.slice('范围|'.length) : r.slice('data-analysis:branch:'.length));
       const expanded = scopeKeys.length > 0 ? await expandScopeResources(scopeKeys) : { branch_nums: [] as string[], ok: true };
       target = {
-        scopeResources: resources.filter((r) => r.startsWith('范围|')),
+        scopeResources: scopeRes,
         branch_nums: expanded.ok ? [...(expanded.branch_nums ?? [])] : [],
         expandError: expanded.ok ? null : (expanded.error ?? 'expand failed'),
+        // 品牌/品类为友好名形态（如 熊喵鲜生）；登录 data_scope.brands 是 code（3120，经 FRIENDLY_TO_KEY 归一）——展示用，注意两形对照。
         brands: resources.filter((r) => r.startsWith('品牌|')).map((r) => r.slice('品牌|'.length)),
         categories: resources.filter((r) => r.startsWith('品类|')).map((r) => r.slice('品类|'.length)),
         fields: { cost: resources.includes('字段|成本可见') },

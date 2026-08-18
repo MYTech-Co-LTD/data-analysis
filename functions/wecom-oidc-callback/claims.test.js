@@ -167,6 +167,7 @@ eq(normalizeFriendlyPerm('范围|*'), 'data-analysis:branch:*', '范围前缀归
 eq(normalizeFriendlyPerm('范围|3120-0006'), 'data-analysis:branch:3120-0006', '范围前缀归一：branch_number');
 eq(normalizeFriendlyPerm('范围|武汉光谷店'), 'data-analysis:branch:武汉光谷店', '范围前缀归一：门店中文名');
 eq(normalizeFriendlyPerm('品牌|熊喵鲜生'), 'data-analysis:brand:3120', '非范围资源仍走静态表');
+eq(normalizeFriendlyPerm('data-analysis:branch:中部一区'), 'data-analysis:branch:中部一区', '已归一 key 形态原样透传（不经 范围| 前缀也走新通道，preview/登录同口径）');
 eq(normalizeFriendlyPerm('看板|指标概览'), 'data-analysis:view-board:kpi', '非范围资源静态表不受影响');
 
 // 5b. resolveScopeKeys：包名 → 包内门店并集
