@@ -7,11 +7,10 @@
  * - 悬空部门告警：部门下无用户 → 告警但仍继续
  */
 
-import { type Scope, scopeSignature } from './scope-signature';
+import { scopeSignature } from './scope-signature';
+import { type Perms } from './push-variables';
 
-export interface Perms extends Scope {
-  // 继承 brands, branch_nums, categories, can_see_cost
-}
+export type { Perms };
 
 /**
  * 计算推送 scope

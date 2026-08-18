@@ -1,19 +1,15 @@
 /**
  * scope 签名模块
  *
- * 契约来源：spec §5.2a
+ * 契约来源：spec §5.2a + M6/spec-forge
  * - 四维 canonical JSON：brands, branch_nums, categories, can_see_cost
  * - LC_ALL=C 排序（字节序）
  * - '*' 保留（不展开）
  * - 签名用途：同一 scope 的收件人分到同组，渲染一次发多人
+ * - M6：读路径改 data_scope.* + fields.cost（Perms 新形状）；签名必须基于实际渲染 scope，
+ *   否则不同门店集用户签名碰撞 → 同组用首用户 scope 渲染全员（跨用户泄漏）
  */
-
-export interface Scope {
-  brands?: string[];
-  branch_nums?: string[];
-  categories?: string[];
-  can_see_cost?: boolean;
-}
+import type { Perms } from './push-variables';
 
 /**
  * 生成 scope 签名
@@ -24,12 +20,12 @@ export interface Scope {
  * 3. can_see_cost 布尔值直接参与
  * 4. 签名 = JSON.stringify({b, br, c, cost})
  */
-export function scopeSignature(scope: Scope): string {
+export function scopeSignature(scope: Perms): string {
   const canonical = {
-    b: scope.brands?.length ? [...scope.brands].sort() : undefined,
-    br: scope.branch_nums?.length ? [...scope.branch_nums].sort() : undefined,
-    c: scope.categories?.length ? [...scope.categories].sort() : undefined,
-    cost: scope.can_see_cost ?? undefined,
+    b: scope.data_scope?.brands?.length ? [...scope.data_scope.brands].sort() : undefined,
+    br: scope.data_scope?.branch_nums?.length ? [...scope.data_scope.branch_nums].sort() : undefined,
+    c: scope.data_scope?.categories?.length ? [...scope.data_scope.categories].sort() : undefined,
+    cost: scope.fields?.cost ?? undefined,
   };
 
   // 去掉 undefined 字段（JSON.stringify 会忽略）
@@ -39,6 +35,9 @@ export function scopeSignature(scope: Scope): string {
 /**
  * 比较两个 scope 是否等价
  */
-export function scopeEqual(a: Scope, b: Scope): boolean {
+export function scopeEqual(a: Perms, b: Perms): boolean {
   return scopeSignature(a) === scopeSignature(b);
 }
+
+// 兼容导出（旧 import 路径：engine.ts `Scope`）；指向 Perms 新形状
+export type Scope = Perms;

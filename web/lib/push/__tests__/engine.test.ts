@@ -13,37 +13,54 @@ import { describe, it, expect } from 'vitest';
 import { scopeSignature, scopeEqual, type Scope } from '../scope-signature';
 import { resolveRecipients, type Selector, type ResolverDeps } from '../selectors';
 import { groupRecipients, type Perms } from '../engine';
+import type { Perms as PushPerms } from '../push-variables';
 
-// ─── scope 签名 ───
+// Perms 新形状 fixture（M4/方案 A：data_scope + fields）
+const p = (over: Partial<PushPerms> = {}): Perms => ({
+  data_scope: { brands: [], categories: [], branch_nums: [] },
+  fields: { cost: false },
+  ...over,
+});
+
+// ─── scope 签名（M6：基于 data_scope/fields）───
 
 describe('scopeSignature', () => {
   it('同义不同序 → 同签名', () => {
-    const a: Scope = { brands: ['b2', 'b1'] };
-    const b: Scope = { brands: ['b1', 'b2'] };
+    const a = p({ data_scope: { brands: ['b2', 'b1'], categories: [], branch_nums: [] } });
+    const b = p({ data_scope: { brands: ['b1', 'b2'], categories: [], branch_nums: [] } });
     expect(scopeSignature(a)).toBe(scopeSignature(b));
   });
 
-  it('空数组 vs undefined 相同（归一化）', () => {
-    const a: Scope = { brands: [] };
-    const b: Scope = {};
+  it('空数组 vs 缺段相同（归一化）', () => {
+    const a = p();
+    const b = p({ data_scope: { brands: [], categories: [], branch_nums: [] } });
     expect(scopeSignature(a)).toBe(scopeSignature(b));
   });
 
-  it('can_see_cost 参与签名', () => {
-    const a: Scope = { can_see_cost: true };
-    const b: Scope = { can_see_cost: false };
+  it('fields.cost 参与签名（M6：不同 cost 权限不得同组）', () => {
+    const a = p({ fields: { cost: true } });
+    const b = p({ fields: { cost: false } });
+    expect(scopeSignature(a)).not.toBe(scopeSignature(b));
+  });
+
+  it('不同门店集 → 不同签名（M6：防签名碰撞跨用户泄漏）', () => {
+    const a = p({ data_scope: { brands: ['3120'], categories: [], branch_nums: ['3120-0001'] } });
+    const b = p({ data_scope: { brands: ['3120'], categories: [], branch_nums: ['3120-0002'] } });
+    expect(scopeSignature(a)).not.toBe(scopeSignature(b));
+  });
+
+  it("['*'] vs 388 明细 → 不同签名（M6：全权与明细各自成组）", () => {
+    const a = p({ data_scope: { brands: [], categories: [], branch_nums: ['*'] } });
+    const b = p({ data_scope: { brands: [], categories: [], branch_nums: Array.from({ length: 388 }, (_, i) => `3120-${String(i + 1).padStart(4, '0')}`) } });
     expect(scopeSignature(a)).not.toBe(scopeSignature(b));
   });
 
   it('四维完整签名', () => {
-    const scope: Scope = {
-      brands: ['3120'],
-      branch_nums: ['*'],
-      categories: ['水果', '标品'],
-      can_see_cost: false,
-    };
+    const scope = p({
+      data_scope: { brands: ['3120'], branch_nums: ['*'], categories: ['水果', '标品'] },
+      fields: { cost: false },
+    });
     const sig = scopeSignature(scope);
-    // 应该是有效 JSON
     expect(() => JSON.parse(sig)).not.toThrow();
     const parsed = JSON.parse(sig);
     expect(parsed.b).toEqual(['3120']);
@@ -53,8 +70,8 @@ describe('scopeSignature', () => {
   });
 
   it('scopeEqual 等价判断', () => {
-    const a: Scope = { brands: ['a', 'b'], categories: ['x'] };
-    const b: Scope = { brands: ['b', 'a'], categories: ['x'] };
+    const a = p({ data_scope: { brands: ['a', 'b'], categories: ['x'], branch_nums: [] } });
+    const b = p({ data_scope: { brands: ['b', 'a'], categories: ['x'], branch_nums: [] } });
     expect(scopeEqual(a, b)).toBe(true);
   });
 });
@@ -63,7 +80,7 @@ describe('scopeSignature', () => {
 
 describe('groupRecipients', () => {
   it('同 scope 分到同组', async () => {
-    const perms: Perms = { brands: ['3120'] };
+    const perms = p({ data_scope: { brands: ['3120'], categories: [], branch_nums: ['*'] } });
     const getPerms = async () => perms;
     const result = await groupRecipients(['u1', 'u2'], getPerms);
     expect(result.groups).toHaveLength(1);
@@ -80,7 +97,9 @@ describe('groupRecipients', () => {
 
   it('不同 scope 分到不同组', async () => {
     const getPerms = async (id: string) =>
-      id === 'u1' ? { brands: ['3120'] } : { brands: ['64188'] };
+      id === 'u1'
+        ? p({ data_scope: { brands: ['3120'], categories: [], branch_nums: ['*'] } })
+        : p({ data_scope: { brands: ['64188'], categories: [], branch_nums: ['*'] } });
     const result = await groupRecipients(['u1', 'u2'], getPerms);
     expect(result.groups).toHaveLength(2);
   });

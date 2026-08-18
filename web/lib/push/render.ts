@@ -29,26 +29,13 @@ export async function generateScopedJwt(perms: Perms): Promise<string> {
 
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
-  // Review 修复（M5）：scope 四维提为顶层 claim——114_pgrst_pre_request_flatten_claims
-  // 只把 request.jwt.claims 的顶层 key 扁平化为 request.jwt.claims.<key>，旧的嵌套
-  // payload.scope 不会被展开，RLS/成本脱敏读到 NULL → 门店维放行、can_see_cost 恒 false。
+  // M4/方案 A：代签 JWT 升级为新形状——内嵌 data_scope + fields + departments（与登录 claims 同形状）。
+  //   RLS（scope_match_v2）读 data_scope 段放行；旧顶层四维 key 摘除（185 双氧期已结束，无消费方）。
   const payload = {
     role: 'authenticated',
-    brands: perms.brands,
-    branch_nums: perms.branch_nums,
-    categories: perms.categories,
-    can_see_cost: perms.can_see_cost,
-    // Task 16 消费侧切（H7）：代签令牌带新形状 fields 段——视图层 can_cost_visible()
-    // （迁移 182 形状鉴别）以 fields.cost 为主读；顶层 can_see_cost 镜像双氧保留
-    // （旧消费端/审计，Task 20 sunset 一并删）。段恒存在：cost 缺 key=false 全掩方向。
-    fields: { cost: perms.can_see_cost === true },
-    scope: {
-      // 兼容保留（新消费端以顶层为准）
-      brands: perms.brands,
-      branch_nums: perms.branch_nums,
-      categories: perms.categories,
-      can_see_cost: perms.can_see_cost,
-    },
+    data_scope: perms.data_scope,
+    fields: perms.fields,
+    departments: perms.departments ?? [],
     iat: now,
     exp: now + 600, // 10 分钟
   };
@@ -93,8 +80,8 @@ export async function renderVariables(
     // 变量 scope 匹配检查
     if (!matchesScope(v, perms)) continue;
 
-    // 成本脱敏
-    if (isCostSensitive(v) && !perms.can_see_cost) {
+    // 成本脱敏（新形状：fields.cost）
+    if (isCostSensitive(v) && !perms.fields?.cost) {
       result[v.var_code] = '（无权限查看）';
       continue;
     }
@@ -121,11 +108,14 @@ export async function getVariableValueDefault(
 ): Promise<string | null> {
   // URL 型变量 → 生成代签链接
   if (code.endsWith('_url')) {
+    // S7/spec-forge：branch_nums 为空 → 该 URL 变量不渲染（防 brand-only 用户收空链接假成功——
+    //   JWT data_scope.branch_nums=[] → RLS deny → 报表空白）
+    if (!perms.data_scope?.branch_nums?.length) return null;
     const view = code.replace('_url', '');
     const params = new URLSearchParams();
-    if (perms.brands?.length) params.set('brand', perms.brands.join(','));
-    if (perms.branch_nums?.length) params.set('branch', perms.branch_nums.join(','));
-    if (perms.categories?.length) params.set('category', perms.categories.join(','));
+    if (perms.data_scope?.brands?.length) params.set('brand', perms.data_scope.brands.join(','));
+    if (perms.data_scope?.branch_nums?.length) params.set('branch', perms.data_scope.branch_nums.join(','));
+    if (perms.data_scope?.categories?.length) params.set('category', perms.data_scope.categories.join(','));
     params.set('jwt', jwt);
     return `/report/${view}?${params.toString()}`;
   }

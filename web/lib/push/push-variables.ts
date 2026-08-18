@@ -32,37 +32,46 @@ export function isCostSensitive(v: PushVariable): boolean {
 }
 
 /**
+ * 权限 scope（新形状：data_scope + fields，来自 get_user_perms 双形/登录 claims 同源）
+ */
+export interface Perms {
+  data_scope: { brands: string[]; categories: string[]; branch_nums: string[] };
+  fields: { cost: boolean };
+  departments?: string[];
+}
+
+/**
  * 变量 scope 匹配用户权限
  *
  * 规则：
  * - total 维 → 总是匹配
- * - brand 维 → 用户 brands 含变量 brand 或 brands='*'
- * - war_zone/region/branch 维 → 需 exact match 或 '*'
+ * - brand 维 → 用户 data_scope.brands 含变量 brand 或 brands='*'
+ * - branch 维 → 需 exact match 或 '*'（URL 渲染另要求 branch_nums 非空，S7）
  */
 export function matchesScope(
   v: PushVariable,
-  perms: { brands?: string[]; branch_nums?: string[]; categories?: string[] }
+  perms: Perms
 ): boolean {
   // total 维 → 总是匹配
   if (v.scope_dim === 'total') return true;
 
   // brand 维 → 用户 brands 含变量 brand 或 brands='*'
   if (v.scope_dim === 'brand') {
-    if (!perms.brands?.length) return false;
-    if (perms.brands.includes('*')) return true;
+    if (!perms.data_scope.brands?.length) return false;
+    if (perms.data_scope.brands.includes('*')) return true;
     // 从 extra_filter 取品牌限制
     const filterBrands = v.extra_filter?.system_book_code as string[] | undefined;
     if (!filterBrands?.length) return true; // 无品牌限制 → 全品牌可推
-    return filterBrands.some((b) => perms.brands!.includes(b));
+    return filterBrands.some((b) => perms.data_scope.brands!.includes(b));
   }
 
-  // 其他维 → 需 exact match 或 '*'
+  // branch 维 → 需 exact match 或 '*'
   if (v.scope_dim === 'branch') {
-    if (!perms.branch_nums?.length) return false;
-    if (perms.branch_nums.includes('*')) return true;
+    if (!perms.data_scope.branch_nums?.length) return false;
+    if (perms.data_scope.branch_nums.includes('*')) return true;
     const filterBranches = v.extra_filter?.branch_num as string[] | undefined;
     if (!filterBranches?.length) return true;
-    return filterBranches.some((b) => perms.branch_nums!.includes(b));
+    return filterBranches.some((b) => perms.data_scope.branch_nums!.includes(b));
   }
 
   // war_zone/region → 暂不实现细粒度，放行
