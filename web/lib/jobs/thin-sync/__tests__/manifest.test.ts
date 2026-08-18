@@ -10,11 +10,10 @@ const REAL_FETCH = global.fetch;
 process.env.POSTGREST_URL = 'http://postgrest-test:3000';
 process.env.INSFORGE_API_KEY = 'test-key';
 
-// mock casdoor-client（disableUser / provisionUser / assignRoles / syncUserGroups）
+// mock casdoor-client（disableUser / provisionUser / syncUserGroups）
 vi.mock('../../../sync/casdoor-client', () => ({
   disableUser: vi.fn(async () => ({ ok: true })),
   provisionUser: vi.fn(async () => ({ ok: true })),
-  assignRoles: vi.fn(async () => ({ ok: true })),
   syncUserGroups: vi.fn(async () => ({ ok: true, changed: false })),
   casdoorGroupsFromDepts: (names: string[]) => names.map((n) => `shanhai/${n}`),
 }));
@@ -22,11 +21,6 @@ vi.mock('../../../sync/casdoor-client', () => ({
 import { thinSyncManifest } from '../manifest';
 
 interface CallLog { method: string; url: string; body?: string }
-
-function lastMock() {
-  // thin-sync run 会先 drain outbox + 三动作——本测试只关注 disable 分支的调用
-  return (global.fetch as unknown as { mock?: { calls: Array<[string, RequestInit]> } }).mock?.calls ?? [];
-}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -93,7 +87,6 @@ describe('thin-sync provision — 带部门组建户（2026-08-17 陈润根因�
       const url = String(input);
       if (url.includes('sync_outbox')) return new Response('[]', { status: 200 });
       if (url.includes('casdoor_writer=neq.disabled')) return new Response('[]', { status: 200 });
-      if (url.includes('casdoor_writer=eq.auto')) return new Response('[]', { status: 200 });
       if (url.includes('casdoor_synced_at=is.null')) return new Response(JSON.stringify(provisionUsers), { status: 200 });
       if (url.includes('org_departments')) return new Response(JSON.stringify([{ id: '63', name: '运营' }]), { status: 200 });
       if (url.includes('org_users') && init?.method === 'PATCH') return new Response('[]', { status: 200 });
@@ -118,7 +111,6 @@ describe('thin-sync 组对账 actionSyncGroups — 存量空组补挂（2026-08-
       const url = String(input);
       if (url.includes('sync_outbox')) return new Response('[]', { status: 200 });
       if (url.includes('casdoor_writer=neq.disabled')) return new Response('[]', { status: 200 });
-      if (url.includes('casdoor_writer=eq.auto')) return new Response('[]', { status: 200 });
       if (url.includes('casdoor_synced_at=is.null')) return new Response('[]', { status: 200 });
       if (url.includes('org_departments')) return new Response(JSON.stringify([{ id: '63', name: '运营' }]), { status: 200 });
       if (url.includes('org_users') && init?.method === 'PATCH') return new Response('[]', { status: 200 });
@@ -137,7 +129,6 @@ describe('thin-sync 组对账 actionSyncGroups — 存量空组补挂（2026-08-
       const url = String(input);
       if (url.includes('sync_outbox')) return new Response('[]', { status: 200 });
       if (url.includes('casdoor_writer=neq.disabled')) return new Response('[]', { status: 200 });
-      if (url.includes('casdoor_writer=eq.auto')) return new Response('[]', { status: 200 });
       if (url.includes('casdoor_synced_at=is.null')) return new Response('[]', { status: 200 });
       if (url.includes('org_departments')) return new Response(JSON.stringify([{ id: '63', name: '运营' }]), { status: 200 });
       if (url.includes('org_users') && init?.method === 'PATCH') return new Response('[]', { status: 200 });

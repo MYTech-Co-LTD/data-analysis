@@ -571,7 +571,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 |---|---|---|---|
 | 人是谁 | Casdoor | 企微 provider / JIT / 薄同步建户 | 不变 |
 | 组织架构（部门/区域/门店组） | **Casdoor Group tree** | Casdoor UI + 组同步器（auto） | **★ 中心化：原「企微通讯录→org_departments」**；本地表降级只读投影 |
-| 职位（Role） | Casdoor | Casdoor UI（manual）+ 薄同步（auto） | 不变；闭环经 Group 挂 Role |
+| 职位（Role） | Casdoor | Casdoor UI（manual，唯一写者；薄同步 2026-08-18 起不再写角色） | 不变；闭环经 Group 挂 Role |
 | 能力点（功能资源） | Casdoor Permission + resource 表 | Casdoor UI / **catalog 同步 adapter**（§6.4） | **★ 新增 catalog 动态发现** |
 | 数据范围-静态枚举（品牌/品类/字段） | **Casdoor resource** | catalog 同步 adapter | **★ 原 `data_permissions` 各维内** |
 | 数据范围-动态门店 | **`范围|X` 资源**（permission.resources） | Casdoor UI 挂资源 | **★ 原 `data_permissions.branch_nums` 内；2026-08-18 废除 Group 归属推导** |
@@ -586,7 +586,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 > **核心原则——四层模型：帽子 × 座位 × 口径**：
 > ```
 > ① 身份层（不动）      Casdoor OIDC（企微 provider）→ wecom_id（JIT 建户）
-> ② 帽子层（改造）      Casdoor：人→角色（UI 人工 + 薄同步 auto，单写者原则）
+> ② 帽子层（改造）      Casdoor：人→角色（UI 人工，Casdoor 单写者；薄同步不写角色）
 >                       角色×功能资源：data-analysis:<模块>:<动作>（casbin Permission，§6.4）
 > ③ 座位层（W2 上收）   Casdoor Group tree 中心化（部门树 + 区域-门店树，组同步器，§7.1.2）
 >                       org_departments / org_users 降级只读投影（不再被写）
@@ -636,8 +636,6 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 
 **claims 契约扩展（W3，2026-08-16 IAM 标准化；与 U2 登录切换同一发布窗）**：claims 构建 function（`functions/wecom-oidc-callback`）在既有字段（sub/org/roles/permissions + role_code/visible_panels/default_landing/default_metric/departments，08-15 八字段全保留）之上**新增四段**——`groups`（用户挂组完整路径精确数组；Casdoor 原生 `useGroupPathInToken` 后 token 自带，或 get-account 读 `user.Groups`；「get-user-groups」路由不存在禁止调用）、`data_scope`（brands/categories/branch_nums，由 resource 判定 + **`范围|X` 资源展开派生**（2026-08-18 废除 groups 叶子展开/组织架构推导）；**段存在但空 = authorized ∅ = deny，不收敛 `["*"]`**）、`fields`（掩码开关，如 `{cost:true}`）、`catalog_v`（代码/部署版本戳，只做 key 级按需 fail-close，不做全局版本拒绝）。**顶层旧 key 双氧保留至 W6 不删**（072/114 扁平化下旧 key 变 NULL 会致既有 RLS 静默全放）；新 claims 顶层旧 key 值 = 全维非空镜像。`permissions` 值从四维维度 key 迁移为 `data-analysis:*` 资源串 + `push:` 裸 key（B2/H4）。例外门店**不折叠进 claims**（`temporary_grants` RT 实查，§6.5）。
 
-**三层模型强制（消费侧 fail-close，2026-08-18 用户裁定）**：授权模型铁律 = **资源挂权限 → 权限挂角色 → 角色挂人**，`permission.users` 直挂（及 `permission.groups` 挂载）**禁止产生作用**。claims 取数由此从 `GET /api/get-all-objects?userId=`（并集，含直挂，来源不可区分）改为**角色链取数**：`GET /api/get-permissions?owner=` 全量 → 只取 `permission.roles` 命中用户角色码（登录时 userinfo `roles` claim，已有）的 `resources` 并集。直挂权限（`roles=[]`）与 groups 挂载天然匹配不上即排除——**不管从 Casdoor UI / API / 脚本哪种来源写入，直挂一律不生效**。语义与现状对齐：拉取失败 → `null` → C2 503 fail-close；用户无角色 → 空集 → B1 空集 = deny（无角色即无授权）；`isEnabled` 不滤（get-all-objects 原语义）。`reachable` 输出形态不变，下游（normalizeFriendlyPerm / 门店范围展开 / buildClaims / RLS）零改动。配套存量清理（一次性写 Casdoor）：测试权限改挂 `test-role` 角色、清 `users`；`role-zone_manager` 清 ZhengXin 直挂。
-
 **WeCom provider 双模式**（Casdoor provider 级 `method` 是单值，故配两个 provider 都指向 App A）：
 - `wecom_silent`（Silent）：企微内静默（`snsapi_base`）。App A 登录凭证（`WECOM_CORP_ID` / `WECOM_AGENT_ID` / `WECOM_SECRET`）已挪入 Casdoor 此 provider，`functions/wecom-oauth` 的登录职责由 `functions/wecom-oidc-callback` 取代。
 - `wecom_scan`（Normal）：PC 外部扫码。
@@ -646,22 +644,21 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 >
 > 端到端企微登录验证待部署后进行（Casdoor WeCom provider 源码已实测 + postgres 部署已验证；公网 `sso` 域名 + 企微可信域名配置属部署后验证）。
 
-**薄同步链（2026-08-15 spec，U1 起；单写者原则，挂 §7.1.2 通讯录同步链）：**
+**薄同步链（2026-08-15 spec，U1 起；2026-08-18 收缩——仅同步「人 + 组织架构」，角色写入全删；单写者原则，挂 §7.1.2 通讯录同步链）：**
 
 ```
 企微回调（实时增量）+ 每日 03:17 全量（兜底）
-   → 推导（dept_role_mapping → 角色；共享模块单实现，refresh 与薄同步同调，禁双推导引擎）
-   → Casdoor-first 写三动作：provisioning（JIT 建户）/ auto 角色写入 / 离职 disable
-   → 写镜像 org_users.role_codes（casdoor_writer = auto|manual）
+   → Casdoor-first 写：provisioning（JIT 建户）/ 离职 disable / 组对账（部门组补挂）
+   → 写镜像 org_users.role_codes（仅登录/drift 回写；casdoor_writer 现全量 manual）
    → 写 Casdoor 失败 → sync_outbox（幂等键 wecom_id+action+day）→ 下次同步先清 outbox
 每日 drift 三向对账：
-   diff1（Casdoor−企微，manual 除外）= Casdoor 手工配置 → 回写镜像标 manual，永不反向覆盖
+   diff1（Casdoor−企微）= Casdoor 手工配置 → 回写镜像标 manual，永不反向覆盖
    diff2（企微−Casdoor）= 写失败 → outbox 重放，>48h 页级告警
    diff3（Casdoor−镜像）= 镜像滞后 → 回写，24h 未收敛告警（直接影响 run_push 分组正确性）
 ```
 
-- **单写者**：`org_users.casdoor_writer` 标记——auto = dept_role_mapping 推导写 Casdoor；manual = Casdoor UI 人工配置 → 薄同步写豁免（防手工配置橡皮擦）。既有本地角色写者（152 refresh cron / `/api/admin/permissions/users` PUT 的 role 字段）U1 起收编/冻结（同一 PR）。
-- **动作分顺序落地**：① 离职四 sink 最先（安全刚需，§7.1.2）；② auto 角色写入先「对账告警+人工确认」两周再自动写；③ provisioning 先 JIT 建户+人工配角色。
+- **单写者**：**角色归属全量 manual（Casdoor UI 人工配置，唯一写者）**——auto 角色写入（`dept_role_mapping` 推导、`derive-roles.ts`、`assignRoles`）已随 2026-08-18 收缩删除；`casdoor_writer` 现存值即 manual/disabled 两种（生产实测 45 个 active 用户全 manual）。既有本地角色写者（152 refresh cron / `/api/admin/permissions/users` PUT 的 role 字段）U1 起收编/冻结。
+- **动作分顺序落地**：① 离职四 sink 最先（安全刚需，§7.1.2）；② provisioning 先 JIT 建户（角色人工配，Casdoor UI）。
 - **输入源切换（U2，最高风险独占窗口）**：`PERMS_INPUT=casdoor|legacy` 配置开关（秒级回滚不发版）；shadow 对账门禁 = 预期差异白名单（drift manual 集派生，逐条人工确认）+ 非预期差异双清零；切换执行瞬间重跑增量 diff=0；回滚预案含 Casdoor→legacy 角色回放脚本。
 
 ### 6.2 数据权限合成与 PostgreSQL RLS 鉴权（2026-08-15 改写：subject_id=code + role_codes 持久投影 + 多角色 UNION）
@@ -715,7 +712,7 @@ PostgreSQL RLS 策略（执行点机制不变；W3 起新增策略分支，见�
 
 **功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1）。数据授权目标态 = **二分流**（静态枚举→resource / **门店→`范围|X` 资源**（2026-08-18 演进，废除 Group 挂组推导与例外体系，无例外通道）；`data_permissions` 双氧期保留、W6 sunset（§6.2）——casbin 是单次判定引擎、无 policy→SQL。**门店范围 resource 化 = `范围|X` 粗粒度键**（`范围|全店`/战区包名/单店编号/门店名）挂 permission.resources，登录经 `expandScopeResources`（读 maps + dim_branch）展开成门店集——范围键数量 O(授权组合数) 而非 O(门店数×组合)，不逐店建 policy（原「不 resource 化门店」顾虑据此不成立，08-16 spec §5.2 有演进标注）。
 
-- **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual）+ 薄同步 auto（§6.1 单写者）。
+- **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual，§6.1 单写者，薄同步不写角色）。
 - **checkFeaturePerm 单模块**：`web/lib/feature-perm.ts` 单函数收口所有功能门禁（禁散落 `userid === '...'` 硬编码）——P0a 读 claims + BREAKGLASS；U2 后读 claims + casbin 实查。切 casbin 是 1 处切换，非 N 处 hunt-and-replace。
 - **BREAKGLASS env**：`ADMIN_USERIDS` 常驻白名单 P0a 即收敛为 `BREAKGLASS_ADMINS` env（默认空；启用走兜底并写审计）——常驻白名单 = 永久 Casdoor 旁路，撤权不收口。
 - **高危实查（裁决-1 已裁：启用，随 U2 生效）**：admin / `push:broadcast` / 临时授权类服务端实查（5min 缓存 + fail-close + 24h stale 宽限+告警）——这是 `JWT_SECRET` 自签 admin 的真兜底（RT-7）；低危（菜单/只读）维持 7 天随自签 JWT。
@@ -834,12 +831,12 @@ functions/wecom-sync-contacts（兜底全量；JSON 调用，不受 body 限制�
 - **限**：依赖企微回调可达 + 企微「通讯录同步」功能已开启；回调漏的消息靠每日全量兜底（最长次日纠正）。`functions/wecom-contacts-webhook` 废弃（逻辑移至 web/api）。
 
 **🆕 Casdoor 薄同步三动作 + 离职四 sink（2026-08-15 spec，U1 起，详见 §6.1 薄同步链）：**
-- 同步链扩展为**薄同步**：在 upsert 本地表之外，按 `casdoor_writer`（auto|manual）单写者原则向 Casdoor 写三动作——① **provisioning**（JIT 建户，角色人工配，有需求再自动化）；② **auto 角色写入**（dept_role_mapping 推导；先「对账告警+人工确认」两周再自动写）；③ **离职 disable**（Casdoor 新登录即时拦截）。写 Casdoor 失败入 `sync_outbox`（幂等键 wecom_id+action+day）重放，>48h 页级告警；每日 drift 三向对账。
+- 同步链扩展为**薄同步（2026-08-18 收缩：仅同步人 + 组织架构）**：在 upsert 本地表之外向 Casdoor 写——① **provisioning**（JIT 建户，带部门组；角色人工配，Casdoor UI 唯一写者）；② **离职 disable**（Casdoor 新登录即时拦截）；③ **组对账**（`actionSyncGroups` 按企微部门补挂用户组）。**auto 角色写入（dept_role_mapping → assignRoles）已删除**（生产实测 0 auto 用户，角色归属全量 manual）。写 Casdoor 失败入 `sync_outbox`（幂等键 wecom_id+action+day）重放，>48h 页级告警；每日 drift 三向对账。
 - **离职四 sink（收权分层，诚实口径）**：① web API 面——middleware `is_active` 软校验 + `token_blacklist` 按 sub 拉黑（**即时**）；② 推送面——run_push 存在性守卫 + 订阅 owner 再校验（**即时**）+ **Novu subscriber delete**（消除残留投递，§7.4）；③ Casdoor 新登录 disable（**即时**）；④ 数据面（PostgREST/RLS）——旧 7 天 JWT 继续有效，**最长 7 天窗口（裁决-4 已裁：接受，与现状等价非新债）**；即时化真执行点为 pgrst_pre_request 扩展，留作未来选项。
 
-**🆕 组同步双轨：用户同步（原生）+ 组同步器（自写）（2026-08-16 IAM 标准化，W2 起，spec §5.3）：**
-- **用户同步走 Casdoor 原生 wecom syncer**（源码验证）；Casdoor 原生 `GetOriginalGroups/GetOriginalUserGroups` 返回空带 TODO（`object/syncer_wecom.go`）→ **组织/门店 Group 上收必须自写组同步器（唯一自写组件，范围仅此一处，不 fork）**。
-- **两通道显式分离（H2）**：① 部门树——企微 webhook / 03:17 全量 → upsert 部门组；② **门店树——由 diff(`dim_branch` vs `maps_branch_group` vs Group 树) 驱动，不挂企微 webhook**（门店在企微未必有部门，企微通知到不了新店/改名；改名 = 新名 upsert + 旧名摘挂/标 deprecated）。两通道命名空间分离防互串。
+**组同步（2026-08-16 IAM 标准化，W2 起，spec §5.3；2026-08-18 收缩）——仅部门树，门店组树已废弃：**
+- **用户同步走 Casdoor 原生 wecom syncer**（源码验证）；Casdoor 原生 `GetOriginalGroups/GetOriginalUserGroups` 返回空带 TODO（`object/syncer_wecom.go`）。
+- **部门树单通道（2026-08-17 用户裁定 + 2026-08-18 落地）**：组织架构严格按企微——企微无门店层部门，Casdoor 即不建门店组；门店范围不依赖组织架构（`范围|X` 资源唯一真相）。**门店树组同步器 `web/lib/sync/group-sync.ts` 已删除**（零引用死代码）；用户挂组由薄同步 `actionSyncGroups`（`syncUserGroups`）按 `department_ids` 补挂维护（只增不删，防橡皮擦）。
 - **建树先父后子（H1，硬约束）**：`ParentId` 存父 Name，父子链断裂（重命名/中断/先子后父）触发原生 `GetUserFullGroupPath` return error → **该组所有用户 JWT 签发失败、登录崩**——每日父链完整性校验 + 组树完整性指标（辅助页亮灯，fail 告警）。
 - **门店自省映射 `maps_branch_group`**（迁移 178）：`(branch_number, group_id) UNIQUE`——`dim_branch` 与 Casdoor Group 双向可查；登记新店 = dim_branch 建档 + 同步器建 Group + 映射行（3 处一致，对账盯）。**门店键一律用 `branch_number`**（复合键铁律，CLAUDE.md）。映射只校验「门店→组」存在；「谁该挂哪组」靠独立期望源「人→门店」成员级对账（期望源≠org_departments 自投影，防循环自证）。
 - **组类型三态（H13）**：门店叶子组 → 直映 branch_number；区域组 → 子孙门店叶子并集；部门/职能组 → 不参与 branch 展开。空集 = 空 scope 非 NULL（消费侧可区分）；未知组类型 → fail-close + 告警。
@@ -1029,6 +1026,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c "<SQL>"
 | catalog 动态发现机制（原则确认） | catalog 自动发现（代码派生）+ 部署钩子 + cron 对账 + 校验器（认 catalog∪`*`，未知 key 拒绝）双向通道（§6.4） | 2026-08-16 |
 | 门店上收 Group tree（D1） | 每门店一组、人挂组；组织架构中心化 = Casdoor Group tree，本地 org 表降级只读投影（§6.0/§7.1.2 组同步器） | 2026-08-16 |
 | 门店范围废除组织架构推导（2026-08-18） | 范围唯一真相 = `范围\|X` 资源（permission.resources，直接挂现有 permission）；无范围资源 = 空集 deny（B1 fail-close）；删 `expandGroupsToBranches`/`resolveGroupBranches`；组织目录（Group tree/组同步器/reconcile-groups 审计）保留仅目录用途 | 2026-08-18 |
+| 薄同步收缩为仅同步人+组织架构（2026-08-18） | 删 auto 角色写入链路（`derive-roles.ts`/`assignRoles`/outbox `assign_role`）与门店树组同步器（`group-sync.ts`）；薄同步保留 provision（JIT 建户）/ disable（离职）/ 组对账（部门组补挂）；角色归属全量 manual（Casdoor UI 唯一写者，生产实测 0 auto 用户）；`wecom-sync-contacts` 的 `refresh_role_assignments` 调用已删（已部署）；`role_id` 过渡列停更——`get_user_perms` 本就走 casdoor-only（185 终版读 `role_codes`）不受影响；**push 按角色收件人已切 `roles.id→code→role_codes` 解析**；perm-shadow legacy 对比属过渡影子（W6 sunset 清） | 2026-08-18 |
 | data_permissions 全撤（D2） | 数据范围三分流后目标 sunset：W5 DB 级写关闭 → W6 删表（§6.2 迁移态）；只留例外表；回滚路径 = 例外表扩容，**不反向恢复四维表** | 2026-08-16 |
 | 品牌/品类独立 resource 化（D3） | 静态枚举（品牌/品类/字段）→ Casdoor resource，不并入 `view:*` 判定（§6.4 命名空间） | 2026-08-16 |
 | 授权组 view-group（D4） | 要（易用层）：catalog 内映射、Casdoor 只见组名 resource、成员禁通配 + 环引用检测（§6.5） | 2026-08-16 |

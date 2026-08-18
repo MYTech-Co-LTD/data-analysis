@@ -6,7 +6,6 @@
 import { POSTGREST_URL } from '../jobs/env';
 import {
   provisionUser,
-  assignRoles,
   disableUser,
   type CasdoorUser,
 } from './casdoor-client';
@@ -20,7 +19,7 @@ const PG_H = (): Record<string, string> => {
 export interface OutboxRow {
   id: number;
   wecom_id: string;
-  action: 'provision' | 'assign_role' | 'disable' | 'sync_mirror';
+  action: 'provision' | 'disable' | 'sync_mirror';
   payload: Record<string, unknown>;
   day: string;
   attempts: number;
@@ -163,12 +162,6 @@ async function executeOutboxRow(row: OutboxRow): Promise<{ ok: boolean; error?: 
         groups: payload.groups as string[] | undefined,
       };
       const r = await provisionUser(user);
-      return r.ok ? { ok: true } : { ok: false, error: r.error };
-    }
-
-    case 'assign_role': {
-      const roleCodes = payload.role_codes as string[] ?? [];
-      const r = await assignRoles(wecomId, roleCodes);
       return r.ok ? { ok: true } : { ok: false, error: r.error };
     }
 
