@@ -248,3 +248,21 @@ const permsNum = [
 eq(matchRolePermissions(permsNum, [12345]), ['push:broadcast'], '数字角色码 String 归一命中');
 
 console.log('matchRolePermissions assertions passed');
+
+// ============ extractScopeResources（迁移 199 scope_resources 投影，2026-08-18）============
+// 登录写穿 org_users.scope_resources 的取数源：只抽「范围相关」资源键（branch/brand/category/field），
+// 能力键（view/view-board/gate/admin/push:*）排除；通俗名（范围|前缀 + 静态表）归一后匹配。
+const { extractScopeResources } = require('./claims.js');
+
+eq(extractScopeResources(['data-analysis:view:reports', 'push:broadcast', 'data-analysis:branch:全店', 'data-analysis:brand:3120']),
+  ['data-analysis:branch:全店', 'data-analysis:brand:3120'], '只抽范围相关键（view/push 能力键排除）');
+eq(extractScopeResources(['范围|全店', '范围|中部一区', '品牌|熊喵鲜生', '品类|水果', '字段|成本可见', '看板|经营总览', 'push:broadcast']),
+  ['data-analysis:branch:全店', 'data-analysis:branch:中部一区', 'data-analysis:brand:3120', 'data-analysis:category:水果', 'data-analysis:field:cost'],
+  '通俗名（范围|前缀 + 静态表）→ 归一为范围键；能力键排除');
+eq(extractScopeResources(['data-analysis:branch:全店', 'data-analysis:branch:全店', 'data-analysis:brand:3120']),
+  ['data-analysis:branch:全店', 'data-analysis:brand:3120'], '跨资源重复 → 去重');
+eq(extractScopeResources([]), [], '空数组入参 → 空数组（无范围资源 = 空集 deny 载体）');
+eq(extractScopeResources(undefined), [], 'undefined 入参防御 → 空数组');
+eq(extractScopeResources(['data-analysis:view:reports', '*']), [], '裸通配 * 与能力键不算范围键 → 空数组');
+
+console.log('extractScopeResources assertions passed');

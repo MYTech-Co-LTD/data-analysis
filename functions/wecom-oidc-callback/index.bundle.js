@@ -133,7 +133,7 @@ var require_claims = __commonJS({
       }
       return FRIENDLY_TO_KEY[value] ?? value;
     }
-    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE, matchRolePermissions: matchRolePermissions2 };
+    module2.exports = { buildClaims: buildClaims2, collapseFullStore: collapseFullStore2, resolveScopeKeys: resolveScopeKeys2, FRIENDLY_TO_KEY, normalizeFriendlyPerm: normalizeFriendlyPerm2, BOARD_VIEW_COVERAGE, matchRolePermissions: matchRolePermissions2, extractScopeResources: extractScopeResources2 };
     function resolveScopeKeys2(scopeKeys, maps, dimBranches) {
       const results = /* @__PURE__ */ new Set();
       const mapsByGroup = /* @__PURE__ */ new Map();
@@ -191,13 +191,23 @@ var require_claims = __commonJS({
       }
       return [...out];
     }
+    function extractScopeResources2(reachable) {
+      const out = /* @__PURE__ */ new Set();
+      for (const k of reachable ?? []) {
+        if (typeof k !== "string" || k.length === 0) continue;
+        const norm = normalizeFriendlyPerm2(k);
+        if (typeof norm !== "string" || norm.length === 0) continue;
+        if (norm.startsWith("data-analysis:branch:") || norm.startsWith("data-analysis:brand:") || norm.startsWith("data-analysis:category:") || norm.startsWith("data-analysis:field:")) out.add(norm);
+      }
+      return [...out];
+    }
   }
 });
 
 // functions/wecom-oidc-callback/index.js
 var { signJwt } = require_jwt();
 var { corsHeaders, json } = require_cors();
-var { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions } = require_claims();
+var { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions, extractScopeResources } = require_claims();
 function decodeJwtPayload(token) {
   try {
     const part = String(token).split(".")[1];
@@ -420,6 +430,13 @@ module.exports = async function(req) {
       }).eq("wecom_id", wecomUserId);
     } catch (e) {
       console.error("groups projection mirror write failed", e);
+    }
+    try {
+      await client.database.from("org_users").update({
+        scope_resources: extractScopeResources(reachable)
+      }).eq("wecom_id", wecomUserId);
+    } catch (e) {
+      console.error("scope_resources projection mirror write failed", e);
     }
     const now = Math.floor(Date.now() / 1e3);
     const jwt = await signJwt({

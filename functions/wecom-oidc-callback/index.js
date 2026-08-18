@@ -18,13 +18,15 @@
 //   三段任一失败 → buildClaims 返回 null → 503 整体失败（C2 fail-close，禁半截 claims）。
 //   claims 新增 groups/data_scope{brands,categories,branch_nums}/fields{cost}/catalog_v；
 //   permissions 迁移为资源串（B2）；顶层旧四维 key = 全维非空镜像（B6/M1，只写非空值）。
+//   写穿镜像两路：groups 投影（F9，迁移 178）+ scope_resources 投影（迁移 199，方案 A——范围相关
+//   资源键，供无会话链路 get_user_perms 解析 data_scope），均 best-effort 不阻断登录。
 
 // 共享打包（P3 铺开）：b64url/signJwt 与 corsHeaders/json 提取到 ../_shared（jwt.ts / cors.ts）。
 // 源码直接 require 共享模块，部署/校验时由 esbuild --bundle --format=cjs 打进单文件
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { corsHeaders, json } = require("../_shared/cors");
-const { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions } = require("./claims");
+const { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm, matchRolePermissions, extractScopeResources } = require("./claims");
 
 // JWT payload 解码（不验签——token 已由 Casdoor 签发且经 client_secret 换取，此处只读 claims；
 // access_token 非 JWT 形态时返回 null，调用方按 C2 处理）。
@@ -310,6 +312,17 @@ module.exports = async function (req) {
         groups: oidcGroups,
       }).eq("wecom_id", wecomUserId);
     } catch (e) { console.error("groups projection mirror write failed", e); }
+
+    // 5b'. 写穿 org_users.scope_resources 投影（迁移 199，方案 A）：角色链可达的「范围相关」资源键
+    //     （归一化形态 data-analysis:branch:X / brand:X / category:X / field:X），无会话链路
+    //     （run_push/agent-query/preview）经 get_user_perms 解析 data_scope 的唯一输入。
+    //     best-effort（失败记日志不阻断登录——漂移由对账收口，与 role_codes/groups 镜像同款语义）。
+    //     reachable 为 null 时登录已在 buildClaims C2 判 503，走不到这里；无范围资源 → 写 []（空集=deny）。
+    try {
+      await client.database.from("org_users").update({
+        scope_resources: extractScopeResources(reachable),
+      }).eq("wecom_id", wecomUserId);
+    } catch (e) { console.error("scope_resources projection mirror write failed", e); }
 
     // 5c. 签 PostgREST JWT：payload = buildClaims 产物（permissions=资源串 B2；groups/data_scope/fields/
     //     catalog_v 新四段；顶层旧四维 key 镜像已摘——W6/Task 20，双氧期结束）+ 注册项（sub/role/iss/iat/exp）。
