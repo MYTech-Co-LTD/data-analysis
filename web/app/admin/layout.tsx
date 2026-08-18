@@ -62,6 +62,7 @@ export default async function AdminLayout({
             </div>
             <div className="pt-4 border-t">
               <NavItem href="/admin/capabilities" icon={<ListTree size={16} />}>能力目录</NavItem>
+              <NavItem href="/admin/scope" icon={<ListTree size={16} />}>数据范围总览</NavItem>
               <NavItem href="/admin/permissions" icon={<ShieldCheck size={16} />}>权限管理</NavItem>
               <a href="https://sso.shanhaiyiguo.com/login/shanhai" target="_blank" rel="noreferrer"
                  className="flex items-center gap-2 px-3 py-2 rounded text-sm text-slate-600 hover:bg-slate-100">
