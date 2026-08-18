@@ -127,7 +127,7 @@ const friendly = {
   '品类|耗材': 'data-analysis:category:耗材',
   '字段|成本可见': 'data-analysis:field:cost',
   '门禁|管理台': 'data-analysis:admin',
-  '看板|报表看板全组': 'data-analysis:view-group:reports-all',
+  '门禁|报表中心': 'data-analysis:gate:reports-center',
   // 看板层 7（BOARD_CAPABILITIES）
   '看板|指标概览': 'data-analysis:view-board:kpi',
   '看板|品牌×指标': 'data-analysis:view-board:brand',
@@ -186,14 +186,14 @@ const idemCtx = {
 const ic = buildClaims(idemCtx);
 eq(ic.permissions.filter((k) => k === 'data-analysis:view:report_brand_metric_gen').length, 1, '覆盖注入幂等：同 view key 不重复');
 
-// 4c. 组通俗名「报表看板全组」→ 组 key 归一（claims 不透传组展开——组 key 保留，展开在 web 侧 buildPermPool）
+// 4c. 门禁通俗名「报表中心」→ 组 key 归一（2026-08-18 门禁拆分：旧「报表看板全组」退役进 DEPRECATED）
 const groupCtx = {
   ...okCtx,
-  reachable: ['看板|报表看板全组', 'push:broadcast'],
+  reachable: ['门禁|报表中心', 'push:broadcast'],
 };
 const gc = buildClaims(groupCtx);
-eq(gc.permissions.includes('data-analysis:view-group:reports-all'), true, '组通俗名归一回组 key 进 permissions');
-eq(gc.permissions.includes('看板|报表看板全组'), false, '组通俗名本身不进 permissions');
+eq(gc.permissions.includes('data-analysis:gate:reports-center'), true, '门禁通俗名归一回 gate key 进 permissions');
+eq(gc.permissions.includes('门禁|报表中心'), false, '门禁通俗名本身不进 permissions');
 eq(gc.permissions.includes('data-analysis:view:reports'), false, 'claims 不展开 view-group（web 侧 buildPermPool 展开）');
 
 // 4d. 覆盖镜像与单真相同步：BOARD_VIEW_COVERAGE 恰 6 个看板有覆盖（kpi 无）

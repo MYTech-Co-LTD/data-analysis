@@ -7,12 +7,12 @@ import { expandViewGroups, validateViewGroupMembers } from '../view-groups';
 describe('view-group 展开（spec §5.5，S1/M1）', () => {
   it('组键展开为成员 view:* 键；非组键原样保留', () => {
     const out = expandViewGroups([
-      'data-analysis:view-group:reports-all', 'data-analysis:admin',
+      'data-analysis:gate:reports-center', 'data-analysis:admin',
     ]);
     expect(out).toContain('data-analysis:view:reports');
     expect(out).toContain('data-analysis:view:reports-targets');  // 方案 C：成员收敛为保留页面视图
     expect(out).toContain('data-analysis:admin');
-    expect(out).not.toContain('data-analysis:view-group:reports-all');   // 组键被展开消费
+    expect(out).not.toContain('data-analysis:gate:reports-center');   // 组键被展开消费
   });
 
   it('嵌套组递归展开（A 组含 B 组 → B 的成员也出现）', async () => {
@@ -47,7 +47,7 @@ describe('view-group 展开（spec §5.5，S1/M1）', () => {
 
   it('转正接线：resolveViewKey 对组持有者放行成员视图', async () => {
     const { resolveViewKey } = await import('../feature-perm');
-    const r = resolveViewKey(['data-analysis:view-group:reports-all'], 'reports');
+    const r = resolveViewKey(['data-analysis:gate:reports-center'], 'reports');
     expect(r.ok).toBe(true);
   });
 });

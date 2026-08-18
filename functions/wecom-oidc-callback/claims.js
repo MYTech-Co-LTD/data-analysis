@@ -78,7 +78,7 @@ const FRIENDLY_TO_KEY = {
   '品类|耗材': 'data-analysis:category:耗材',
   '字段|成本可见': 'data-analysis:field:cost',
   '门禁|管理台': 'data-analysis:admin',
-  '看板|报表看板全组': 'data-analysis:view-group:reports-all',
+  '门禁|报表中心': 'data-analysis:gate:reports-center',   // 2026-08-18 门禁拆分：仅页面门禁；看板能力单独配置
   // 看板层 7（BOARD_CAPABILITIES）
   '看板|指标概览': 'data-analysis:view-board:kpi',
   '看板|品牌×指标': 'data-analysis:view-board:brand',

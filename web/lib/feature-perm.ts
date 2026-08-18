@@ -153,9 +153,9 @@ export function hasBoardPerm(perms: readonly string[] | undefined, boardId: stri
   const pool = buildPermPool(perms);
   if (pool.has(key)) return true;
   if (pool.has('data-analysis:view-board:*')) return true;              // 命名空间通配
-  // 全局 '*' 不放行（2026-08-18 去特权，见 resolveViewKey 注释：Casdoor 空配置默认 '*' 风险）
-  if (!namespaceConfigured(pool, 'data-analysis:view-board:')) return true; // 未配置任何看板能力 → 全开
-  return false;                                                         // 已配置化但此看板不在 → 收权
+  // 2026-08-18 门禁拆分 fail-close（用户裁决 A，系统未上线）：未配置任何看板能力 = 不可见。
+  // 「未配置=全开」兜底废除——看板能力点是唯一开关；页面进入由 门禁|报表中心 单独裁决。
+  return false;
 }
 
 /** KPI 卡片级能力：用户能否看到某个 KPI 指标卡（code = metric_code 或派生比率卡 key，如 'sale'/'outbound_margin'） */
@@ -166,7 +166,6 @@ export function hasKpiPerm(perms: readonly string[] | undefined, code: string): 
   const pool = buildPermPool(perms);
   if (pool.has(key)) return true;
   if (pool.has('data-analysis:view-kpi:*')) return true;                // 命名空间通配
-  // 全局 '*' 不放行（2026-08-18 去特权，同 hasBoardPerm）
-  if (!namespaceConfigured(pool, 'data-analysis:view-kpi:')) return true; // 未配置任何 KPI 能力 → 全开
-  return false;                                                         // 已配置化但此卡不在 → 收权
+  // 2026-08-18 门禁拆分 fail-close（同 hasBoardPerm）：未配置 = 不可见
+  return false;
 }

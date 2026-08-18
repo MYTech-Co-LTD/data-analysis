@@ -38,21 +38,22 @@ describe('hasBoardPerm / hasKpiPerm（看板/KPI 卡片级能力）', () => {
     expect(hasBoardPerm(['data-analysis:view-board:*'], 'region')).toBe(true);
     expect(hasKpiPerm(['data-analysis:view-kpi:*'], 'outbound_margin')).toBe(true);
   });
-  it('全局 * 不再放行（去特权：Casdoor 空配置默认 *，防提权；2026-08-18）', () => {
-    // 纯 '*'：该命名空间未配置化 → 仍走 fail-open 全开（与旧 token 同语义，非 '*' 特权）
-    expect(hasBoardPerm(['*'], 'kpi')).toBe(true);
-    // '*' 与具名配置并存 → 不扩展范围（未配的看板仍被收权）★防提权关键
+  it('全局 * 不放行；未配置 = 不可见（2026-08-18 门禁拆分 fail-close，用户裁决 A：系统未上线）', () => {
+    // 纯 '*'：不再作为看板放行依据（防 Casdoor 空配置默认 '*' 提权）
+    expect(hasBoardPerm(['*'], 'kpi')).toBe(false);
+    expect(hasKpiPerm(['*'], 'sale')).toBe(false);
+    // 配置了具名看板 → 只放行具名的（'*' 不扩展范围）
+    expect(hasBoardPerm(['*', 'data-analysis:view-board:kpi'], 'kpi')).toBe(true);
     expect(hasBoardPerm(['*', 'data-analysis:view-board:kpi'], 'region')).toBe(false);
     expect(hasKpiPerm(['*', 'data-analysis:view-kpi:sale'], 'delivery')).toBe(false);
   });
-  it('未配置任何该命名空间能力（旧 token/无登录）→ 默认全开（fail-open，避免上线即收权）', () => {
-    expect(hasBoardPerm(undefined, 'kpi')).toBe(true);
-    expect(hasBoardPerm([], 'kpi')).toBe(true);
-    // 旧 token 有 20 个 view/field 等权限但不含 view-board → 全开（不因旧 token 误伤）
-    expect(hasBoardPerm(['data-analysis:view:reports', 'data-analysis:field:cost'], 'region')).toBe(true);
-    expect(hasKpiPerm(['data-analysis:view:reports'], 'sale')).toBe(true);
+  it('未配置任何看板/KPI 能力 → 全部不可见（fail-close；页面进入由 门禁|报表中心 单独裁决）', () => {
+    expect(hasBoardPerm(undefined, 'kpi')).toBe(true);   // perms 缺省（未登录渲染兜底）保留全开
+    expect(hasBoardPerm([], 'kpi')).toBe(false);          // 已登录空配置 = 不可见
+    expect(hasBoardPerm(['data-analysis:view:reports', 'data-analysis:field:cost'], 'region')).toBe(false);
+    expect(hasKpiPerm(['data-analysis:view:reports'], 'sale')).toBe(false);
     // view:* 不等于 view-board:*（命名空间隔离）
-    expect(hasBoardPerm(['data-analysis:view:kpi'], 'kpi')).toBe(true); // 但未配置 view-board → 仍全开
+    expect(hasBoardPerm(['data-analysis:view:kpi'], 'kpi')).toBe(false);
   });
   it('已配置部分能力 → 只裁剪到配置集（收权生效）', () => {
     const perms = ['data-analysis:view-board:kpi', 'data-analysis:view-board:region']; // 只配 2 看板
@@ -102,11 +103,11 @@ describe('buildPermPool 全量通俗名归一 + 覆盖视图注入（方案 C �
     expect([...pool].filter((k) => k === 'data-analysis:view:report_brand_metric_gen').length).toBe(1);
   });
 
-  it('组通俗名「报表看板全组」→ 反查组 key → 展开成员', () => {
-    const pool = buildPermPool(['看板|报表看板全组']);
+  it('门禁通俗名「报表中心」→ 反查组 key → 展开成员（2026-08-18 门禁拆分：仅页面门禁）', () => {
+    const pool = buildPermPool(['门禁|报表中心']);
     expect(pool.has('data-analysis:view:reports')).toBe(true);
     expect(pool.has('data-analysis:view:reports-targets')).toBe(true);
-    expect(pool.has('data-analysis:view-group:reports-all')).toBe(false); // 组 key 被展开消费
+    expect(pool.has('data-analysis:gate:reports-center')).toBe(false); // 组 key 被展开消费
   });
 
   it('看板覆盖注入对 hasBoardPerm 语义闭环：配看板即能访问对应报表视图', () => {

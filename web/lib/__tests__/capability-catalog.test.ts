@@ -9,7 +9,7 @@ describe('capability-catalog 单真相', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
   it('全部 key 符合命名空间（data-analysis:view|view-board|view-kpi|view-group|field|brand|category|admin）', () => {
-    const ns = /^data-analysis:(view|view-board|view-kpi|view-group|field|brand|category|admin):?[A-Za-z0-9_一-龥-]*$/;
+    const ns = /^data-analysis:(view|view-board|view-kpi|view-group|gate|field|brand|category|admin):?[A-Za-z0-9_一-龥-]*$/;
     for (const e of capabilityCatalog) expect(e.key, e.key).toMatch(ns);
   });
   it('DEPRECATED 与 CATALOG 不相交（废弃即不在册）', () => {

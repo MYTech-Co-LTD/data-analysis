@@ -97,7 +97,8 @@ var require_claims = __commonJS({
       "\u54C1\u7C7B|\u8017\u6750": "data-analysis:category:\u8017\u6750",
       "\u5B57\u6BB5|\u6210\u672C\u53EF\u89C1": "data-analysis:field:cost",
       "\u95E8\u7981|\u7BA1\u7406\u53F0": "data-analysis:admin",
-      "\u770B\u677F|\u62A5\u8868\u770B\u677F\u5168\u7EC4": "data-analysis:view-group:reports-all",
+      "\u95E8\u7981|\u62A5\u8868\u4E2D\u5FC3": "data-analysis:gate:reports-center",
+      // 2026-08-18 门禁拆分：仅页面门禁；看板能力单独配置
       // 看板层 7（BOARD_CAPABILITIES）
       "\u770B\u677F|\u6307\u6807\u6982\u89C8": "data-analysis:view-board:kpi",
       "\u770B\u677F|\u54C1\u724C\xD7\u6307\u6807": "data-analysis:view-board:brand",

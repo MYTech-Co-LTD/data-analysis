@@ -28,7 +28,7 @@ import { deprecatedKeysFromCatalog } from './scan-capabilities.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 // catalog key 命名空间（与 Task1 命名空间测试同源）：view / view-group / field / brand / category / admin
-const KEY_NS_RE = /^data-analysis:(view|view-group|field|brand|category|admin)(:|$)/;
+const KEY_NS_RE = /^data-analysis:(view|view-group|gate|view-board|view-kpi|field|brand|category|admin)(:|$)/;
 const shortWild = (w) => w.replace(/^data-analysis:/, '');   // holder 展示短格式：view:*（测试基线钉死）
 const byKey = (a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 

@@ -26,7 +26,8 @@ const OVERRIDES: Partial<Record<string, Partial<CatalogEntry>>> = {
 const MANUAL: CatalogEntry[] = [
   { key: 'data-analysis:admin', group: '门禁', label: '管理台', source: 'manual' },
   // 授权组名自身也是 resource（spec §5.5：Casdoor 只见组名 resource 勾选）——scan 覆盖不到，入 manual
-  { key: 'data-analysis:view-group:reports-all', group: '看板', label: '报表看板全组', source: 'manual' },
+  // 2026-08-18 门禁拆分（用户裁决 A）：报表中心仅门禁（页面级），看板/KPI 卡能力单独配置
+  { key: 'data-analysis:gate:reports-center', group: '门禁', label: '报表中心', source: 'manual' },
   { key: 'data-analysis:field:cost', group: '字段', label: '成本可见', sensitive: true, source: 'manual' },
   { key: 'data-analysis:brand:3120', group: '品牌', label: '熊喵鲜生', source: 'manual' },
   { key: 'data-analysis:brand:64188', group: '品牌', label: '品品甜', source: 'manual' },
@@ -48,6 +49,8 @@ const MANUAL: CatalogEntry[] = [
 //   view:mobile 由 scan 从路由自动发现 → 废弃清单过滤；
 //   view:reports-items / view:wholesale-customers 已从 OVERRIDES 摘除（不再保护）→ 废弃清单过滤。
 const DEPRECATED: readonly string[] = [
+  // 2026-08-18 门禁拆分退役：旧组名（展示名「看板|报表看板全组」）→ 由 gate:reports-center 替代
+  'data-analysis:view-group:reports-all',
   // 退役：报表视图 → 由看板能力覆盖（view-board:<id>）
   'data-analysis:view:report_brand_metric_gen',
   'data-analysis:view:report_category_summary_gen',
@@ -131,9 +134,10 @@ export const DISPLAY_NAME_TO_KEY: ReadonlyMap<string, string> = new Map(
 
 // 授权组（spec §5.5）：映射在 catalog（app 侧），不复制进 Casdoor policy
 export const VIEW_GROUPS = Object.freeze({
-  'data-analysis:view-group:reports-all': {
-    label: '报表看板全组',
-    // 2026-08-17 方案 C：成员收敛为保留的页面级视图（reports-items/wholesale-customers 已退役）
+  // 2026-08-18 门禁拆分：原 view-group:reports-all（看板全组，名不符实）改为纯页面门禁组。
+  // 语义：仅可进入报表中心/目标页；看板可见性由 view-board:*（hasBoardPerm fail-close）单独裁决。
+  'data-analysis:gate:reports-center': {
+    label: '报表中心',
     members: [
       'data-analysis:view:reports', 'data-analysis:view:reports-targets',
     ],
