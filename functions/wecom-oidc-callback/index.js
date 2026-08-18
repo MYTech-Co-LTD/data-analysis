@@ -13,7 +13,8 @@
 // W3 / Task 11（spec §5.4）：claims 构建提为 claims.js 纯函数 buildClaims(ctx)，本文件只做三段组装：
 //   ① 原生 token groups（useGroupPathInToken 全路径 claim，F4——Casdoor 无用户组查询路由，组信息只从 token 读）
 //   ② get-all-objects 可达对象（policy 侧，F11——与 get-resources 注册表语义区分）
-//   ③ 门店叶子展开（Task 9 三态逻辑内联，HTTP 读 maps_branch_group，H12 只读映射表不内嵌 catalog）
+//   ③ 门店范围展开（范围|X 资源唯一真相，expandScopeResources 读 maps+dim_branch；
+//      2026-08-18 废除组织架构推导——无范围资源 = branch_nums: [] = B1 空集 deny）
 //   三段任一失败 → buildClaims 返回 null → 503 整体失败（C2 fail-close，禁半截 claims）。
 //   claims 新增 groups/data_scope{brands,categories,branch_nums}/fields{cost}/catalog_v；
 //   permissions 迁移为资源串（B2）；顶层旧四维 key = 全维非空镜像（B6/M1，只写非空值）。
@@ -23,7 +24,7 @@
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { corsHeaders, json } = require("../_shared/cors");
-const { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, normalizeFriendlyPerm } = require("./claims");
+const { buildClaims, collapseFullStore, resolveScopeKeys, normalizeFriendlyPerm } = require("./claims");
 
 // JWT payload 解码（不验签——token 已由 Casdoor 签发且经 client_secret 换取，此处只读 claims；
 // access_token 非 JWT 形态时返回 null，调用方按 C2 处理）。
@@ -67,54 +68,10 @@ async function fetchAllObjects(issuer, accessToken, userId) {
   }
 }
 
-// ③ 门店叶子展开（Task 9 三态逻辑 function 内联，H13/H12）：
-//    token groups 是全路径（'shanhai/熊喵-东区'），maps.group_id 是组名（禁 '/'，迁移 178 uq_maps_no_sep）
-//    → 取路径末段匹配。store 直映 branch_number / region=子孙 store 并集 / dept 不贡献；未知组 fail-close。
-//    输出 branch_number（全局唯一派生键，门店键铁律）——迁移 179 scope_match_v2 直配该值域。
-async function expandGroupsToBranches(groupPaths, pgrstUrl) {
-  try {
-    const mapsRes = await fetch(
-      `${pgrstUrl}/maps_branch_group?is_active=eq.true&select=group_id,group_type,branch_number`,
-      { headers: { "Content-Type": "application/json" } },
-    );
-    if (!mapsRes.ok) {
-      return { branch_nums: [], ok: false, error: `maps_branch_group http ${mapsRes.status}` };
-    }
-    const maps = await mapsRes.json();
-    if (!Array.isArray(maps)) {
-      return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
-    }
-    // 合法空辖区部门清单（2026-08-17 南部五区实况：企微树建区 dim 无店 → maps 无行）。
-    // 拉取失败不阻断：回退 undefined = 全部未知组 fail-close（保守方向，宁可拒绝不可放行）。
-    let knownDepts;
-    try {
-      const deptRes = await fetch(
-        `${pgrstUrl}/org_departments?is_active=eq.true&select=name`,
-        { headers: { "Content-Type": "application/json" } },
-      );
-      if (deptRes.ok) {
-        const depts = await deptRes.json();
-        if (Array.isArray(depts)) knownDepts = new Set(depts.map((d) => d.name).filter(Boolean));
-      }
-    } catch (e) { console.error("wecom-oidc-callback: org_departments fetch failed", e); }
-    // 组→门店集解析提为 claims.js 纯函数 resolveGroupBranches（2026-08-17 组树迁移企微部门树）：
-    // 新形态 = 部门组多行映射；旧门店组前缀展开保留为过渡兼容（详见该函数注释）。
-    const resolved = resolveGroupBranches(groupPaths, maps, knownDepts);
-    if (resolved.ok !== true) return resolved;
-    // 全店→'*' 收敛（2026-08-17 胖 cookie 修复）：expand 结果覆盖 maps 门店全集时输出 ['*']，
-    // 防 388 店清单把 JWT 撑过浏览器 cookie 4096B 上限（Set-Cookie 被静默丢弃 → 登录存不住）。
-    // 宇宙 = maps 全部去重 branch_number（部门形态行无 group_type='store'，不能再按类型筛）。
-    const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
-    return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
-  } catch (e) {
-    return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
-  }
-}
-
-// ③' 范围资源展开（2026-08-18 门店范围显式授权，双读新通道）：
+// ③ 范围资源展开（2026-08-18 门店范围显式授权，范围资源唯一真相）：
 //    输入 = get-all-objects 里归一出的 data-analysis:branch:X 键（'*' / 包名 / branch_number / 门店中文名）。
 //    maps + dim_branch 各拉一次；resolveScopeKeys 纯解析（claims.js）；全店覆盖仍走 collapseFullStore 收敛。
-//    与 expandGroupsToBranches 输出同形 {branch_nums, ok, error}——buildClaims 不感知来源差异。
+//    输出 {branch_nums, ok, error}——buildClaims 消费；未知键 ok:false → C2 登录 503。
 async function expandScopeResources(scopeKeys, pgrstUrl) {
   try {
     const mapsRes = await fetch(
@@ -312,17 +269,18 @@ module.exports = async function (req) {
       : tokenPayload.sub;
     const reachable = await fetchAllObjects(issuer, accessToken, casdoorUserId);
 
-    // ③ 门店叶子展开（Task 9 三态内联）——双读（2026-08-18 门店范围显式授权）：
-    //    用户在 Casdoor 挂有任一 data-analysis:branch:* 资源 → 走范围资源展开（新通道）；
-    //    否则回退旧 groups（企微部门）展开。迁移期两路并存，摘 permission 即回滚到旧通道。
+    // ③ 门店范围展开（2026-08-18 范围资源唯一真相，fail-close）：
+    //    门店范围只从 范围|X 资源读取（expandScopeResources）；无范围资源 → branch_nums: [] →
+    //    B1 空集 deny（堵「漏配即放行」）。企微组织架构（部门组→maps）推导已废除。
+    //    expand ok:false（未知范围键）仍由 buildClaims 判 C2 → 登录 503（不变）。
     const branchKeys = (reachable ?? [])
       .map((k) => normalizeFriendlyPerm(k))
       .filter((k) => typeof k === "string" && k.startsWith("data-analysis:branch:"))
       .map((k) => k.slice("data-analysis:branch:".length));
     const expandResult = branchKeys.length > 0
       ? await expandScopeResources(branchKeys, pgrstUrl)
-      : await expandGroupsToBranches(oidcGroups, pgrstUrl);
-    console.log("wecom-oidc-callback: scope source =", branchKeys.length > 0 ? "permission-resources" : "legacy-groups",
+      : { branch_nums: [], ok: true };   // 无范围资源 = authorized ∅（B1 deny）
+    console.log("wecom-oidc-callback: scope source = permission-resources",
       { keys: branchKeys.length, ok: expandResult.ok === true });
 
     const claims = buildClaims({
