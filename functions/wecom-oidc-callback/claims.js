@@ -5,9 +5,7 @@
 // 铁律：
 //  B2  permissions = data-analysis:* 资源串 + push:* 裸 key（引擎字面量，H4 禁 data-analysis: 前缀）；
 //      迁移前旧值是四维维度 key（branch_nums/brands/categories/can_see_cost）——本函数不再产出。
-//  B1  data_scope 三维恒存在、原样写空数组（禁收敛 ["*"]）。语义随迁移 195 分维化：
-//      branch_nums 空 = deny（第一层门禁，fail-close）；brands/categories 空 = 不限制
-//      （可选细化层，配了才过滤）——与 scope_match_v2 195 版同口径。
+//  B1  data_scope 空段 = authorized ∅（deny）——原样写空数组，禁收敛 ["*"]。
 //      data_scope 三维恒存在（无授权=空数组，不是缺段）——brands 缺段会令品牌粒度表 legacy 回退放宽（S4）。
 //  B6  顶层旧四维 key 镜像已摘（W6 / Task 20，双氧期结束）：新令牌只携带新四段
 //      （permissions/groups/data_scope/fields/catalog_v）+ H5 保留字段；072 legacy 消费面随
