@@ -25,7 +25,8 @@ function buildClaims(ctx) {
   if (!expanded || expanded.ok !== true) return null;                        // 展开失败/未知组 → 整体失败
 
   // 方案甲：通俗名 → 能力 key 归一（内置映射表见文件底部，与 capability-catalog.ts 单真相同步）
-  const normReach = ctx.reachable.map((k) => FRIENDLY_TO_KEY[k] ?? k);
+  // 归一走 normalizeFriendlyPerm（静态表 + 范围|X 前缀规则——2026-08-18 门店范围显式授权）
+  const normReach = ctx.reachable.map((k) => normalizeFriendlyPerm(k));
 
   // 方案 C：看板授权 ⇒ 覆盖报表视图授权（BOARD_VIEW_COVERAGE 静态镜像——与 capability-board.ts 同步）。
   //   命中看板能力 key（data-analysis:view-board:<id>）→ 注入其覆盖的底层报表视图 key（镜像值为完整 key）。
@@ -112,11 +113,17 @@ const BOARD_VIEW_COVERAGE = {
 };
 
 // 归一函数（供 index.js 或测试直接调用：通俗名 → key，未命中原样返回）
+// 范围资源前缀约定（2026-08-18 门店范围显式授权）：`范围|X` → `data-analysis:branch:X`，
+// X 原样透传（'*' / 包名如「中部一区」/ branch_number 如 3120-0006 / 门店中文名）——
+// 388 店清单不进静态表，登录时由 resolveScopeKeys 动态解析（maps + dim_branch）。
 function normalizeFriendlyPerm(value) {
+  if (typeof value === 'string' && value.startsWith('范围|')) {
+    return 'data-analysis:branch:' + value.slice('范围|'.length);
+  }
   return FRIENDLY_TO_KEY[value] ?? value;
 }
 
-module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE };
+module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE };
 
 // 组→门店集解析（2026-08-17 组树迁移企微部门树，用户裁定「组织架构严格按企微」）：
 //   新形态（部门组）：maps 行 group_id=部门名 × branch_number 多行——部门→门店集映射
@@ -145,6 +152,41 @@ function resolveGroupBranches(groupPaths, maps, knownDepts) {
     }
     if (deptSet && deptSet.has(g)) continue;                     // 合法空辖区（企微树有 dim 无店）——贡献空集
     return { branch_nums: [], ok: false, error: `unknown group: ${g}` };   // fail-close（H13 未知组）
+  }
+  return { branch_nums: [...results].sort(), ok: true };
+}
+
+// 范围资源键 → 门店集解析（2026-08-18 门店范围显式授权，纯函数供测试）：
+//   键形态：'*' 通配 | 包名（maps.group_id，dept 多行）| branch_number（3120-0006）| 门店中文名（dim_branch.branch_name 唯一命中）
+//   fail-close：未知键 / 中文名重名或未命中 → ok:false（防手误配错包放行）
+//   dimBranches 形态 [{branch_number, branch_name}]（index.js 从 postgrest 拉）。
+function resolveScopeKeys(scopeKeys, maps, dimBranches) {
+  const results = new Set();
+  const mapsByGroup = new Map();
+  for (const m of maps ?? []) {
+    if (!m.group_id || !m.branch_number) continue;
+    if (!mapsByGroup.has(m.group_id)) mapsByGroup.set(m.group_id, []);
+    mapsByGroup.get(m.group_id).push(m.branch_number);
+  }
+  const branchNums = new Set((maps ?? []).map((m) => m.branch_number).filter(Boolean));
+  const byName = new Map();
+  for (const d of dimBranches ?? []) {
+    if (!d.branch_name || !d.branch_number) continue;
+    if (!byName.has(d.branch_name)) byName.set(d.branch_name, []);
+    byName.get(d.branch_name).push(d.branch_number);
+  }
+  for (const raw of scopeKeys ?? []) {
+    const key = String(raw);
+    if (key === '*' || key === '全店') return { branch_nums: ['*'], ok: true }; // 通配短路（全店=中文别名）
+    const pack = mapsByGroup.get(key);
+    if (pack) { for (const b of pack) results.add(b); continue; }   // 包名 → 包内门店并集
+    if (branchNums.has(key)) { results.add(key); continue; }        // branch_number 直映
+    const named = byName.get(key);
+    if (named && named.length === 1) { results.add(named[0]); continue; } // 门店中文名唯一命中
+    if (named && named.length > 1) {
+      return { branch_nums: [], ok: false, error: `ambiguous store name: ${key} (${named.length} 家重名)` };
+    }
+    return { branch_nums: [], ok: false, error: `unknown scope key: ${key}` };
   }
   return { branch_nums: [...results].sort(), ok: true };
 }

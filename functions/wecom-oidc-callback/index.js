@@ -23,7 +23,7 @@
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { corsHeaders, json } = require("../_shared/cors");
-const { buildClaims, collapseFullStore, resolveGroupBranches } = require("./claims");
+const { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, normalizeFriendlyPerm } = require("./claims");
 
 // JWT payload 解码（不验签——token 已由 Casdoor 签发且经 client_secret 换取，此处只读 claims；
 // access_token 非 JWT 形态时返回 null，调用方按 C2 处理）。
@@ -108,6 +108,44 @@ async function expandGroupsToBranches(groupPaths, pgrstUrl) {
     return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
   } catch (e) {
     return { branch_nums: [], ok: false, error: `maps_branch_group fetch failed: ${e}` };
+  }
+}
+
+// ③' 范围资源展开（2026-08-18 门店范围显式授权，双读新通道）：
+//    输入 = get-all-objects 里归一出的 data-analysis:branch:X 键（'*' / 包名 / branch_number / 门店中文名）。
+//    maps + dim_branch 各拉一次；resolveScopeKeys 纯解析（claims.js）；全店覆盖仍走 collapseFullStore 收敛。
+//    与 expandGroupsToBranches 输出同形 {branch_nums, ok, error}——buildClaims 不感知来源差异。
+async function expandScopeResources(scopeKeys, pgrstUrl) {
+  try {
+    const mapsRes = await fetch(
+      `${pgrstUrl}/maps_branch_group?is_active=eq.true&select=group_id,group_type,branch_number`,
+      { headers: { "Content-Type": "application/json" } },
+    );
+    if (!mapsRes.ok) {
+      return { branch_nums: [], ok: false, error: `maps_branch_group http ${mapsRes.status}` };
+    }
+    const maps = await mapsRes.json();
+    if (!Array.isArray(maps)) {
+      return { branch_nums: [], ok: false, error: "maps_branch_group non-array" };
+    }
+    // 门店中文名解析用 dim_branch（branch_name 唯一命中；重名/未命中 fail-close）
+    const dimRes = await fetch(
+      `${pgrstUrl}/dim_branch?select=branch_number,branch_name`,
+      { headers: { "Content-Type": "application/json" } },
+    );
+    if (!dimRes.ok) {
+      return { branch_nums: [], ok: false, error: `dim_branch http ${dimRes.status}` };
+    }
+    const dimBranches = await dimRes.json();
+    if (!Array.isArray(dimBranches)) {
+      return { branch_nums: [], ok: false, error: "dim_branch non-array" };
+    }
+    const resolved = resolveScopeKeys(scopeKeys, maps, dimBranches);
+    if (resolved.ok !== true) return resolved;
+    const universe = [...new Set(maps.map((m) => m.branch_number).filter(Boolean))];
+    return { branch_nums: collapseFullStore(resolved.branch_nums, universe), ok: true };
+  } catch (e) {
+    return { branch_nums: [], ok: false, error: `scope expand fetch failed: ${e}` };
   }
 }
 
@@ -274,8 +312,18 @@ module.exports = async function (req) {
       : tokenPayload.sub;
     const reachable = await fetchAllObjects(issuer, accessToken, casdoorUserId);
 
-    // ③ 门店叶子展开（Task 9 三态内联）
-    const expandResult = await expandGroupsToBranches(oidcGroups, pgrstUrl);
+    // ③ 门店叶子展开（Task 9 三态内联）——双读（2026-08-18 门店范围显式授权）：
+    //    用户在 Casdoor 挂有任一 data-analysis:branch:* 资源 → 走范围资源展开（新通道）；
+    //    否则回退旧 groups（企微部门）展开。迁移期两路并存，摘 permission 即回滚到旧通道。
+    const branchKeys = (reachable ?? [])
+      .map((k) => normalizeFriendlyPerm(k))
+      .filter((k) => typeof k === "string" && k.startsWith("data-analysis:branch:"))
+      .map((k) => k.slice("data-analysis:branch:".length));
+    const expandResult = branchKeys.length > 0
+      ? await expandScopeResources(branchKeys, pgrstUrl)
+      : await expandGroupsToBranches(oidcGroups, pgrstUrl);
+    console.log("wecom-oidc-callback: scope source =", branchKeys.length > 0 ? "permission-resources" : "legacy-groups",
+      { keys: branchKeys.length, ok: expandResult.ok === true });
 
     const claims = buildClaims({
       oidcToken: { groups: oidcGroups },

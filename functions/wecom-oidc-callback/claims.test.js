@@ -200,3 +200,52 @@ eq(gc.permissions.includes('data-analysis:view:reports'), false, 'claims 不展�
 eq(Object.keys(BOARD_VIEW_COVERAGE).length, 6, 'BOARD_VIEW_COVERAGE 恰 6 条（kpi 看板无覆盖报表视图）');
 
 console.log('方案甲/方案C 通俗名归一 + 覆盖注入 assertions passed');
+
+// ════════ 2026-08-18 门店范围显式授权（范围|X 前缀归一 + resolveScopeKeys）════════
+const { resolveScopeKeys } = require('./claims.js');
+
+// 5a. 前缀归一：范围|X → data-analysis:branch:X（X 原样透传，不进静态表）
+eq(normalizeFriendlyPerm('范围|中部一区'), 'data-analysis:branch:中部一区', '范围前缀归一：包名');
+eq(normalizeFriendlyPerm('范围|*'), 'data-analysis:branch:*', '范围前缀归一：通配');
+eq(normalizeFriendlyPerm('范围|3120-0006'), 'data-analysis:branch:3120-0006', '范围前缀归一：branch_number');
+eq(normalizeFriendlyPerm('范围|武汉光谷店'), 'data-analysis:branch:武汉光谷店', '范围前缀归一：门店中文名');
+eq(normalizeFriendlyPerm('品牌|熊喵鲜生'), 'data-analysis:brand:3120', '非范围资源仍走静态表');
+eq(normalizeFriendlyPerm('看板|指标概览'), 'data-analysis:view-board:kpi', '非范围资源静态表不受影响');
+
+// 5b. resolveScopeKeys：包名 → 包内门店并集
+const mapsFixture = [
+  { group_id: '中部一区', group_type: 'dept', branch_number: '3120-0006' },
+  { group_id: '中部一区', group_type: 'dept', branch_number: '3120-0010' },
+  { group_id: '中部三区', group_type: 'dept', branch_number: '3120-0082' },
+];
+const dimFixture = [
+  { branch_number: '3120-0006', branch_name: '武汉光谷店' },
+  { branch_number: '3120-0010', branch_name: '常德武陵店' },
+  { branch_number: '3120-0082', branch_name: '长沙岳麓店' },
+];
+const pk = resolveScopeKeys(['中部一区', '中部三区'], mapsFixture, dimFixture);
+eq(pk.ok, true, 'resolveScopeKeys 包名解析 ok');
+eq(JSON.stringify(pk.branch_nums), JSON.stringify(['3120-0010', '3120-0082', '3120-0006'].sort()), '两包门店并集');
+
+// 5c. 通配短路 + 单店（编号 / 中文名唯一命中）
+eq(JSON.stringify(resolveScopeKeys(['*'], mapsFixture, dimFixture).branch_nums), JSON.stringify(['*']), '通配返回 ["*"]');
+eq(resolveScopeKeys(['全店'], mapsFixture, dimFixture).branch_nums[0], '*', '中文别名「全店」=通配');
+eq(resolveScopeKeys(['3120-0006'], mapsFixture, dimFixture).branch_nums[0], '3120-0006', 'branch_number 直映');
+eq(resolveScopeKeys(['武汉光谷店'], mapsFixture, dimFixture).branch_nums[0], '3120-0006', '门店中文名唯一命中');
+
+// 5d. fail-close：未知键 / 中文名重名
+eq(resolveScopeKeys(['不存在的包'], mapsFixture, dimFixture).ok, false, '未知包名 fail-close');
+const dupDim = [...dimFixture, { branch_number: '64188-0001', branch_name: '武汉光谷店' }];
+eq(resolveScopeKeys(['武汉光谷店'], mapsFixture, dupDim).ok, false, '门店中文名重名 fail-close');
+
+// 5e. buildClaims 集成：范围资源进 permissions，branch 来源仍由 expandResult 注入（index.js 双读选路）
+const scopeCtx = {
+  ...okCtx,
+  reachable: ['范围|中部一区', '品牌|熊喵鲜生'],
+};
+const sc = buildClaims(scopeCtx);
+eq(sc.permissions.includes('data-analysis:branch:中部一区'), true, '范围资源 key 进 permissions');
+eq(sc.data_scope.brands, ['3120'], '品牌资源照常解析');
+// 注：branch_nums 展开值由 index.js 双读侧（expandScopeResources）注入 expandResult——claims 层不重复展开
+
+console.log('门店范围显式授权 assertions passed');
