@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { LogoutButton } from "@/components/layout/logout-button";
 import { isWecomClient } from "@/lib/device";
-import { checkFeaturePerm } from "@/lib/feature-perm";
+import { checkFeaturePerm, decodePermissionsClaim } from "@/lib/feature-perm";
 import { getDeviceType } from "@/lib/get-device-type";
 
 // Header（server component）：在受保护页渲染，此时一定已登录（middleware 已拦截未登录）。
@@ -26,8 +26,12 @@ export async function Header() {
   const displayName = name || userid;
 
   // P0a（plan Task 3）：管理后台入口门禁走 checkFeaturePerm 收口
-  // （server component，BREAKGLASS_ADMINS env 可见；claims 后续由 U2 注入）
-  const admin = userid ? await checkFeaturePerm(userid, "data-analysis:admin") : false;
+  // 2026-08-18 修复（杨玮案例）：此前不传 claims → 只剩 BREAKGLASS 一条路，
+  // 清空后门后所有人都看不到入口（门禁能力反而不生效）。现从 cookie 解码
+  // claims 传入（与 middleware 同款软门禁解码，仅 UX 展示；真裁决在 requireAdmin）。
+  const token = cookiesList.get('insforge_access_token')?.value;
+  const claim = token ? decodePermissionsClaim(token) : undefined;
+  const admin = userid ? await checkFeaturePerm(userid, "data-analysis:admin", claim) : false;
 
   return (
     <header className="border-b bg-white">
