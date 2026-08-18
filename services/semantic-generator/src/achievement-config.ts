@@ -80,4 +80,7 @@ GROUP BY t.id` },
     outbound_amt: { data_ready: true, cte: 'outbound_amt' },
     outbound_profit: { data_ready: true, cte: 'outbound_profit', cost_sensitive: true },
   },
+  // 194 受限收缩：sale/delivery 有 store 级目标分解 → 分母收缩为可见门店目标之和；
+  // outbound 两指标无门店分解 → 受限用户 achievement_rate 置 NULL（只看实际值）。
+  store_scoped_metrics: ['sale', 'delivery'],
 };

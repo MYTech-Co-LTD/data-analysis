@@ -87,7 +87,7 @@ region_act AS (
   FROM leaf_rows
   GROUP BY target_id, war_zone
 ),
-region_tgt AS (
+region_tgt_pre AS (
   SELECT t.parent_target_id AS target_id, t.war_zone,
     MAX(tmv.target_value) FILTER (WHERE metric_code='sale') AS sale_target,
     MAX(tmv.target_value) FILTER (WHERE metric_code='delivery') AS delivery_target
@@ -95,6 +95,20 @@ region_tgt AS (
   JOIN target_metric_values tmv ON tmv.target_id = t.id AND (metric_code='sale' OR metric_code='delivery')
   WHERE t.breakdown_level = 'war_zone' AND (t.branch_num = 'ALL' OR scope_match_v2('brands', t.system_book_code) AND (scope_match_v2('branch_nums', t.branch_num::text) OR scope_match_v2('branch_nums', t.system_book_code || '-' || t.branch_num))) AND is_assessed_war_zone(t.war_zone)
   GROUP BY t.parent_target_id, t.war_zone
+),
+region_tgt_scoped AS (
+  SELECT target_id, war_zone,
+    SUM(sale_target) AS sale_target,
+    SUM(delivery_target) AS delivery_target
+  FROM leaf_rows
+  GROUP BY target_id, war_zone
+),
+region_tgt AS (
+  SELECT p.target_id, p.war_zone,
+    CASE WHEN branch_scope_limited() THEN COALESCE(s.sale_target, p.sale_target) ELSE p.sale_target END AS sale_target,
+    CASE WHEN branch_scope_limited() THEN COALESCE(s.delivery_target, p.delivery_target) ELSE p.delivery_target END AS delivery_target
+  FROM region_tgt_pre p
+  LEFT JOIN region_tgt_scoped s ON s.target_id = p.target_id AND s.war_zone = p.war_zone
 ),
 sub_region_act AS (
   SELECT target_id, war_zone, region_l2,
@@ -108,7 +122,7 @@ sub_region_act AS (
   FROM leaf_rows
   GROUP BY target_id, war_zone, region_l2
 ),
-sub_region_tgt AS (
+sub_region_tgt_pre AS (
   SELECT t.parent_target_id AS target_id, t.war_zone, t.region_l2,
     MAX(tmv.target_value) FILTER (WHERE metric_code='sale') AS sale_target,
     MAX(tmv.target_value) FILTER (WHERE metric_code='delivery') AS delivery_target
@@ -116,6 +130,20 @@ sub_region_tgt AS (
   JOIN target_metric_values tmv ON tmv.target_id = t.id AND (metric_code='sale' OR metric_code='delivery')
   WHERE t.breakdown_level = 'region_l2' AND (t.branch_num = 'ALL' OR scope_match_v2('brands', t.system_book_code) AND (scope_match_v2('branch_nums', t.branch_num::text) OR scope_match_v2('branch_nums', t.system_book_code || '-' || t.branch_num))) AND is_assessed_war_zone(t.war_zone)
   GROUP BY t.parent_target_id, t.war_zone, t.region_l2
+),
+sub_region_tgt_scoped AS (
+  SELECT target_id, war_zone, region_l2,
+    SUM(sale_target) AS sale_target,
+    SUM(delivery_target) AS delivery_target
+  FROM leaf_rows
+  GROUP BY target_id, war_zone, region_l2
+),
+sub_region_tgt AS (
+  SELECT p.target_id, p.war_zone, p.region_l2,
+    CASE WHEN branch_scope_limited() THEN COALESCE(s.sale_target, p.sale_target) ELSE p.sale_target END AS sale_target,
+    CASE WHEN branch_scope_limited() THEN COALESCE(s.delivery_target, p.delivery_target) ELSE p.delivery_target END AS delivery_target
+  FROM sub_region_tgt_pre p
+  LEFT JOIN sub_region_tgt_scoped s ON s.target_id = p.target_id AND s.war_zone = p.war_zone AND s.region_l2 = p.region_l2
 )
 SELECT
   a.target_id,

@@ -356,13 +356,32 @@ export function generateHierarchyView(
       const whereExtra: string[] = [`t.breakdown_level = '${p.target_breakdown}'`, permFilterTarget('t')];
       // 考核过滤：targets 表 war_zone 列恒在（breakdown_level 为 war_zone/region_l2 的行均带 war_zone）
       if (useAssessed) whereExtra.push(`is_assessed_war_zone(t.war_zone)`);
-      cteList.push(`${tgtCteName} AS (
+      cteList.push(`${tgtCteName}_pre AS (
   SELECT t.parent_target_id AS target_id, ${grainT2},
     ${tgtCols.join(',\n    ')}
   FROM targets t
   JOIN target_metric_values tmv ON tmv.target_id = t.id AND (${metricFilters})
   WHERE ${whereExtra.join(' AND ')}
   GROUP BY t.parent_target_id, ${grainT2}
+)`);
+      // 194 受限收缩：父级目标备用一份「门店级目标按 scope 求和」（从 leaf_rows rollup，
+      // grain 列与 actual rollup 同源）；受限用户取它 = 外层目标与展开门店合计恒相等。
+      // 全权用户取 _pre 预算原值（war_zone 预算与门店之和不严格相等，不硬替换）。
+      const scopedCols = targetLeaves.map(tl => `SUM(${tl.metric_code}) AS ${tl.metric_code}`);
+      cteList.push(`${tgtCteName}_scoped AS (
+  SELECT target_id, ${pgrain.join(', ')},
+    ${scopedCols.join(',\n    ')}
+  FROM leaf_rows
+  GROUP BY target_id, ${pgrain.join(', ')}
+)`);
+      const pickCols = targetLeaves.map(tl =>
+        `CASE WHEN branch_scope_limited() THEN COALESCE(s.${tl.metric_code}, p.${tl.metric_code}) ELSE p.${tl.metric_code} END AS ${tl.metric_code}`);
+      const joinGrain = pgrain.map(g => `s.${g} = p.${g}`).join(' AND ');
+      cteList.push(`${tgtCteName} AS (
+  SELECT p.target_id, ${pgrain.map(g => `p.${g}`).join(', ')},
+    ${pickCols.join(',\n    ')}
+  FROM ${tgtCteName}_pre p
+  LEFT JOIN ${tgtCteName}_scoped s ON s.target_id = p.target_id AND ${joinGrain}
 )`);
     }
     levelCtes.set(p.level, { act: actCteName, tgt: tgtCteName, grain: pgrain });
@@ -558,12 +577,17 @@ function generateCategoryView(
 )`);
 
   // 7. Final SELECT: UNION ALL category + total
+  //    194 方案 A：类别目标无门店级分解，受限用户（branch_scope_limited）无法收缩分母 →
+  //    隐藏目标相关列（sale_rate/profit_rate/remaining_daily_profit_target 置 NULL），只展示实际值。
   const finalCols = [
     'target_id', 'category',
-    'sale_target', 'sale_actual', 'sale_rate',
-    'profit_target', 'profit_actual', 'profit_rate', 'profit_margin',
+    'sale_target', 'sale_actual',
+    `CASE WHEN branch_scope_limited() THEN NULL ELSE sale_rate END AS sale_rate`,
+    'profit_target', 'profit_actual',
+    `CASE WHEN branch_scope_limited() THEN NULL ELSE profit_rate END AS profit_rate`,
+    'profit_margin',
     'daily_amount', 'daily_profit', 'daily_profit_margin',
-    'remaining_daily_profit_target'
+    `CASE WHEN branch_scope_limited() THEN NULL ELSE remaining_daily_profit_target END AS remaining_daily_profit_target`,
   ];
 
   return `DROP VIEW IF EXISTS ${view_name} CASCADE;

@@ -105,6 +105,6 @@ total_level AS (
   FROM category_level
   GROUP BY target_id
 )
-SELECT target_id, category, sale_target, sale_actual, sale_rate, profit_target, profit_actual, profit_rate, profit_margin, daily_amount, daily_profit, daily_profit_margin, remaining_daily_profit_target FROM category_level
+SELECT target_id, category, sale_target, sale_actual, CASE WHEN branch_scope_limited() THEN NULL ELSE sale_rate END AS sale_rate, profit_target, profit_actual, CASE WHEN branch_scope_limited() THEN NULL ELSE profit_rate END AS profit_rate, profit_margin, daily_amount, daily_profit, daily_profit_margin, CASE WHEN branch_scope_limited() THEN NULL ELSE remaining_daily_profit_target END AS remaining_daily_profit_target FROM category_level
 UNION ALL
-SELECT target_id, category, sale_target, sale_actual, sale_rate, profit_target, profit_actual, profit_rate, profit_margin, daily_amount, daily_profit, daily_profit_margin, remaining_daily_profit_target FROM total_level;
+SELECT target_id, category, sale_target, sale_actual, CASE WHEN branch_scope_limited() THEN NULL ELSE sale_rate END AS sale_rate, profit_target, profit_actual, CASE WHEN branch_scope_limited() THEN NULL ELSE profit_rate END AS profit_rate, profit_margin, daily_amount, daily_profit, daily_profit_margin, CASE WHEN branch_scope_limited() THEN NULL ELSE remaining_daily_profit_target END AS remaining_daily_profit_target FROM total_level;

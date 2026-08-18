@@ -66,12 +66,26 @@ LEFT JOIN report_daily_delivery d FULL OUTER JOIN report_daily_wholesale w
   AND scope_match_v2('brands', COALESCE(d.system_book_code, w.system_book_code)) AND (scope_match_v2('branch_nums', COALESCE(d.branch_num, w.branch_num)::text) OR scope_match_v2('branch_nums', COALESCE(d.system_book_code, w.system_book_code) || '-' || COALESCE(d.branch_num, w.branch_num)))
 WHERE t.target_level = 'total'
 GROUP BY t.id
+),
+scoped_tgt AS MATERIALIZED (
+  SELECT t.parent_target_id AS target_id,
+    SUM(tmv.target_value) FILTER (WHERE tmv.metric_code = 'sale') AS sale,
+    SUM(tmv.target_value) FILTER (WHERE tmv.metric_code = 'delivery') AS delivery
+  FROM targets t
+  JOIN target_metric_values tmv ON tmv.target_id = t.id
+  WHERE t.breakdown_level = 'store' AND t.branch_num <> 'ALL' AND scope_match_v2('brands', t.system_book_code) AND (scope_match_v2('branch_nums', t.branch_num::text) OR scope_match_v2('branch_nums', t.system_book_code || '-' || t.branch_num))
+  GROUP BY t.parent_target_id
 )
 SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_at,
   t.system_book_code, t.branch_num, t.target_level, t.parent_target_id, t.target_type, t.category,
   t.breakdown_level, t.war_zone, t.region_l2,
   b.branch_name, b.first_level_region AS war_zone_dim, b.second_level_region AS region_l2_dim, b.region_name, b.city,
-  mv.metric_code, md.name AS metric_name, md.unit, md.data_ready, mv.target_value,
+  mv.metric_code, md.name AS metric_name, md.unit, md.data_ready, CASE
+       WHEN branch_scope_limited() AND md.metric_code = 'sale' THEN COALESCE(scoped_tgt.sale, mv.target_value)
+       WHEN branch_scope_limited() AND md.metric_code = 'delivery' THEN COALESCE(scoped_tgt.delivery, mv.target_value)
+       WHEN branch_scope_limited() AND md.metric_code = 'outbound_amt' THEN mv.target_value
+       WHEN branch_scope_limited() AND md.metric_code = 'outbound_profit' THEN mv.target_value
+       ELSE mv.target_value END AS target_value,
   CASE WHEN t.status = 'closed' THEN sn.actual_value
        WHEN md.metric_code = 'sale' AND md.data_ready THEN sale.actual_value
        WHEN md.metric_code = 'delivery' AND md.data_ready THEN delivery.actual_value
@@ -88,10 +102,10 @@ SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_a
          CASE WHEN outbound_profit.days = 0 THEN 'missing' WHEN outbound_profit.days < t.total_days THEN 'partial' ELSE 'complete' END ELSE 'not_ready' END AS data_status,
   t.total_days, t.days_elapsed,
   CASE WHEN mv.target_value > 0 AND t.status = 'closed' THEN sn.achievement_rate
-       WHEN mv.target_value > 0 AND md.metric_code = 'sale' AND md.data_ready AND sale.actual_value IS NOT NULL THEN round((sale.actual_value / mv.target_value)::numeric, 4)
-       WHEN mv.target_value > 0 AND md.metric_code = 'delivery' AND md.data_ready AND delivery.actual_value IS NOT NULL THEN round((delivery.actual_value / mv.target_value)::numeric, 4)
-       WHEN mv.target_value > 0 AND md.metric_code = 'outbound_amt' AND md.data_ready AND outbound_amt.actual_value IS NOT NULL THEN round((outbound_amt.actual_value / mv.target_value)::numeric, 4)
-       WHEN mv.target_value > 0 AND md.metric_code = 'outbound_profit' AND md.data_ready AND outbound_profit.actual_value IS NOT NULL THEN round((outbound_profit.actual_value / mv.target_value)::numeric, 4) END AS achievement_rate,
+       WHEN COALESCE(scoped_tgt.sale, mv.target_value) > 0 AND md.metric_code = 'sale' AND md.data_ready AND sale.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN ('sale', 'delivery')) THEN round((sale.actual_value / COALESCE(scoped_tgt.sale, mv.target_value))::numeric, 4)
+       WHEN COALESCE(scoped_tgt.delivery, mv.target_value) > 0 AND md.metric_code = 'delivery' AND md.data_ready AND delivery.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN ('sale', 'delivery')) THEN round((delivery.actual_value / COALESCE(scoped_tgt.delivery, mv.target_value))::numeric, 4)
+       WHEN mv.target_value > 0 AND md.metric_code = 'outbound_amt' AND md.data_ready AND outbound_amt.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN ('sale', 'delivery')) THEN round((outbound_amt.actual_value / mv.target_value)::numeric, 4)
+       WHEN mv.target_value > 0 AND md.metric_code = 'outbound_profit' AND md.data_ready AND outbound_profit.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN ('sale', 'delivery')) THEN round((outbound_profit.actual_value / mv.target_value)::numeric, 4) END AS achievement_rate,
   CASE WHEN t.total_days > 0 THEN round(t.days_elapsed::numeric / t.total_days, 4) ELSE NULL END AS progress_rate
 FROM tgt t
 JOIN target_metric_values mv ON mv.target_id = t.id
@@ -101,5 +115,6 @@ LEFT JOIN target_snapshots sn ON sn.target_id = t.id AND sn.metric_code = mv.met
   LEFT JOIN sale ON sale.target_id = t.id AND md.metric_code = 'sale'
   LEFT JOIN delivery ON delivery.target_id = t.id AND md.metric_code = 'delivery'
   LEFT JOIN outbound_amt ON outbound_amt.target_id = t.id AND md.metric_code = 'outbound_amt'
-  LEFT JOIN outbound_profit ON outbound_profit.target_id = t.id AND md.metric_code = 'outbound_profit';
+  LEFT JOIN outbound_profit ON outbound_profit.target_id = t.id AND md.metric_code = 'outbound_profit'
+LEFT JOIN scoped_tgt ON scoped_tgt.target_id = t.id;
 

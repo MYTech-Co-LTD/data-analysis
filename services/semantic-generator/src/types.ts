@@ -114,4 +114,7 @@ export interface AchievementViewConfig {
   target_level: string;        // 'total'（前端只消费 total 行）
   ctes: Record<string, AchievementCteConfig>;
   metrics: Record<string, AchievementMetricConfig>;
+  /** 194：有门店级目标分解的指标（受限用户分母改用可见门店目标之和）；
+   *  其余指标受限用户隐藏达成率（数据模型无门店分解，无从收缩——方案 A） */
+  store_scoped_metrics?: string[];
 }

@@ -144,7 +144,7 @@ export async function runGenerator(opts: GenOpts): Promise<GenResult> {
 }
 
 // CLI 入口：npm run gen-views
-async function main() {
+export async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error('❌ 缺 DATABASE_URL（见 .env.example）');

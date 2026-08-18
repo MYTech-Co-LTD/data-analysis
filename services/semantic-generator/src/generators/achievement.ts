@@ -23,6 +23,12 @@ function injectPerm(sql: string): string {
 export function generateAchievementView(config: AchievementViewConfig): string {
   const { view_name, target_level, ctes, metrics } = config;
   const metricEntries = Object.entries(metrics);
+  // 194 受限收缩：有门店级分解的指标（分母=可见门店目标之和）；其余受限用户隐藏达成率
+  const storeScoped = config.store_scoped_metrics ?? [];
+  const scopedInList = storeScoped.map(c => `'${c}'`).join(', ');
+  // 每指标分母表达式：store_scoped 指标受限时用 scoped_tgt，否则预算原值
+  const tgtExpr = (code: string) =>
+    storeScoped.includes(code) ? `COALESCE(scoped_tgt.${code}, mv.target_value)` : 'mv.target_value';
 
   const tgtCte = `tgt AS (
   SELECT t.id, t.name, t.status, t.start_date, t.end_date, t.closed_at, t.system_book_code, t.branch_num,
@@ -37,14 +43,34 @@ export function generateAchievementView(config: AchievementViewConfig): string {
   const metricCtes = Object.entries(ctes).map(([name, c]) => `${name} AS MATERIALIZED (\n  ${injectPerm(c.sql)}\n)`);
   const withList = [tgtCte, ...metricCtes];
 
+  // 194：门店级目标 scoped 汇总（受限用户分母）。perm 用 permFilterFact（store 行无 ALL 豁免）。
+  if (storeScoped.length > 0) {
+    const scopedCols = storeScoped.map(c =>
+      `SUM(tmv.target_value) FILTER (WHERE tmv.metric_code = '${c}') AS ${c}`);
+    withList.push(`scoped_tgt AS MATERIALIZED (
+  SELECT t.parent_target_id AS target_id,
+    ${scopedCols.join(',\n    ')}
+  FROM targets t
+  JOIN target_metric_values tmv ON tmv.target_id = t.id
+  WHERE t.breakdown_level = 'store' AND t.branch_num <> 'ALL' AND ${permFilterFact('t')}
+  GROUP BY t.parent_target_id
+)`);
+  }
+
   const actualCases = metricEntries.map(([code, m]) =>
     `       WHEN md.metric_code = '${code}' AND md.data_ready THEN ${m.cte}.actual_value`);
   const dataStatusCases = metricEntries.map(([code, m]) =>
     `       WHEN md.metric_code = '${code}' AND md.data_ready THEN\n         CASE WHEN ${m.cte}.days = 0 THEN 'missing' WHEN ${m.cte}.days < t.total_days THEN 'partial' ELSE 'complete' END`);
   const rateCases = metricEntries.map(([code, m]) =>
-    `       WHEN mv.target_value > 0 AND md.metric_code = '${code}' AND md.data_ready AND ${m.cte}.actual_value IS NOT NULL THEN round((${m.cte}.actual_value / mv.target_value)::numeric, 4)`);
+    // 194：非 store_scoped 指标（outbound 等）受限用户不给出失真达成率；分母用 tgtExpr
+    `       WHEN ${tgtExpr(code)} > 0 AND md.metric_code = '${code}' AND md.data_ready AND ${m.cte}.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN (${scopedInList})) THEN round((${m.cte}.actual_value / ${tgtExpr(code)})::numeric, 4)`);
   const metricJoins = metricEntries.map(([code, m]) =>
     `  LEFT JOIN ${m.cte} ON ${m.cte}.target_id = t.id AND md.metric_code = '${code}'`);
+
+  const targetValueCase = `CASE\n${metricEntries
+    .map(([code]) =>
+      `       WHEN branch_scope_limited() AND md.metric_code = '${code}' THEN ${tgtExpr(code)}`)
+    .join('\n')}\n       ELSE mv.target_value END`;
 
   return `DROP VIEW IF EXISTS ${view_name} CASCADE;
 CREATE VIEW ${view_name} AS
@@ -53,7 +79,7 @@ SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_a
   t.system_book_code, t.branch_num, t.target_level, t.parent_target_id, t.target_type, t.category,
   t.breakdown_level, t.war_zone, t.region_l2,
   b.branch_name, b.first_level_region AS war_zone_dim, b.second_level_region AS region_l2_dim, b.region_name, b.city,
-  mv.metric_code, md.name AS metric_name, md.unit, md.data_ready, mv.target_value,
+  mv.metric_code, md.name AS metric_name, md.unit, md.data_ready, ${targetValueCase} AS target_value,
   CASE WHEN t.status = 'closed' THEN sn.actual_value
 ${actualCases.join('\n')} END AS actual_value,
   CASE WHEN t.status = 'closed' THEN sn.data_status
@@ -67,6 +93,6 @@ JOIN target_metric_values mv ON mv.target_id = t.id
 JOIN metric_definitions md ON md.metric_code = mv.metric_code
 LEFT JOIN dim_branch b ON b.system_book_code = t.system_book_code AND b.branch_num = t.branch_num
 LEFT JOIN target_snapshots sn ON sn.target_id = t.id AND sn.metric_code = mv.metric_code
-${metricJoins.join('\n')};
+${metricJoins.join('\n')}${storeScoped.length > 0 ? "\nLEFT JOIN scoped_tgt ON scoped_tgt.target_id = t.id" : ''};
 `;
 }
