@@ -67,49 +67,6 @@ eq(collapseFullStore(undefined, ['3120-001']), [], 'undefined 入参 → 空数�
 
 console.log('collapseFullStore assertions passed');
 
-// ============ resolveGroupBranches（企微部门组形态 + 旧门店组过渡兼容，2026-08-17 组树迁移）============
-// 新形态：maps 行 group_id=部门名 × branch_number 多行（部门→门店集，职能部门=全店 388 行）。
-// 旧形态回退：门店组前缀展开（迁移窗口内 5 管理员旧挂组仍工作）。
-// 组存在但 maps 无行（未灌映射的新部门）→ unknown fail-close（C2，禁半可达）。
-const { resolveGroupBranches } = require('./claims.js');
-const R = (o) => JSON.stringify(o);
-
-eq(R(resolveGroupBranches(['shanhai/东部一区'], [
-  { group_id: '东部一区', branch_number: '3120-0001' },
-  { group_id: '东部一区', branch_number: '3120-0002' },
-  { group_id: '东部二区', branch_number: '3120-0003' },
-])), R({ branch_nums: ['3120-0001', '3120-0002'], ok: true }), '部门组多行映射全命中（全路径剥前缀，他组行不外溢）');
-
-eq(R(resolveGroupBranches(['shanhai/熊喵-3120-0001'], [
-  { group_id: '熊喵-3120-0001', group_type: 'store', branch_number: '3120-0001' },
-])), R({ branch_nums: ['3120-0001'], ok: true }), '旧门店组精确行兼容（迁移窗口）');
-
-eq(R(resolveGroupBranches(['shanhai/熊喵'], [
-  { group_id: '熊喵-3120-0001', group_type: 'store', branch_number: '3120-0001' },
-  { group_id: '熊喵-3120-0002', group_type: 'store', branch_number: '3120-0002' },
-])), R({ branch_nums: ['3120-0001', '3120-0002'], ok: true }), '旧区域根前缀回退兼容（迁移窗口）');
-
-eq(R(resolveGroupBranches(['shanhai/新部门'], [])),
-  R({ branch_nums: [], ok: false, error: 'unknown group: 新部门' }), '组无映射行 → fail-close（禁半可达）');
-
-eq(R(resolveGroupBranches(['shanhai/南部五区'], [], new Set(['南部五区']))),
-  R({ branch_nums: [], ok: true }), '合法空辖区（org_departments 有 maps 无行）→ 贡献空集不 fail-close');
-
-eq(R(resolveGroupBranches(['shanhai/南部五区', 'shanhai/东部一区'], [
-  { group_id: '东部一区', branch_number: '3120-0002' },
-], new Set(['南部五区']))),
-  R({ branch_nums: ['3120-0002'], ok: true }), '空辖区与有映射组混合 → 空集不拖垮整体（LiuHeFa 形态）');
-
-eq(R(resolveGroupBranches(['shanhai/真未知组'], [], new Set(['南部五区']))),
-  R({ branch_nums: [], ok: false, error: 'unknown group: 真未知组' }), 'knownDepts 不含的组仍 fail-close（保守方向不变）');
-
-eq(R(resolveGroupBranches(['shanhai/东部一区', 'shanhai/总经办'], [
-  { group_id: '总经办', branch_number: '3120-0001' },
-  { group_id: '东部一区', branch_number: '3120-0002' },
-])), R({ branch_nums: ['3120-0001', '3120-0002'], ok: true }), '多组并集（兼职多挂）');
-
-console.log('resolveGroupBranches assertions passed');
-
 // ============ 方案甲/方案 C：通俗名 → 能力 key 归一（2026-08-17，Casdoor resource.name=通俗名）============
 // 管理员在 Casdoor 下拉框选中通俗名（如「指标概览」）→ 写进 permission.resources 的是通俗名 →
 // claims B2 过滤前必须还原成 key，否则通俗名被 startsWith('data-analysis:') 丢弃 → 权限静默丢失。
@@ -210,6 +167,7 @@ eq(normalizeFriendlyPerm('范围|*'), 'data-analysis:branch:*', '范围前缀归
 eq(normalizeFriendlyPerm('范围|3120-0006'), 'data-analysis:branch:3120-0006', '范围前缀归一：branch_number');
 eq(normalizeFriendlyPerm('范围|武汉光谷店'), 'data-analysis:branch:武汉光谷店', '范围前缀归一：门店中文名');
 eq(normalizeFriendlyPerm('品牌|熊喵鲜生'), 'data-analysis:brand:3120', '非范围资源仍走静态表');
+eq(normalizeFriendlyPerm('data-analysis:branch:中部一区'), 'data-analysis:branch:中部一区', '已归一 key 形态原样透传（不经 范围| 前缀也走新通道，preview/登录同口径）');
 eq(normalizeFriendlyPerm('看板|指标概览'), 'data-analysis:view-board:kpi', '非范围资源静态表不受影响');
 
 // 5b. resolveScopeKeys：包名 → 包内门店并集

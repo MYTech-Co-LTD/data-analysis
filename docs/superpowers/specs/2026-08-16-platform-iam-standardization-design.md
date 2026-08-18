@@ -26,7 +26,7 @@
 
 1. **组织架构单一真相源 = Casdoor Group tree**：部门/区域/门店层级全部在 Casdoor 表达；本地 `org_departments/org_users` 降级为只读缓存投影。
 2. **功能授权 = capability catalog + casbin resource**：看板/模块/操作/敏感字段全部 `data-analysis:*` 命名空间资源化；**动态发现**：新能力上线零手工建档（catalog 一行 → 部署同步 → 可配 → 生效）。
-3. **数据范围 Casdoor 主导三分流**：静态枚举（品牌/品类）→ resource；动态大量值（门店）→ Group tree 挂组表达；临时例外（+到期）→ app 例外表。`data_permissions` 四维表目标 **sunset**。
+3. **数据范围 Casdoor 主导三分流**：静态枚举（品牌/品类）→ resource；动态大量值（门店）→ **`范围|X` 资源**（permission.resources，2026-08-18 演进——废除 Group tree 挂组推导，无范围资源 = 空集 deny）；临时例外（+到期）→ app 例外表。`data_permissions` 四维表目标 **sunset**。
 4. **执行端单一 claims 消费**：OIDC claims（sub/org/roles/groups/permissions/data_scope/field 掩码）一套判定，无第二套逻辑。
 5. **零回归**：shadow 对账门禁（授权变更 diff=0）+ Casdoor 故障降级口径诚实（继承裁决-2/裁决-1）。
 6. **列级脱敏可扩展**：新增敏感字段 = catalog 加 `field:<slug>` + **掩码由非生成器运行时层消费**（H7，revision-2）；QA 断言扩为衍生列血缘断言（margin/rate 全列随基列 NULL）。
@@ -48,7 +48,7 @@
 3. **门店↔Group 映射要有自省能力**：`dim_branch`（门店维表）与 Casdoor Group 双向可查（新增映射表或复用 casdoor_synced 模式），供对账/排障/自动发现用——禁止单向写死。
 4. **授权组（view-group）是派生对象**：`data-analysis:view-group:<name>` 展开为成员 `view:*` 判定，映射定义在 data-analysis（catalog 内），不复制进 Casdoor policy（Casdoor 只看到组名 resource）。
 5. **catalog 单真相纪律（H12，与生成器铁律同级，须写入 CLAUDE.md）**：`capabilityCatalog` 只存在于 `web/lib/capability-catalog.ts` 单副本；function（claims 构建器）**只消费不内嵌复制** catalog 子集——function-only 部署（SSH 直调，CLAUDE.md 部署规则）会绕过 catalog scan 制造漂移副本，属违规。新增视图/路由只改 web/lib；claims 构建器永远从 web 侧契约快照/实查读 catalog 判定。
-6. **空集 = deny 铁律（B1）**：claims 含 `data_scope`/`groups` 段但值为空 = 授权确定为 ∅ = deny，**不收敛 `["*"]`**。08-15「空数组 → `["*"]` 数据维兜底全放行」仅限 legacy（无新 claim 段的旧 claims 双氧期）——W4 消费侧切走后必须移除；任何挂组缺失（JIT 建户未挂组/组同步器失败/唯一组被删/组接口超时）→ 该用户门店范围为空集，**不进全放**，这与「门店未登记 → 单门店 fail-close 不可见」互补覆盖「用户无组」侧。
+6. **空集 = deny 铁律（B1）**：claims 含 `data_scope`/`groups` 段但值为空 = 授权确定为 ∅ = deny，**不收敛 `["*"]`**。08-15「空数组 → `["*"]` 数据维兜底全放行」仅限 legacy（无新 claim 段的旧 claims 双氧期）——W4 消费侧切走后必须移除；任何范围资源缺失（2026-08-18 起：未挂 `范围|X` 资源 / 范围键解析失败）→ 该用户门店范围为空集，**不进全放**（fail-close），这与「门店未登记 → 单门店 fail-close 不可见」互补覆盖「用户无门店授权」侧。原「挂组缺失」表述（组同步器失败/唯一组被删/组接口超时）为 08-16 组织架构推导时代语义，2026-08-18 废除后不再适用。
   - **★enforce 机制（redteam-lite M1 补封，上轮 BLOCKER C1 的机制复发点）**：`claim_match_or_star`（072 L161-177）**空数组/NULL 即放行**、现有 RLS 全经它读顶层旧 key、114 只扁平顶层 → 空集 deny 不能靠这两者执行。两处闭口联合钉死：
     ① **RLS 策略分支（推荐）**：新 RLS 判定函数先看 `request.jwt.claims.data_scope` 形状——存在（非 NULL；114 会按顶层对象扁平 data_scope，RLS 可 `::jsonb ->>'branch_nums'` 定位、以 IS NOT NULL 区分新旧 claims）→ 读 data_scope 各维（**空段 = deny**）；缺失 → 回退 legacy 顶层 key（走 claim_match_or_star）。分支本身即新旧 claims 的**形状鉴别器**，与 072 语义天然隔离；W4 切走只需删回退支。
     ② 备选哨兵方案：新 claims 顶层旧 key 写非空非 `"*"` 哨兵 `["__none__"]`（072 对非 `"*"` 非空数组返回 false = deny）——但 W4 后需清哨兵值，不如策略分支干净。
@@ -64,7 +64,8 @@
 │  能力点  ：Permission(resources × actions) + resource 注册表     │
 │            （catalog 同步注入 → getAll-objects 动态发现）          │
 │  数据范围：resource 化静态枚举（brand/category/field）             │
-│            + Group 挂组表达动态门店                                │
+│            + `范围|X` 资源表达动态门店（2026-08-18 演进，           │
+│              废除 Group 挂组推导；无范围资源 = 空集 deny）          │
 │  审计    ：授权变更日志 / 门禁判定                                 │
 └────────────────────────────────────────────────────────────────┘
         │ OIDC claims: sub / org / roles / groups / permissions /
@@ -175,11 +176,12 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
 |---|---|---|---|
 | 品牌（3120/64188） | resource `brand:*` | casbin（web 层）→ claims | 本地 data_permissions.brands |
 | 品类（3 值） | resource `category:*` | casbin → claims | 本地 data_permissions.categories |
-| 门店（~250 动态） | **Group tree 叶子**（用户挂组） | `groups` claim → PostgREST 行过滤 | 本地 data_permissions.branch_nums |
+| 门店（~250 动态） | **`范围|X` 资源**（permission.resources，2026-08-18 演进） | `expandScopeResources` → `data_scope.branch_nums` → RLS 行过滤 | 本地 data_permissions.branch_nums |
 | 敏感字段 | resource `field:<slug>` | casbin → claims → 列掩码 | 本地 data_permissions.can_see_cost |
 | 临时例外 | app `temporary_grants` | 登录保证 / 例外表 RT 判定 | 无（四维合并件） |
 
 - **不 resource 化门店的理由**（钉死）：policy 行数 = 门店数 × 授权组合数，每开新店要 add-resource + 重挂权限——resource 表达的是"能力点"，门店是"过滤值"，两者语义不同（08-15 已论证 casbin 无 policy→SQL）。
+  - **2026-08-18 演进（用户裁定）：本段被取代**——门店不再按「逐店逐组合」建 policy，而是把**粗粒度范围键**（`范围|全店` / 战区包名 / `branch_number` / 门店中文名）作为资源直接挂 permission.resources，登录时经 `expandScopeResources`（读 maps + dim_branch）展开成门店集。范围键数量 = O(授权组合数) 而非 O(门店数 × 组合)，原始「policy 行数 = 门店数 × 授权组合数」顾虑不成立；`范围|X` 进 `data-analysis:branch:X` 归一（claims.js `normalizeFriendlyPerm`），无范围资源 = `branch_nums: []` = B1 空集 deny（fail-close，组织架构推导废除）。
 - **例外表语义**：`temporary_grants(user_id, dim, value, expires_at, note)`——IAM 无到期语义（Casdoor 角色无过期），这是 app 侧唯一授权数据；授权中心 UI 维护。
   - **不走 JWT 折叠（B5，废除 rev1 的「折叠进 claims exp min(7d, grant)」）**：例外是风险最高通道且行数极少，实查段做 **5min 缓存实查 temporary_grants**（命名钉死 = TTL 缓存，非每请求 DB 查询）——撤销 ≤5min 生效（健康态），贴合「例外在 app 侧」定位。
     - **三处粒度统一（redteam-lite M3）**：正文「即刻生效」/ 测试「≤5min」/ 降级「24h stale」口径冲突 → 统一为「**健康态撤销 ≤5min 生效；降级态（Casdoor 不可达）沿用裁决-1 24h stale 上限**」。temporary_grants 是**本地表**，裁决-1 的「24h stale」是为远端实查设计的——**本地查的降级 = DB 不可达 → fail-close（等同无例外，见错误处理表），不产生 24h 窗口**。
@@ -190,6 +192,8 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
 - **data_permissions sunset**：迁移窗口内表保留（回滚保险）；**DB 级写入口关闭**（H9）：迁移级 `REVOKE`（refresh RPC、/api/admin/permissions 等全部写者）或 `BEFORE INSERT/UPDATE` 触发器禁写 + **直写注入测试（红转绿才放行）**——管理页只读仅是 UX 层表现，不等于单写者；U2 后按 sun set 删除（含 167 的 role/dept 行读路径删除）。**保留迁移 167 可回滚**。
 
 ### 5.3 组织架构 Group tree（对 08-15 §架构③ 的演进，新组件）
+
+> **2026-08-18 演进（用户裁定）**：本节 Group tree 定位收缩为**组织目录**（企微部门树复刻 + 用户挂组 + 目录展示）——**不再推导门店数据范围**。门店数据范围唯一真相 = `范围|X` 资源（§5.2，`expandScopeResources` 展开）；下方「组类型三态展开 / groups 叶子展开」原为数据范围推导语义，已废除，保留仅作目录形态描述。
 
 - 树结构：org（shanhai）下多棵 Group 根（部门树 / 区域-门店树）；树深示意：
   ```
@@ -230,7 +234,7 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
                                                    //   禁中文 label 进判定，label 仅展示；改名不断链）
   "data_scope": {                                     // ★新增：由 resource 判定 + groups 派生
     "brands": ["3120"], "categories": ["水果"],
-    "branch_nums": ["3120-001", "3120-002"]           // 来自 groups 叶子展开
+    "branch_nums": ["3120-001", "3120-002"]           // 来自 范围|X 资源展开（2026-08-18 废除 groups 叶子展开/组织架构推导）
     // ★空值语义（B1）：本段存在但值为空数组 = authorized ∅（deny），不收敛 ["*"]，不进全放
   },
   "fields": { "cost": true },                          // ★新增：掩码开关
@@ -249,7 +253,7 @@ push:broadcast / push:configure       # 推送广播/配置（08-15 裸 key，�
 }
 ```
 
-- 构建方：登录 function（08-15 已有 claims 构建器）→ 增加"Group 挂载读取 + resource 判定枚举 + 门店叶子展开"三段。
+- 构建方：登录 function（08-15 已有 claims 构建器）→ 三段 = 原生 token groups + get-all-objects 可达对象 + `范围|X` 资源展开（2026-08-18 演进：门店叶子展开原为 groups → maps 推导，已废除；现 `expandScopeResources` 读 maps+dim_branch，无范围资源 = `branch_nums: []` = 空集 deny）。
   - **Group 读取勘误（F4）**：Casdoor 原生配置 `useGroupPathInToken` 后**原生 OIDC token 自带 groups 全路径 claim**（token_jwt.go:516），解析它即可；「get-user-groups」路由不存在，**不得调用**——或用 get-account 读 `user.Groups`。
   - Casdoor `get-all-objects` 一次取全部可达对象（policy 侧，`permission_enforcer.go`），映射成 `data-analysis:*` 子集；**资源同步状态/辅助页 synced 用的是 `get-resources`（注册表侧）——两 API 语义不同，勘误钉死**（F11）。
   - 三段任一步失败 → **本次登录不产出门店范围（deny）或登录整体失败；禁止以空数组继续走 claims**（C2）。
@@ -318,7 +322,8 @@ Casdoor OIDC → callback → 拉 roles(get-user) + 组读取(原生 token group
   或 get-account 读 user.Groups)
   + 拉可达对象(get-all-objects → 过滤 data-analysis:* 子集 → permissions 平铺；
     push:* 保留裸 key，H4)
-  + 门店叶子展开(groups → maps_branch_group → branch_nums；区域组=子孙叶子并集)
+  + 门店范围展开(`范围|X` 资源 → expandScopeResources(resolveScopeKeys 读 maps+dim_branch) → branch_nums；
+    2026-08-18 废除 groups→maps 组织架构推导；无范围资源 = branch_nums: [] = 空集 deny)
   → 三段任一失败 = 本次登录不产出门店范围(deny)或登录整体失败，禁空数组继续走 claims(C2)
   → 写穿镜像(role_codes/groups 投影, 只读消费) → 自签 JWT(catalog_v 版本戳)
   → claims → middleware / requireAdmin / PostgREST(行过滤+列掩码)

@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // scripts/migrate-store-scope.mjs
-// 2026-08-18 门店范围显式授权（P2）：存量迁移 + 例外合并 + 全量比对报表。
+// ⚠ 2026-08-18 已废弃（用户裁定）：本脚本生成「一个数据范围 = 一个 scope-<user> permission」，
+//   与最终形态（范围|X 资源直接挂现有 permission.resources）相悖。scope-<user> 已由管理员删除。
+//   保留仅作存量对账/历史参考，勿再 --apply。
+//
+// 2026-08-18 门店范围显式授权（P2）：存量迁移 + 例外合并 + 全量比对报表（历史实现，已废弃）。
 //
 // 做什么：
 //   1. 遍历 Casdoor org 用户，按【旧逻辑】（token groups + maps_branch_group）算当前生效 branch 集

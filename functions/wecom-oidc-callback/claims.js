@@ -1,5 +1,7 @@
 // functions/wecom-oidc-callback/claims.js
-// claims 构建器（spec §5.4，W3 变更集）——三段：原生 token groups / get-all-objects 可达对象 / 门店叶子展开。
+// claims 构建器（spec §5.4，W3 变更集）——三段：原生 token groups / get-all-objects 可达对象 / 范围资源展开。
+// 门店范围唯一真相 = 范围|X 资源（2026-08-18 用户裁定）：expandScopeResources → resolveScopeKeys 展开；
+// 组织架构推导（企微部门组 → maps）已废除（resolveGroupBranches 已删），无范围资源 = 空集 deny（B1）。
 // 模块形态：InsForge 运行时为 CommonJS（function.json runtime=commonjs），index.js require 消费，
 //   由 esbuild --bundle --format=cjs 内联进部署单文件（与 _shared 同款机制）。
 // 铁律：
@@ -60,7 +62,7 @@ function buildClaims(ctx) {
   };
 }
 
-module.exports = { buildClaims, collapseFullStore, resolveGroupBranches };
+module.exports = { buildClaims, collapseFullStore, resolveScopeKeys };
 
 // 展示名（组|label）→ 能力 key 内置映射（2026-08-17 加组前缀；与 capability-catalog.ts + capability-board.ts
 // 单真相同步）：Casdoor 下拉框现在显示 `组|label`（如「看板|经营总览」），管理员选中写进
@@ -123,38 +125,7 @@ function normalizeFriendlyPerm(value) {
   return FRIENDLY_TO_KEY[value] ?? value;
 }
 
-module.exports = { buildClaims, collapseFullStore, resolveGroupBranches, resolveScopeKeys, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE, matchRolePermissions };
-
-// 组→门店集解析（2026-08-17 组树迁移企微部门树，用户裁定「组织架构严格按企微」）：
-//   新形态（部门组）：maps 行 group_id=部门名 × branch_number 多行——部门→门店集映射
-//   （战区/区部门→辖区门店多行；职能部门→全店 388 行）。任一命中行即贡献，group_type 不再区分。
-//   旧形态回退（门店组过渡兼容）：迁移窗口内旧挂组（熊喵/品品甜根、熊喵-3120-xxxx 门店组）经
-//   store 前缀展开继续工作——两条路径共存直至旧组树删除。
-//   组存在但 maps 无行 → 二分：①部门树（org_departments）里存在 = 合法空辖区部门（企微树超前
-//   于 dim 数据，如南部五区建区未配店，2026-08-17 生产实况）——贡献空集不阻断；②否则未知组
-//   fail-close（C2 禁半可达；部门同步器灌组须同步灌 maps）。
-function resolveGroupBranches(groupPaths, maps, knownDepts) {
-  const deptSet = knownDepts instanceof Set ? knownDepts : null;
-  const results = new Set();
-  for (const path of groupPaths ?? []) {
-    const g = String(path).split('/').pop();                     // 全路径 'shanhai/部门名' → 组名
-    const rows = (maps ?? []).filter((m) => m.group_id === g && m.branch_number);
-    if (rows.length > 0) {
-      for (const m of rows) results.add(m.branch_number);        // 部门组多行映射
-      continue;
-    }
-    const asRegion = (maps ?? []).some((m) => m.group_type === 'store' && m.group_id.startsWith(g + '-'));
-    if (asRegion) {
-      for (const m of maps) {
-        if (m.group_type === 'store' && m.group_id.startsWith(g + '-') && m.branch_number) results.add(m.branch_number);
-      }
-      continue;
-    }
-    if (deptSet && deptSet.has(g)) continue;                     // 合法空辖区（企微树有 dim 无店）——贡献空集
-    return { branch_nums: [], ok: false, error: `unknown group: ${g}` };   // fail-close（H13 未知组）
-  }
-  return { branch_nums: [...results].sort(), ok: true };
-}
+module.exports = { buildClaims, collapseFullStore, resolveScopeKeys, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE, matchRolePermissions };
 
 // 范围资源键 → 门店集解析（2026-08-18 门店范围显式授权，纯函数供测试）：
 //   键形态：'*' 通配 | 包名（maps.group_id，dept 多行）| branch_number（3120-0006）| 门店中文名（dim_branch.branch_name 唯一命中）
