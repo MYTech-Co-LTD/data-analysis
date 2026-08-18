@@ -87,7 +87,7 @@ index.js 的 `fetchRolePermissions` 复用该纯函数（`matchRolePermissions` 
 
 ### 3.4 数据流下游零改动
 
-`reachable`（角色链结果）→ `normalizeFriendlyPerm` → `withCoverage` → permissions/data_scope/fields、门店范围展开（`expandScopeResources` / `expandGroupsToBranches`）、`buildClaims` 纯函数、RLS —— **全部不变**。`claims.test.js` 是纯函数测试（reachable 为输入参数），基本不受影响。
+`reachable`（角色链结果）→ `normalizeFriendlyPerm` → `withCoverage` → permissions/data_scope/fields、门店范围展开（**`expandScopeResources` 唯一通道——2026-08-18 废除组织架构推导，`expandGroupsToBranches` 已删除**，无范围资源 = 空集 deny）、`buildClaims` 纯函数、RLS —— **全部不变**。`claims.test.js` 是纯函数测试（reachable 为输入参数），基本不受影响。
 
 ## 4. 配套数据清理（一次性写 Casdoor）
 
