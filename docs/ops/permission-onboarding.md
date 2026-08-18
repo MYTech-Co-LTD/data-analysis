@@ -18,7 +18,7 @@ buyer ────────  role-buyer   （不含成本）
 ```
 
 - 一共 **5 个固定角色**，一角色对应一权限。**人挂到角色下 = 自动获得该角色的全部权限**。
-- **能看哪个门店不用配**：人属于哪个部门组（企微同步自动来的），就能看那个范围；
+- **门店范围要显式配（2026-08-18 起，废除组织架构推导）**：在该用户的 Casdoor permission Resources 加 `范围|全店` / `范围|战区包名` / `范围|branch_number` / `范围|门店中文名`；**没配 = 空集 deny**（看不到任何门店数据，fail-close）。不再从部门组自动推导。
   特殊放开/收窄才走「例外」（第六节）。
 - 角色/权限**初始化时已建好**，日常大多是**给人调角色**（第三节）和**改某角色能看什么**（第四节）。
 
@@ -79,7 +79,7 @@ buyer ────────  role-buyer   （不含成本）
 | Casdoor 权限页整页空白 | 有人用接口单独改过权限（如只改启用）把其他设置清空 | 改权限永远整表单保存（第四节）；已清空的权限删掉重建 |
 | 员工加不进 Casdoor（outbox 报错） | 企微工号含点号等特殊字符（如 `YiBeiMeiShi.`），Casdoor 拒绝建户 | 企微侧修正 userid → 重新同步自动重试 |
 | 员工没自动挂上角色 | 角色名拼写与模板不一致（自动同步按名写） | 角色名必须照第一节五个名字逐字一致 |
-| 门店不对 / 成本列空了 | 门店=部门组挂载；成本=角色档位 | 按第五节验证，定位是哪层再补 |
+| 门店不对 / 成本列空了 | **门店=没挂 `范围\|X` 资源（无范围资源=空集 deny，2026-08-18 起不再从部门组推导）**；成本=角色档位 | 按第五节验证：查该用户 permission Resources 是否含 `范围\|X`；成本查角色档位，缺哪补哪 |
 
 ---
 
@@ -94,8 +94,11 @@ buyer ────────  role-buyer   （不含成本）
 | KPI 卡 | `view-kpi:sale` `view-kpi:delivery` `view-kpi:outbound_amt` `view-kpi:outbound_profit` `view-kpi:delivery_sale_ratio` `view-kpi:outbound_margin` 6 个 | 指标卡 |
 | 品牌 | `brand:3120` `brand:64188` 2 个 | 两个品牌（熊喵/品品甜） |
 | 品类 | `category:水果` `category:标品` `category:耗材` 3 个 | 三个品类 |
+| 门店范围 | `范围\|全店` / `范围\|战区包名` / `范围\|branch_number` / `范围\|门店中文名` | **必配（2026-08-18 起，废除组织架构推导）**；没配 = 空集 deny。包名=maps 组名（如 东部战区），可多值 |
 
 **full 档**（boss / zone_manager / finance）＝ 基本套餐 **+ `field:cost`**（成本字段，sensitive）。
+
+> 前缀统一 `data-analysis:`（`范围|X` 经 claims 归一为 `data-analysis:branch:X`，勾选时按上述中文原样勾）。
 
 > 前缀统一 `data-analysis:`，勾选时按上面的 key 值原样勾。
 > 管理台（`data-analysis:admin`）不随角色走，需谁进管理台单独授。

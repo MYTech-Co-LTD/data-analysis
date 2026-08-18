@@ -122,7 +122,7 @@ export const DISPLAY_NAME_TO_KEY: ReadonlyMap<string, string>
 
 - 不做双格式兼容（迁移窗口不兼容旧通俗名，一次性窗口处理）
 - 不改前端能力页展示（纯 label 已够，有组列）
-- 不 resource 化门店（既有决策，与此无关）
+- 不 resource 化门店（既有决策，与此无关；**2026-08-18 演进：已被「门店范围 = `范围|X` 粗粒度键 resource 化」取代**——详见 08-16 spec §5.2 演进标注）
 - 不处理 DEPRECATED 11 个 key 的存量 resource（废弃不注册，DB 中残留不影响下拉框主列表？——见下）
 
 ## 遗留问题：DEPRECATED 残留 resource

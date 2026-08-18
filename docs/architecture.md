@@ -598,7 +598,7 @@ spec：`docs/superpowers/specs/2026-07-11-report-trigger-timed-apps-design.md`�
 > ```
 >
 > - **身份+帽子层（Casdoor 统一）**：Casdoor（`sso.shanhaiyiguo.com`，控制面独立部署）持有企微 WeCom provider，负责"这人是谁（`wecom_id`）+ SSO 会话 + 人→角色（帽子）+ 角色×功能授权（casbin Permission）"。后续每接一个系统只需在 Casdoor 注册一个 OIDC client，不重复对接企微 API。
-> - **座位层（2026-08-16 中心化）**：组织架构单一真相源 = **Casdoor Group tree**（部门树 + 区域-门店树，§7.1.2 组同步器两通道）；本地 `org_departments`/`org_users` 降级**只读缓存投影**。门店挂组三态展开（门店叶子直映 / 区域组=子孙叶子并集 / 部门组不参与 branch 展开），`groups` claim 带完整路径精确数组（禁中文 label 进判定）。
+> - **座位层（2026-08-16 中心化；2026-08-18 定位收缩）**：组织架构单一真相源 = **Casdoor Group tree**（部门树，§7.1.2 组同步器）；本地 `org_departments`/`org_users` 降级**只读缓存投影**。**本节定位 = 组织目录**（谁在哪个部门，目录/审计用途）——**不再推导门店数据范围**（2026-08-18 废除组织架构推导；门店范围唯一真相 = `范围|X` 资源，见口径层）。`groups` claim 带完整路径精确数组（禁中文 label 进判定）。
 > - **口径层（2026-08-16 三分流）**：静态枚举（品牌/品类/字段）→ Casdoor resource；动态门店（~250）→ Group tree 挂组表达（**不 resource 化门店**：门店是"过滤值"非"能力点"，policy 行数=门店数×授权组合数）；临时例外 → app `temporary_grants`（RT 实查，不折叠进 claims，§6.5）。`data_permissions` 目标 **sunset**（W5 DB 级写关闭、W6 删表；双氧期保留作回滚保险）。`get_user_perms` 按 `PERMS_INPUT=casdoor|legacy` 感知输入源（casdoor 模式读 `org_users.role_codes` 镜像；legacy 模式按 `role_id` 折 code），结果**自签 PostgREST JWT**（`JWT_SECRET` / RLS 策略 / pgrst_pre_request 执行点不变；claims 结构 W3 扩 `groups`/`data_scope`/`fields`/`catalog_v` 新段 + 顶层旧 key 双氧保留至 W6，§6.2）。
 > - **Casdoor 单点口径（裁决-2，SLO 化）**：Casdoor 故障时**存量会话零影响**（数据面/引擎不依赖 Casdoor）+ **新登录恢复 <2-4h**（SLO 化而非热备）+ **page 告警**；break-glass 凭证 best-effort 并行验证，通过后升冷备。
 
@@ -711,7 +711,7 @@ PostgreSQL RLS 策略（执行点机制不变；W3 起新增策略分支，见�
 
 ### 6.4 casbin 功能授权层与能力点 catalog 与动态发现（2026-08-15 新增；2026-08-16 IAM 标准化扩展）
 
-**功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1）。数据授权目标态 = **三分流**（静态枚举→resource / 门店→Group 挂组 / 例外→temporary_grants，§6.0/§6.5）；`data_permissions` 双氧期保留、W6 sunset（§6.2）——casbin 是单次判定引擎、无 policy→SQL，**门店（过滤值）不 resource 化**（policy 行数=门店数×授权组合数，每开新店要 add-resource + 重挂权限）。
+**功能授权（能做什么）与数据授权（能看哪些行/列）分家**：功能授权进 Casdoor casbin Permission（帽子层，§6.1）。数据授权目标态 = **三分流**（静态枚举→resource / **门店→`范围|X` 资源**（2026-08-18 演进，废除 Group 挂组推导） / 例外→temporary_grants，§6.0/§6.5）；`data_permissions` 双氧期保留、W6 sunset（§6.2）——casbin 是单次判定引擎、无 policy→SQL。**门店范围 resource 化 = `范围|X` 粗粒度键**（`范围|全店`/战区包名/单店编号/门店名）挂 permission.resources，登录经 `expandScopeResources`（读 maps + dim_branch）展开成门店集——范围键数量 O(授权组合数) 而非 O(门店数×组合)，不逐店建 policy（原「不 resource 化门店」顾虑据此不成立，08-16 spec §5.2 有演进标注）。
 
 - **资源三段式**：`data-analysis:<模块>:<动作>`（如 `data-analysis:admin`、`push:configure`、`push:broadcast`、`push:audit`）；角色×功能资源在 Casdoor UI 配；人→角色 = Casdoor UI 人工（manual）+ 薄同步 auto（§6.1 单写者）。
 - **checkFeaturePerm 单模块**：`web/lib/feature-perm.ts` 单函数收口所有功能门禁（禁散落 `userid === '...'` 硬编码）——P0a 读 claims + BREAKGLASS；U2 后读 claims + casbin 实查。切 casbin 是 1 处切换，非 N 处 hunt-and-replace。
