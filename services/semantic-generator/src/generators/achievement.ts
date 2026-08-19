@@ -14,7 +14,8 @@ function injectPerm(sql: string): string {
   return sql
     // {{perm_full:d:w}} -> COALESCE 双侧 perm 过滤（FULL JOIN 场景）
     .replace(/\{\{perm_full:([a-z]+):([a-z]+)\}\}/g, (_, a: string, b: string) => permFilterFullJoin(a, b))
-    // {{perm_skip:w}} -> 仅 brands 过滤（wholesale_customer 无 branch_num 列）
+    // {{perm_skip:w}} -> 仅 brands 过滤（历史注释：wholesale_customer 无 branch_num 列——已过时，
+    // 107 起有该列且 2026-08-19 起配置已改用 {{perm:w}}；保留替换器仅为兼容旧配置）
     .replace(/\{\{perm_skip:([a-z]+)\}\}/g, (_, alias: string) => permFilterFact(alias, true))
     // {{perm:r}} -> brands + branch_nums 双维度过滤
     .replace(/\{\{perm:([a-z]+)\}\}/g, (_, alias: string) => permFilterFact(alias, false));

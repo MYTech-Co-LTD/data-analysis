@@ -26,7 +26,7 @@ delivery AS MATERIALIZED (
       SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w
       WHERE w.system_book_code = '64188' AND w.biz_date BETWEEN t.start_date AND t.end_date
         AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))
-        AND scope_match_v2('brands', w.system_book_code)
+        AND scope_match_v2('brands', w.system_book_code) AND (scope_match_v2('branch_nums', w.branch_num::text) OR scope_match_v2('branch_nums', w.system_book_code || '-' || w.branch_num))
     ), 0) AS actual_value,
   count(DISTINCT d.biz_date) AS days
 FROM targets t
