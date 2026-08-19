@@ -86,12 +86,12 @@ SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_a
        WHEN branch_scope_limited() AND md.metric_code = 'outbound_amt' THEN mv.target_value
        WHEN branch_scope_limited() AND md.metric_code = 'outbound_profit' THEN mv.target_value
        ELSE mv.target_value END AS target_value,
-  CASE WHEN t.status = 'closed' THEN sn.actual_value
+  CASE WHEN t.status = 'closed' AND NOT branch_scope_limited() THEN sn.actual_value
        WHEN md.metric_code = 'sale' AND md.data_ready THEN sale.actual_value
        WHEN md.metric_code = 'delivery' AND md.data_ready THEN delivery.actual_value
        WHEN md.metric_code = 'outbound_amt' AND md.data_ready THEN outbound_amt.actual_value
        WHEN md.metric_code = 'outbound_profit' AND md.data_ready THEN outbound_profit.actual_value END AS actual_value,
-  CASE WHEN t.status = 'closed' THEN sn.data_status
+  CASE WHEN t.status = 'closed' AND NOT branch_scope_limited() THEN sn.data_status
        WHEN md.metric_code = 'sale' AND md.data_ready THEN
          CASE WHEN sale.days = 0 THEN 'missing' WHEN sale.days < t.total_days THEN 'partial' ELSE 'complete' END
        WHEN md.metric_code = 'delivery' AND md.data_ready THEN
@@ -101,7 +101,7 @@ SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_a
        WHEN md.metric_code = 'outbound_profit' AND md.data_ready THEN
          CASE WHEN outbound_profit.days = 0 THEN 'missing' WHEN outbound_profit.days < t.total_days THEN 'partial' ELSE 'complete' END ELSE 'not_ready' END AS data_status,
   t.total_days, t.days_elapsed,
-  CASE WHEN mv.target_value > 0 AND t.status = 'closed' THEN sn.achievement_rate
+  CASE WHEN mv.target_value > 0 AND t.status = 'closed' AND NOT branch_scope_limited() THEN sn.achievement_rate
        WHEN COALESCE(scoped_tgt.sale, mv.target_value) > 0 AND md.metric_code = 'sale' AND md.data_ready AND sale.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN ('sale', 'delivery')) THEN round((sale.actual_value / COALESCE(scoped_tgt.sale, mv.target_value))::numeric, 4)
        WHEN COALESCE(scoped_tgt.delivery, mv.target_value) > 0 AND md.metric_code = 'delivery' AND md.data_ready AND delivery.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN ('sale', 'delivery')) THEN round((delivery.actual_value / COALESCE(scoped_tgt.delivery, mv.target_value))::numeric, 4)
        WHEN mv.target_value > 0 AND md.metric_code = 'outbound_amt' AND md.data_ready AND outbound_amt.actual_value IS NOT NULL AND (NOT branch_scope_limited() OR md.metric_code IN ('sale', 'delivery')) THEN round((outbound_amt.actual_value / mv.target_value)::numeric, 4)

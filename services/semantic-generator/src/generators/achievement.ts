@@ -73,6 +73,10 @@ export function generateAchievementView(config: AchievementViewConfig): string {
       `       WHEN branch_scope_limited() AND md.metric_code = '${code}' THEN ${tgtExpr(code)}`)
     .join('\n')}\n       ELSE mv.target_value END`;
 
+  // 2026-08-19 方案 B（用户裁定）：closed 目标快照仅全店用户读（定格语义）；受限用户落回 live 重算
+  // （RLS 裁剪 + 194 语义），否则列表页/历史目标看到全店口径失真完成率。
+  const snapGuard = `t.status = 'closed' AND NOT branch_scope_limited()`;
+
   return `DROP VIEW IF EXISTS ${view_name} CASCADE;
 CREATE VIEW ${view_name} AS
 WITH ${withList.join(',\n')}
@@ -81,12 +85,12 @@ SELECT t.id AS target_id, t.name, t.status, t.start_date, t.end_date, t.closed_a
   t.breakdown_level, t.war_zone, t.region_l2,
   b.branch_name, b.first_level_region AS war_zone_dim, b.second_level_region AS region_l2_dim, b.region_name, b.city,
   mv.metric_code, md.name AS metric_name, md.unit, md.data_ready, ${targetValueCase} AS target_value,
-  CASE WHEN t.status = 'closed' THEN sn.actual_value
+  CASE WHEN ${snapGuard} THEN sn.actual_value
 ${actualCases.join('\n')} END AS actual_value,
-  CASE WHEN t.status = 'closed' THEN sn.data_status
+  CASE WHEN ${snapGuard} THEN sn.data_status
 ${dataStatusCases.join('\n')} ELSE 'not_ready' END AS data_status,
   t.total_days, t.days_elapsed,
-  CASE WHEN mv.target_value > 0 AND t.status = 'closed' THEN sn.achievement_rate
+  CASE WHEN mv.target_value > 0 AND ${snapGuard} THEN sn.achievement_rate
 ${rateCases.join('\n')} END AS achievement_rate,
   CASE WHEN t.total_days > 0 THEN round(t.days_elapsed::numeric / t.total_days, 4) ELSE NULL END AS progress_rate
 FROM tgt t
