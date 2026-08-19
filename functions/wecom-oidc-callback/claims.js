@@ -84,7 +84,10 @@ const FRIENDLY_TO_KEY = {
   '看板|指标概览': 'data-analysis:view-board:kpi',
   '看板|品牌×指标': 'data-analysis:view-board:brand',
   '看板|门店战区': 'data-analysis:view-board:region',
-  '看板|商品 TOP': 'data-analysis:view-board:item-top',
+  '看板|商品TOP·销售': 'data-analysis:view-board:item-top-sale',
+  '看板|商品TOP·出库': 'data-analysis:view-board:item-top-outbound',
+  // 旧名兼容（2026-08-19 拆分前存量授权）→ 归并到销售；存量已批量更新为新双键，此行仅兑底
+  '看板|商品 TOP': 'data-analysis:view-board:item-top-sale',
   '看板|类别出库': 'data-analysis:view-board:category',
   '看板|供应链出库': 'data-analysis:view-board:supply-chain',
   '看板|外部批发': 'data-analysis:view-board:wholesale',
@@ -103,7 +106,8 @@ const FRIENDLY_TO_KEY = {
 const BOARD_VIEW_COVERAGE = {
   'data-analysis:view-board:brand': ['data-analysis:view:report_brand_metric_gen'],
   'data-analysis:view-board:region': ['data-analysis:view:report_region_breakdown_gen'],
-  'data-analysis:view-board:item-top': ['data-analysis:view:report_item_breakdown_gen'],
+  'data-analysis:view-board:item-top-sale': ['data-analysis:view:report_item_breakdown_gen'],
+  'data-analysis:view-board:item-top-outbound': ['data-analysis:view:report_item_breakdown_gen'],
   'data-analysis:view-board:category': ['data-analysis:view:report_category_summary_gen'],
   'data-analysis:view-board:supply-chain': ['data-analysis:view:report_supply_chain_outbound_gen'],
   'data-analysis:view-board:wholesale': [

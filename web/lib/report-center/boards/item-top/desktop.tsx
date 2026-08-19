@@ -2,8 +2,8 @@
 
 // web/lib/report-center/boards/item-top/desktop.tsx
 // 商品 TOP 板块渲染适配器：复用 components/report-center/item-top-boards（不重写）。
-// 销售/出库共用 useItemDayBoards 日榜 day state（与旧 desktop/mobile.tsx 一致）；
-// serverGet 把 ItemBreakdownResult 包成 GetterResult rows[0]，这里解回原对象。
+// 2026-08-19 拆分（用户裁定）：销售/出库两个独立看板（各自能力 key 可单独配置）。
+// 两个看板各自调 useItemDayBoards（同一 RPC 取数幂等，React 缓存去重；day state 各自独立）。
 import {
   OutboundTopBoards,
   SaleTopBoards,
@@ -29,46 +29,31 @@ function emptyItemTop(): ItemBreakdownResult {
   };
 }
 
-export function ItemTopBoard({
+function ItemTopSaleBoard({
   result,
   target,
   targetId,
   isMobile,
 }: BoardProps<ItemBreakdownResult>) {
-  // 正常路径 rows[0] = getItemBreakdownTop 原结果（含 status/error）；rejected 兜底走 M10 空板。
   const itemTop = result.rows[0] ?? emptyItemTop();
-  // 日榜 day state（销售/出库共用，切日并行请求两 metric）
-  const { day, saleDay, outboundDay, onDayChange, busy } = useItemDayBoards(
+  // 拆分后销售看板只用 saleDay（useItemDayBoards 同签名保留出库位，渲染不消费）
+  const { day, saleDay, onDayChange, busy } = useItemDayBoards(
     targetId,
     itemTop.defaultDay,
     itemTop.saleDay,
     itemTop.outboundDay,
   );
-  const startDate = target.start_date;
-  const endDate = target.end_date;
   const boards = (
-    <>
-      <SaleTopBoards
-        result={itemTop}
-        dayBoard={saleDay}
-        day={day}
-        onDayChange={onDayChange}
-        busy={busy}
-        startDate={startDate}
-        endDate={endDate}
-        targetId={targetId}
-      />
-      <OutboundTopBoards
-        result={itemTop}
-        dayBoard={outboundDay}
-        day={day}
-        onDayChange={onDayChange}
-        busy={busy}
-        startDate={startDate}
-        endDate={endDate}
-        targetId={targetId}
-      />
-    </>
+    <SaleTopBoards
+      result={itemTop}
+      dayBoard={saleDay}
+      day={day}
+      onDayChange={onDayChange}
+      busy={busy}
+      startDate={target.start_date}
+      endDate={target.end_date}
+      targetId={targetId}
+    />
   );
   return isMobile ? (
     <div className="space-y-4">{boards}</div>
@@ -76,3 +61,38 @@ export function ItemTopBoard({
     <div className="space-y-5 md:col-span-2">{boards}</div>
   );
 }
+
+function ItemTopOutboundBoard({
+  result,
+  target,
+  targetId,
+  isMobile,
+}: BoardProps<ItemBreakdownResult>) {
+  const itemTop = result.rows[0] ?? emptyItemTop();
+  // 出库看板只用 outboundDay
+  const { day, outboundDay, onDayChange, busy } = useItemDayBoards(
+    targetId,
+    itemTop.defaultDay,
+    itemTop.saleDay,
+    itemTop.outboundDay,
+  );
+  const boards = (
+    <OutboundTopBoards
+      result={itemTop}
+      dayBoard={outboundDay}
+      day={day}
+      onDayChange={onDayChange}
+      busy={busy}
+      startDate={target.start_date}
+      endDate={target.end_date}
+      targetId={targetId}
+    />
+  );
+  return isMobile ? (
+    <div className="space-y-4">{boards}</div>
+  ) : (
+    <div className="space-y-5 md:col-span-2">{boards}</div>
+  );
+}
+
+export { ItemTopSaleBoard, ItemTopOutboundBoard };

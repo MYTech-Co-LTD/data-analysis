@@ -56,10 +56,17 @@ export const BOARD_CAPABILITIES: readonly BoardCapability[] = Object.freeze([
     view: ['report_region_breakdown_gen'],
   },
   {
-    key: 'data-analysis:view-board:item-top',
-    id: 'item-top',
-    name: '商品 TOP',
-    description: '商品维度 TOP 排行（销售/出库日榜）',
+    key: 'data-analysis:view-board:item-top-sale',
+    id: 'item-top-sale',
+    name: '商品 TOP·销售',
+    description: '商品销售 TOP 排行（月榜/日榜）',
+    view: ['report_item_breakdown_gen'],
+  },
+  {
+    key: 'data-analysis:view-board:item-top-outbound',
+    id: 'item-top-outbound',
+    name: '商品 TOP·出库',
+    description: '商品出库 TOP 排行（月榜/日榜，含出库毛利）',
     view: ['report_item_breakdown_gen'],
   },
   {
