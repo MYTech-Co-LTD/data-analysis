@@ -309,16 +309,11 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       const rendered = await renderVariables(
         enabledVars,
         async (code, perms, jwt) => {
-          // URL 型变量（S7：branch_nums 非空才渲染）
+          // URL 型变量（S7：branch_nums 非空才渲染；缺口 2：URL 只带 jwt 防超长被企微截断）
           if (code.endsWith('_url')) {
             if (!perms.data_scope?.branch_nums?.length) return null;
             const view = code.replace('_url', '');
-            const params = new URLSearchParams();
-            if (perms.data_scope?.brands?.length) params.set('brand', perms.data_scope.brands.join(','));
-            if (perms.data_scope?.branch_nums?.length) params.set('branch', perms.data_scope.branch_nums.join(','));
-            if (perms.data_scope?.categories?.length) params.set('category', perms.data_scope.categories.join(','));
-            params.set('jwt', jwt);
-            return `/report/${view}?${params.toString()}`;
+            return `/report/${view}?jwt=${encodeURIComponent(jwt)}`;
           }
           // 数值型 → 占位（实际由 Novu 模板渲染；M7 守卫在 live 拒投占位）
           return `{{${code}}}`;
