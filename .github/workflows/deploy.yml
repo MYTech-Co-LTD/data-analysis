@@ -112,7 +112,7 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: rsync 代码到服务器（migrate 所需：database/scripts/deploy）
+      - name: rsync 代码到服务器（migrate 所需：database/scripts/deploy + specs——迁移 spec 铁律在 migrate.sh 防御性复检需在场）
         run: |
           rsync -avz --delete \
             --exclude '.git' \
@@ -120,7 +120,7 @@ jobs:
             --exclude '.next' \
             --exclude '.env' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            ./database ./scripts ./deploy \
+            ./database ./scripts ./deploy ./docs/superpowers/specs \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
 
       - name: SSH 执行数据库迁移（起后端栈 + migrate + 刷 postgrest 缓存）
