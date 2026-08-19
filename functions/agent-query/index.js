@@ -348,7 +348,10 @@ module.exports = async function (req) {
   } catch (e) {
     return json({ error: "perm_resolve_failed", detail: String(e) }, 502);
   }
-  if (!perms || perms.error || !Array.isArray(perms.data_scope?.branch_nums)) {
+  // 异种 review #11：双形 fallback——旧形状（无 data_scope 段）也接受顶层 branch_nums，防 function-only
+  // 部署在迁移 200 前单独上线时全员 403（部署纪律窗口，runbook 标注）。
+  const branchNums = perms.data_scope?.branch_nums ?? perms.branch_nums;
+  if (!perms || perms.error || !Array.isArray(branchNums)) {
     return json({ error: "no_permission", detail: perms && perms.error }, 403);
   }
 

@@ -17,6 +17,6 @@ CREATE TABLE IF NOT EXISTS scope_resources_reconcile_history (
 CREATE INDEX IF NOT EXISTS idx_scope_resources_reconcile_history_date
   ON scope_resources_reconcile_history(date);
 
-GRANT SELECT ON scope_resources_reconcile_history TO anon, authenticated;
+GRANT SELECT, INSERT, UPDATE ON scope_resources_reconcile_history TO anon, authenticated;
 
 COMMIT;

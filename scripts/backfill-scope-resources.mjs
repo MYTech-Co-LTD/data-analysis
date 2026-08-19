@@ -8,15 +8,14 @@
 //   node backfill-scope-resources.mjs                 # dry-run：只打印计划（默认）
 //   node backfill-scope-resources.mjs --write         # 经 PostgREST PATCH 逐行写
 //
-// 语义（M5/M9/spec-forge）：
+// 语义（M5/M9/M3/spec-forge，含异种 review 修复）：
 //   - 角色链匹配（matchRolePermissions，与 claims.js 同语义：只取 permission.roles 命中用户角色码的
 //     resources 并集；直挂/groups 挂载排除）
 //   - 归一（normalizeFriendlyPerm 与 claims.js FRIENDLY_TO_KEY 同步对拍——claims.test.js 断言 catalog↔claims 一致，
 //     本内联表是同一来源的 .mjs 副本，改映射须同步 claims.js + capability-catalog）
 //   - 范围相关键过滤：data-analysis:branch:/brand:/category:/field: 前缀（裸 '*' 非投影键，M2）
-//   - M9 护栏：① org-wide get-permissions 空结果 → abort 不清库（仿 claims.js !isArray(reachable)→整体失败）；
-//     ② changed > 50% 活跃用户 → abort 熔断（防一次清全量）
-//   - 写时 fail-close：任一范围键 resolveScopeKeys 未知/歧义 → 该用户整单写 [] + 红区计数（M3）
+//   - M3 fail-close：branch 键经 maps/dim 校验，未知/歧义 → 整单 [] + red；未知键永不进投影（review #4/#5）
+//   - M9 护栏（两遍式 review #1）：① org-wide 空结果 → abort 不清库；② changed>50% 在写之前判定 → abort
 //   - 幂等：重复跑结果一致
 
 const MODE = process.argv.includes('--write') ? 'pgrst' : 'dry';
@@ -36,7 +35,6 @@ const FRIENDLY_TO_KEY = {
   '字段|成本可见': 'data-analysis:field:cost',
 };
 
-/** 展示名 → 归一化资源键：范围|X → data-analysis:branch:X（纯前缀）；其余经 FRIENDLY_TO_KEY；未命中原样返回 */
 function normalizeFriendlyPerm(value) {
   if (typeof value === 'string' && value.startsWith('范围|')) {
     return 'data-analysis:branch:' + value.slice('范围|'.length);
@@ -44,7 +42,6 @@ function normalizeFriendlyPerm(value) {
   return FRIENDLY_TO_KEY[value] ?? value;
 }
 
-/** 角色链匹配（与 claims.js matchRolePermissions 同语义）：roles 全路径 split('/').pop() 归一 */
 function matchRolePermissions(perms, myRoleCodes) {
   const mine = new Set((myRoleCodes ?? []).map((r) => String(r)));
   const out = new Set();
@@ -57,7 +54,6 @@ function matchRolePermissions(perms, myRoleCodes) {
   return [...out];
 }
 
-/** 范围相关键过滤（裸 '*' 非投影键，M2） */
 function scopeKeys(reachable) {
   return (reachable ?? [])
     .map((k) => normalizeFriendlyPerm(k))
@@ -66,6 +62,40 @@ function scopeKeys(reachable) {
       k.startsWith('data-analysis:brand:') ||
       k.startsWith('data-analysis:category:') ||
       k.startsWith('data-analysis:field:')));
+}
+
+/** M3 fail-close：branch 键解析校验（与 scope-expand.ts 同语义） */
+function resolveBranchKeys(branchKeys, maps, dims) {
+  if (branchKeys.length === 0) return { branch_nums: [], ok: true };
+  const mapsByGroup = new Map();
+  for (const m of maps) {
+    if (!m.group_id || !m.branch_number) continue;
+    if (!mapsByGroup.has(m.group_id)) mapsByGroup.set(m.group_id, []);
+    mapsByGroup.get(m.group_id).push(m.branch_number);
+  }
+  const branchNums = new Set(maps.map((m) => m.branch_number).filter(Boolean));
+  const byName = new Map();
+  for (const d of dims) {
+    if (!d.branch_name || !d.branch_number) continue;
+    if (!byName.has(d.branch_name)) byName.set(d.branch_name, []);
+    byName.get(d.branch_name).push(d.branch_number);
+  }
+  const results = new Set();
+  for (const raw of branchKeys) {
+    const key = String(raw);
+    if (key === '*' || key === '全店') return { branch_nums: ['*'], ok: true };
+    const pack = mapsByGroup.get(key);
+    if (pack) { for (const b of pack) results.add(b); continue; }
+    if (branchNums.has(key)) { results.add(key); continue; }
+    const named = byName.get(key);
+    if (named && named.length === 1) { results.add(named[0]); continue; }
+    return { branch_nums: [], ok: false }; // 未知/歧义 → fail-close
+  }
+  const universe = new Set(maps.map((m) => m.branch_number).filter(Boolean));
+  const uniq = [...results].sort();
+  const covered = uniq.length > 0 && universe.size > 0
+    && uniq.every((b) => universe.has(b)) && [...universe].every((b) => uniq.includes(b));
+  return { branch_nums: covered ? ['*'] : uniq, ok: true };
 }
 
 async function casdoorToken() {
@@ -96,7 +126,7 @@ async function getPermissions(token) {
 const H = { apikey: PGRST_KEY, Authorization: `Bearer ${PGRST_KEY}`, 'Content-Type': 'application/json' };
 
 async function getActiveUsers() {
-  const resp = await fetch(`${PGRST}/org_users?is_active=eq.true&select=wecom_id,role_codes`, { headers: H });
+  const resp = await fetch(`${PGRST}/org_users?is_active=eq.true&select=wecom_id,role_codes,scope_resources`, { headers: H });
   if (!resp.ok) throw new Error(`org_users ${resp.status}: ${await resp.text()}`);
   return resp.json();
 }
@@ -120,36 +150,52 @@ if (!Array.isArray(perms) || perms.length === 0) {
   process.exit(2);
 }
 
-const users = await getActiveUsers();
+const [users, mapsResp, dimResp] = await Promise.all([
+  getActiveUsers(),
+  fetch(`${PGRST}/maps_branch_group?is_active=eq.true&select=group_id,branch_number`, { headers: H }),
+  fetch(`${PGRST}/dim_branch?select=branch_name,branch_number`, { headers: H }),
+]);
+const maps = (await mapsResp.json()) ?? [];
+const dims = (await dimResp.json()) ?? [];
 console.log(`active users: ${users.length}`);
 
-let changed = 0, unchanged = 0, emptyKeys = 0, red = 0;
-const details = [];
-
+// 第一遍：只算 diff（M9 两遍式 #1），含 M3 fail-close 校验
+const diffs = [];
+let emptyKeys = 0, red = 0;
 for (const u of users) {
-  const roleCodes = Array.isArray(u.role_codes) ? u.role_codes : [];
-  const reachable = matchRolePermissions(perms, roleCodes);
-  const keys = scopeKeys(reachable);
-  // 写时 fail-close（M3）：未知/歧义范围键在此无法逐键 resolveScopeKeys（.mjs 无 maps/dim_branch 解析），
-  // 由 get_user_perms 解析期 fail-close 兜底；此处仅计数空键（deny 方向）
+  const scopeResources = scopeKeys(matchRolePermissions(perms, u.role_codes ?? []));
+  const branchKeys = scopeResources
+    .filter((k) => k.startsWith('data-analysis:branch:'))
+    .map((k) => k.slice('data-analysis:branch:'.length));
+  let keys = scopeResources;
+  if (branchKeys.length > 0) {
+    const resolved = resolveBranchKeys(branchKeys, maps, dims);
+    if (!resolved.ok) { keys = []; red++; }
+  }
   if (keys.length === 0) emptyKeys++;
   const cur = JSON.stringify(u.scope_resources ?? []);
   const nxt = JSON.stringify(keys);
-  if (cur === nxt) { unchanged++; continue; }
-  if (MODE === 'pgrst') { await patchScope(u.wecom_id, keys); }
-  changed++;
-  details.push({ wecom_id: u.wecom_id, old: u.scope_resources ?? [], new: keys });
+  if (cur !== nxt) diffs.push({ wecom_id: u.wecom_id, old: u.scope_resources ?? [], new: keys });
 }
 
-// M9 护栏②：changed > 50% 活跃用户 → abort 熔断（防一次清全量）
-const ratio = users.length ? changed / users.length : 0;
+// M9 护栏②：changed > 50% → 写之前 abort（投影未被污染）
+const ratio = users.length ? diffs.length / users.length : 0;
 if (ratio > 0.5) {
-  console.error(`[guard] changed ${changed}/${users.length} (${(ratio * 100).toFixed(1)}%) > 50% — abort, NOT writing`);
+  console.error(`[guard] changed ${diffs.length}/${users.length} (${(ratio * 100).toFixed(1)}%) > 50% — abort before write, NOT wiping projections`);
   process.exit(3);
 }
 
-console.log(`[${MODE}] changed=${changed} unchanged=${unchanged} empty_keys=${emptyKeys} red=${red}`);
-if (MODE === 'dry' && details.length > 0) {
-  console.log('--- 将写回的样本（前 5）---');
-  for (const d of details.slice(0, 5)) console.log(JSON.stringify(d));
+// 第二遍：只写 diff 用户
+if (MODE === 'pgrst') {
+  let writeFail = 0;
+  for (const d of diffs) {
+    try { await patchScope(d.wecom_id, d.new); }
+    catch (e) { writeFail++; console.error(`patch ${d.wecom_id}: ${e.message}`); }
+  }
+  console.log(`[write] applied ${diffs.length} diffs, writeFail=${writeFail}`);
+} else {
+  console.log(`[dry] would change ${diffs.length} users`);
+  for (const d of diffs.slice(0, 5)) console.log('  DIFF', JSON.stringify({ wecom_id: d.wecom_id, new: d.new }));
 }
+
+console.log(`[${MODE}] changed=${diffs.length} unchanged=${users.length - diffs.length} empty_keys=${emptyKeys} red=${red}`);

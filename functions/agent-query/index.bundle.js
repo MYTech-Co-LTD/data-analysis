@@ -345,7 +345,8 @@ module.exports = async function(req) {
   } catch (e) {
     return json({ error: "perm_resolve_failed", detail: String(e) }, 502);
   }
-  if (!perms || perms.error || !Array.isArray(perms.data_scope?.branch_nums)) {
+  const branchNums = perms.data_scope?.branch_nums ?? perms.branch_nums;
+  if (!perms || perms.error || !Array.isArray(branchNums)) {
     return json({ error: "no_permission", detail: perms && perms.error }, 403);
   }
   let finalSql;

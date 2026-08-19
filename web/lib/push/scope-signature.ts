@@ -26,6 +26,9 @@ export function scopeSignature(scope: Perms): string {
     br: scope.data_scope?.branch_nums?.length ? [...scope.data_scope.branch_nums].sort() : undefined,
     c: scope.data_scope?.categories?.length ? [...scope.data_scope.categories].sort() : undefined,
     cost: scope.fields?.cost ?? undefined,
+    // 异种 review #10：departments 入签名——同 data_scope 不同 department_ids 不得同组，
+    // 防组内首用户 departments 写入全组代签 JWT 的跨用户 claim 泄漏（目标视图若读 departments RLS 则错配）
+    dept: scope.departments?.length ? [...scope.departments].sort() : undefined,
   };
 
   // 去掉 undefined 字段（JSON.stringify 会忽略）
