@@ -111,13 +111,11 @@ export async function getVariableValueDefault(
     // S7/spec-forge：branch_nums 为空 → 该 URL 变量不渲染（防 brand-only 用户收空链接假成功——
     //   JWT data_scope.branch_nums=[] → RLS deny → 报表空白）
     if (!perms.data_scope?.branch_nums?.length) return null;
+    // 缺口 2 修复（2026-08-19）：URL 只带 jwt——scope 全在代签 JWT 里（RLS 读 data_scope），
+    //   branch/brand/category 参数冗余且会把 URL 撑到 2000+ 字符（分区 69 店 = 843 字符）→ 企微截断。
+    //   明细页 /report/detail 直接以 jwt 为 PostgREST Bearer，RLS 裁剪；scope 从 JWT 解码显示。
     const view = code.replace('_url', '');
-    const params = new URLSearchParams();
-    if (perms.data_scope?.brands?.length) params.set('brand', perms.data_scope.brands.join(','));
-    if (perms.data_scope?.branch_nums?.length) params.set('branch', perms.data_scope.branch_nums.join(','));
-    if (perms.data_scope?.categories?.length) params.set('category', perms.data_scope.categories.join(','));
-    params.set('jwt', jwt);
-    return `/report/${view}?${params.toString()}`;
+    return `/report/${view}?jwt=${encodeURIComponent(jwt)}`;
   }
 
   // 数值型变量 → 从视图聚合查询

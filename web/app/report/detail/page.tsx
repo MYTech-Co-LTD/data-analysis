@@ -41,12 +41,24 @@ async function queryAchievement(jwt: string): Promise<MetricRow[]> {
 
 const fmt = (n: number): string => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Math.round(n));
 
+/** 解码代签 JWT payload（仅显示 scope；真实鉴权由 PostgREST RLS 用该 JWT 强制执行） */
+function decodeScope(jwt: string): { branch_nums: string[]; brands: string[]; categories: string[] } {
+  try {
+    const part = jwt.split('.')[1];
+    const json = JSON.parse(Buffer.from(part, 'base64url').toString('utf-8'));
+    return {
+      branch_nums: Array.isArray(json.data_scope?.branch_nums) ? json.data_scope.branch_nums : [],
+      brands: Array.isArray(json.data_scope?.brands) ? json.data_scope.brands : [],
+      categories: Array.isArray(json.data_scope?.categories) ? json.data_scope.categories : [],
+    };
+  } catch {
+    return { branch_nums: [], brands: [], categories: [] };
+  }
+}
+
 export default async function ReportDetailPage({ searchParams }: { searchParams: Promise<Record<string, string | string[]>> }) {
   const sp = await searchParams;
   const jwt = Array.isArray(sp.jwt) ? sp.jwt[0] : sp.jwt;
-  const branch = Array.isArray(sp.branch) ? sp.branch[0] : sp.branch;
-  const brand = Array.isArray(sp.brand) ? sp.brand[0] : sp.brand;
-  const category = Array.isArray(sp.category) ? sp.category[0] : sp.category;
 
   if (!jwt) {
     return (
@@ -65,11 +77,12 @@ export default async function ReportDetailPage({ searchParams }: { searchParams:
     error = e instanceof Error ? e.message : String(e);
   }
 
-  // scope 摘要（RLS 已按 JWT data_scope 裁剪；展示参数仅供参考）
+  // scope 摘要（从 JWT 解码；RLS 已按 data_scope 裁剪）
+  const scope = decodeScope(jwt);
   const scopeNote = [
-    branch && branch !== '*' ? `门店：${branch}` : branch === '*' ? '门店：全部' : '',
-    brand ? `品牌：${brand}` : '',
-    category ? `品类：${category}` : '',
+    scope.branch_nums.includes('*') ? '门店：全部' : scope.branch_nums.length > 0 ? `门店：${scope.branch_nums.length} 家` : '',
+    scope.brands.length > 0 ? `品牌：${scope.brands.length} 个` : '',
+    scope.categories.length > 0 ? `品类：${scope.categories.join('/')}` : '',
   ].filter(Boolean).join(' · ');
 
   return (
