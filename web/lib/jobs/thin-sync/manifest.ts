@@ -1,10 +1,15 @@
 // web/lib/jobs/thin-sync/manifest.ts
-// 薄同步 job（spec §4.5 / Task 12）——2026-08-18 收缩：仅同步「人 + 组织架构」。
-//   ① drain outbox（先清积压再写新操作）
-//   ② 三动作：provisioning(JIT 建户) / disable(离职) / sync_groups(组对账)
-//   auto 角色写入（assign_role）已删除——角色归属全量 manual（Casdoor UI 单写者），薄同步不再写角色。
-//   失败一律入 outbox 计数（不丢弃）
-// spec: 动作分顺序——离职四 sink 最先；provisioning 先 JIT。
+// 薄同步 job（spec §4.5 / Task 12）——2026-08-19 功能边界收死（用户裁定）：仅同步企微组织架构。
+//   ✅ 允许（组织架构镜像三部曲，均为 Casdoor 侧组织投影）：
+//     ① provisioning(JIT 建户，新员工进企微 → 可登录)
+//     ② disable(离职，含 token_blacklist；Casdoor 无户 = 等价 deny 直接标终态)
+//     ③ sync_groups(部门组对账)
+//   ❌ 禁止（单写者 = Casdoor UI / 管理脚本，薄同步永不触碰）：
+//     - 角色/权限/数据范围写入（assign_role 已删，2026-08-18）
+//     - maps_branch_group / 任何权限语义表（归 scope-packs 同步与迁移）
+//     - 新增任何非组织架构动作：加之前先改本注释 + spec，否则违反单写者纪律
+//   outbox 仅承载 provision/disable 两类组织架构动作的重试；历史 assign_role 死信已一次性清除
+//   （2026-08-19 清理 45 条，动作已废除无重试意义）。
 import type { JobManifest, JobResult } from '../../contracts';
 import { notifyWecom } from '../../notify';
 import { tryAcquireLock } from '../../scheduler-lock';
@@ -31,13 +36,19 @@ async function actionDisable(): Promise<{ processed: number; enqueued: number }>
   let enqueued = 0;
   for (const user of inactive) {
     const result = await disableUser(user.wecom_id);
-    if (!result.ok) {
+    if (!result.ok && result.error !== 'user_not_found_in_casdoor') {
       // 写失败 → 入 outbox（B6：只在实际入队时计数；下一轮 is_active=false 仍会被重新扫描，不丢）
       const q = await enqueue(user.wecom_id, 'disable', { name: user.name });
       if (q.enqueued) enqueued++;
       else console.error('[thin-sync] disable 失败且 outbox 入队失败，下轮重试:', user.wecom_id);
-    } else {
-      // 成功 → 标记 casdoor_writer='disabled' + 写 token_blacklist（离职四 sink①，2026-08-17：
+      continue;
+    }
+    // 成功，或 user_not_found（Casdoor 无此户 = 等价 deny，最强禁用；2026-08-19 DongPingXia_1
+    // 死循环修复：旧 userid 无 Casdoor 户的离职行直接标终态，不再报错/入队/重试）
+    if (!result.ok) {
+      console.log(`[thin-sync] disable: ${user.wecom_id} Casdoor 无户，等价 deny 标终态`);
+    }
+    // 标记 casdoor_writer='disabled'（+成功路径写 token_blacklist，离职四 sink①，2026-08-17：
       // middleware 按 user_id 拉黑，旧 7 天 JWT web API 面即刻拒；expires_at=7 天 JWT 窗口后
       // 由 cleanup-blacklist 自然清理。select-then-insert 幂等，重跑不重复拉黑。）
       await fetch(`${POSTGREST_URL}/org_users?wecom_id=eq.${encodeURIComponent(user.wecom_id)}`, {
@@ -61,7 +72,6 @@ async function actionDisable(): Promise<{ processed: number; enqueued: number }>
           }),
         }).catch(e => console.error('[thin-sync] blacklist 写入失败（is_active 软校验仍兑底）:', user.wecom_id, e));
       }
-    }
   }
   return { processed: inactive.length, enqueued };
 }
