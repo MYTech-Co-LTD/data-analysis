@@ -103,15 +103,18 @@ export function ScopeTree() {
                 <button className="text-slate-400 hover:text-slate-700 text-xs w-4" onClick={() => toggleExpand(wz.name)}>
                   {wzRegionsVisible ? '▾' : '▸'}
                 </button>
-                <label className="flex items-center gap-1.5 text-sm font-medium text-slate-700 cursor-pointer">
-                  <input type="checkbox" checked={checked.has(wzRes)} onChange={() => toggleCheck(wzRes)} />
+                <label className={`flex items-center gap-1.5 text-sm text-slate-700 ${wz.grantable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                  <input type="checkbox" checked={checked.has(wzRes)} onChange={() => toggleCheck(wzRes)} disabled={!wz.grantable} />
                   {wz.name}
                 </label>
                 <span className="text-[11px] text-slate-400">{wz.storeCount} 店</span>
-                {wz.grantable && <span className="text-[11px] text-green-600">✓ 范围包</span>}
+                {wz.grantable
+                  ? <span className="text-[11px] text-green-600">✓ 范围包</span>
+                  : <span className="text-[11px] text-red-500" title="maps_branch_group 无此包，粘贴到 Casdoor 会导致登录 503；范围包同步每日 04:23 自动补齐">✗ 不可授权（待同步）</span>}
                 {wz.users > 0 && <span className="text-[11px] text-blue-500">{wz.users} 人在用</span>}
-                <button className="ml-auto text-[11px] text-slate-400 hover:text-slate-700"
-                  onClick={() => copyText(wzRes)}>复制</button>
+                <button className={`ml-auto text-[11px] ${wz.grantable ? 'text-slate-400 hover:text-slate-700' : 'text-slate-300 cursor-not-allowed'}`}
+                  title={wz.grantable ? undefined : '不可授权：maps 无此包，待同步补齐'}
+                  onClick={() => wz.grantable && copyText(wzRes)}>复制</button>
               </div>
 
               {wzRegionsVisible && wz.regions.map((rg) => {
@@ -127,12 +130,14 @@ export function ScopeTree() {
                       <button className="text-slate-400 hover:text-slate-700 text-xs w-4" onClick={() => toggleExpand(rgKey)}>
                         {effectiveExpanded.has(rgKey) ? '▾' : '▸'}
                       </button>
-                      <label className="flex items-center gap-1.5 text-sm text-slate-600 cursor-pointer">
-                        <input type="checkbox" checked={checked.has(rgRes)} onChange={() => toggleCheck(rgRes)} />
+                      <label className={`flex items-center gap-1.5 text-sm text-slate-600 ${rg.grantable ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}>
+                        <input type="checkbox" checked={checked.has(rgRes)} onChange={() => toggleCheck(rgRes)} disabled={!rg.grantable} />
                         {rg.name || '（未分区）'}
                       </label>
                       <span className="text-[11px] text-slate-400">{rg.stores.length} 店</span>
-                      {rg.grantable && <span className="text-[11px] text-green-600">✓</span>}
+                      {rg.grantable
+                        ? <span className="text-[11px] text-green-600">✓</span>
+                        : <span className="text-[11px] text-red-500" title="maps_branch_group 无此包，粘贴到 Casdoor 会导致登录 503；范围包同步每日 04:23 自动补齐">✗ 不可授权</span>}
                       {rg.users > 0 && <span className="text-[11px] text-blue-500">{rg.users} 人在用</span>}
                       <button
                         className={`text-[11px] ${allChecked ? 'text-blue-500' : 'text-slate-400'} hover:text-slate-700`}
@@ -140,8 +145,9 @@ export function ScopeTree() {
                         onClick={() => checkMany(allRes)}>
                         {allChecked ? '✓ 已全选门店' : '选本区门店'}
                       </button>
-                      <button className="ml-auto text-[11px] text-slate-400 hover:text-slate-700"
-                        onClick={() => copyText(rgRes)}>复制</button>
+                      <button className={`ml-auto text-[11px] ${rg.grantable ? 'text-slate-400 hover:text-slate-700' : 'text-slate-300 cursor-not-allowed'}`}
+                        title={rg.grantable ? undefined : '不可授权：maps 无此包，待同步补齐'}
+                        onClick={() => rg.grantable && copyText(rgRes)}>复制</button>
                     </div>
 
                     {effectiveExpanded.has(rgKey) && (
