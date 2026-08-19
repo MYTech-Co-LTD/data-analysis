@@ -62,8 +62,10 @@ export async function getClient() {
   const token = (await cookies()).get("insforge_access_token")?.value;
   // 用 access_token（authenticated JWT）当 anonKey 传：SDK 把 anonKey 作 Authorization Bearer，
   // PostgREST 据 JWT 的 role 切到 authenticated。token 缺失则回退 anon（已被 REVOKE SELECT，读不到）。
+  // baseUrl：server 侧优先内网直连（INSFORGE_API_BASE=http://insforge:7130，2026-08-19 性能修复——
+  // 此前走公网域名回环，每请求公网 TLS 往返 1-2s，报表页 SSR 累计 12s）；浏览器侧无该 env 自然回退公网。
   return createClient({
-    baseUrl: process.env.NEXT_PUBLIC_INSFORGE_URL!,
+    baseUrl: process.env.INSFORGE_API_BASE || process.env.NEXT_PUBLIC_INSFORGE_URL!,
     anonKey: token || process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY!,
   });
 }
