@@ -13,7 +13,7 @@ cte0 AS (
   FROM report_daily_sales s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num)) AND is_assessed_war_zone(db.first_level_region)
+  WHERE ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[])) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code
 ),
 cte1 AS (
@@ -23,7 +23,7 @@ cte1 AS (
   FROM report_daily_delivery s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num)) AND is_assessed_war_zone(db.first_level_region)
+  WHERE ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[])) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code
 ),
 cte2 AS (
@@ -33,14 +33,14 @@ cte2 AS (
   FROM report_daily_wholesale_customer s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE s.system_book_code = '64188' AND scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num)) AND is_assessed_war_zone(db.first_level_region)
+  WHERE s.system_book_code = '64188' AND ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[])) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code
 ),
 cte3 AS (
   SELECT t.parent_target_id AS target_id, t.system_book_code,
     SUM(tmv.target_value) AS sale_target
   FROM targets t JOIN target_metric_values tmv ON tmv.target_id=t.id
-  WHERE t.breakdown_level='store' AND metric_code='sale' AND (t.branch_num = 'ALL' OR scope_match_v2('brands', t.system_book_code) AND (scope_match_v2('branch_nums', t.branch_num::text) OR scope_match_v2('branch_nums', t.system_book_code || '-' || t.branch_num))) AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code=t.system_book_code AND db.branch_num=t.branch_num AND is_assessed_war_zone(db.first_level_region))
+  WHERE t.breakdown_level='store' AND metric_code='sale' AND (t.branch_num = 'ALL' OR ('*' = ANY((SELECT scope_brand_keys())::text[]) OR t.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR t.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (t.system_book_code || '-' || t.branch_num) = ANY((SELECT scope_branch_keys())::text[]))) AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code=t.system_book_code AND db.branch_num=t.branch_num AND is_assessed_war_zone(db.first_level_region))
   GROUP BY t.parent_target_id, t.system_book_code
 )
 , brand_rows AS (
