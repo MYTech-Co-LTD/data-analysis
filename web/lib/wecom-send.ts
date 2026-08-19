@@ -108,16 +108,18 @@ export function buildWecomNews(wecomId: string, articles: Array<{ title: string;
 }
 
 /**
- * 构建 template_card 消息（文本通知型 text_notice 起步）。
- * @param p.main_title 主标题（≤128 字节）；sub_title_text 副标题；card_action.url 跳转
+ * 构建 template_card 消息。
+ * 支持所有 card_type（text_notice / news_notice 图文展示型等）——card 为原始 template_card 对象透传，
+ *   由 JSON 契约（Novu content）定义；news_notice 带 card_image.url + aspect_ratio 即可展示图片。
+ * @param card - 完整 template_card 对象（card_type/main_title/card_image/card_action/source 等）
  */
-export function buildWecomTemplateCard(wecomId: string, p: { main_title: string; sub_title_text?: string; url?: string }): WecomMessage {
-  const template_card: Record<string, unknown> = {
-    card_type: 'text_notice',
-    main_title: { title: p.main_title },
-  };
-  if (p.sub_title_text) template_card.sub_title_text = p.sub_title_text;
-  if (p.url) template_card.card_action = { type: 1, url: p.url };
+export function buildWecomTemplateCard(wecomId: string, card: Record<string, unknown>): WecomMessage {
+  const template_card: Record<string, unknown> = { ...card };
+  // 兼容简写：p.url → card_action（text_notice 便捷）
+  if (!template_card.card_action && typeof template_card.url === 'string') {
+    template_card.card_action = { type: 1, url: template_card.url };
+    delete template_card.url;
+  }
   return { touser: wecomId, msgtype: 'template_card', agentid: Number(process.env.WECOM_OPS_AGENT_ID!), template_card };
 }
 
