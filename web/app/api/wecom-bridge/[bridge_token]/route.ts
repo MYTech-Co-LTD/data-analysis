@@ -113,15 +113,6 @@ export async function POST(
 
   const content = body.content as string;
   if (!content || typeof content !== 'string') {
-    // TEMP-DIAG 2026-08-20：定位复杂 markdown 400 —— 记录 Novu 实际 body 结构（简洁版，防截断）
-    console.error('[wecom-bridge][diag] ' + JSON.stringify({
-      keys: Object.keys(body),
-      contentType: typeof body.content,
-      contentLen: typeof body.content === 'string' ? (body.content as string).length : -1,
-      hasPayload: 'payload' in body,
-      payloadKeys: body.payload && typeof body.payload === 'object' ? Object.keys(body.payload as object).slice(0, 6) : null,
-      bodyLen: rawBodyBuffer.length,
-    }));
     return NextResponse.json({ error: 'missing content' }, { status: 400 });
   }
 
