@@ -309,11 +309,13 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       const rendered = await renderVariables(
         enabledVars,
         async (code, perms, jwt) => {
-          // URL 型变量（S7：branch_nums 非空才渲染；缺口 2：URL 只带 jwt 防超长被企微截断）
+          // URL 型变量（S7：branch_nums 非空才渲染；缺口 2：URL 只带 jwt 防超长被企微截断；
+          //   2026-08-19 绝对 URL——相对路径在企微不可点）
           if (code.endsWith('_url')) {
             if (!perms.data_scope?.branch_nums?.length) return null;
             const view = code.replace('_url', '');
-            return `/report/${view}?jwt=${encodeURIComponent(jwt)}`;
+            const base = process.env.PUSH_BRIDGE_BASE_URL || '';
+            return `${base}/report/${view}?jwt=${encodeURIComponent(jwt)}`;
           }
           // 数值型 → 占位（实际由 Novu 模板渲染；M7 守卫在 live 拒投占位）
           return `{{${code}}}`;
