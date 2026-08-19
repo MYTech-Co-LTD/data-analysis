@@ -28,11 +28,14 @@ DO $do$ BEGIN
     CREATE INDEX idx_rdis_sbc_date ON report_daily_item_sales(system_book_code, biz_date);
     CREATE INDEX idx_rdis_branch ON report_daily_item_sales(system_book_code, branch_num, biz_date);
     ALTER TABLE report_daily_item_sales ENABLE ROW LEVEL SECURITY;
-    CREATE POLICY report_rls_brand ON report_daily_item_sales FOR SELECT TO authenticated
-      USING (scope_match_v2('brands', system_book_code));
-    CREATE POLICY report_rls_branch_nums ON report_daily_item_sales FOR SELECT TO authenticated
-      USING (scope_match_v2('branch_nums', branch_num::text)
-          OR scope_match_v2('branch_nums', system_book_code || '-' || branch_num));
+    -- 单策略 AND 组合（2026-08-19 修正：双 PERMISSIVE 策略是 OR——brands 恒真会短路 branch；
+    -- 与其他报表表/视图内联同款：brands ∧ branch）
+    DROP POLICY IF EXISTS report_rls_brand ON report_daily_item_sales;
+    DROP POLICY IF EXISTS report_rls_branch_nums ON report_daily_item_sales;
+    CREATE POLICY report_rls_scope ON report_daily_item_sales FOR SELECT TO authenticated
+      USING (scope_match_v2('brands', system_book_code)
+         AND (scope_match_v2('branch_nums', branch_num::text)
+           OR scope_match_v2('branch_nums', system_book_code || '-' || branch_num)));
     GRANT SELECT ON report_daily_item_sales TO anon, authenticated;
     RAISE NOTICE 'Migration 200: item_sales 重建为 branch 粒度（待 /compute 回填）';
   END IF;
@@ -56,11 +59,12 @@ DO $do$ BEGIN
     CREATE INDEX idx_rdio_sbc_date ON report_daily_item_outbound(system_book_code, biz_date);
     CREATE INDEX idx_rdio_branch ON report_daily_item_outbound(system_book_code, branch_num, biz_date);
     ALTER TABLE report_daily_item_outbound ENABLE ROW LEVEL SECURITY;
-    CREATE POLICY report_rls_brand ON report_daily_item_outbound FOR SELECT TO authenticated
-      USING (scope_match_v2('brands', system_book_code));
-    CREATE POLICY report_rls_branch_nums ON report_daily_item_outbound FOR SELECT TO authenticated
-      USING (scope_match_v2('branch_nums', branch_num::text)
-          OR scope_match_v2('branch_nums', system_book_code || '-' || branch_num));
+    DROP POLICY IF EXISTS report_rls_brand ON report_daily_item_outbound;
+    DROP POLICY IF EXISTS report_rls_branch_nums ON report_daily_item_outbound;
+    CREATE POLICY report_rls_scope ON report_daily_item_outbound FOR SELECT TO authenticated
+      USING (scope_match_v2('brands', system_book_code)
+         AND (scope_match_v2('branch_nums', branch_num::text)
+           OR scope_match_v2('branch_nums', system_book_code || '-' || branch_num)));
     GRANT SELECT ON report_daily_item_outbound TO anon, authenticated;
     RAISE NOTICE 'Migration 200: item_outbound 重建为 branch 粒度（待 /compute 回填）';
   END IF;
@@ -188,6 +192,22 @@ $SQL$,
   conflict_keys = '["biz_date","system_book_code","branch_num","item_num"]'::jsonb
 WHERE report_type = 'item_outbound';
 
+-- ---- 策略收敛（幂等守卫外：已迁移环境重复部署也能修正双策略 OR 短路） ----
+DROP POLICY IF EXISTS report_rls_brand ON report_daily_item_sales;
+DROP POLICY IF EXISTS report_rls_branch_nums ON report_daily_item_sales;
+DROP POLICY IF EXISTS report_rls_scope ON report_daily_item_sales;
+CREATE POLICY report_rls_scope ON report_daily_item_sales FOR SELECT TO authenticated
+  USING (scope_match_v2('brands', system_book_code)
+     AND (scope_match_v2('branch_nums', branch_num::text)
+       OR scope_match_v2('branch_nums', system_book_code || '-' || branch_num)));
+DROP POLICY IF EXISTS report_rls_brand ON report_daily_item_outbound;
+DROP POLICY IF EXISTS report_rls_branch_nums ON report_daily_item_outbound;
+DROP POLICY IF EXISTS report_rls_scope ON report_daily_item_outbound;
+CREATE POLICY report_rls_scope ON report_daily_item_outbound FOR SELECT TO authenticated
+  USING (scope_match_v2('brands', system_book_code)
+     AND (scope_match_v2('branch_nums', branch_num::text)
+       OR scope_match_v2('branch_nums', system_book_code || '-' || branch_num)));
+
 -- ---- 验证断言 ----
 DO $do$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'report_daily_item_sales'::regclass AND attname = 'branch_num' AND NOT attisdropped) THEN
@@ -196,8 +216,8 @@ DO $do$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'report_daily_item_outbound'::regclass AND attname = 'branch_num' AND NOT attisdropped) THEN
     RAISE EXCEPTION 'Migration 200: item_outbound 缺 branch_num 列';
   END IF;
-  IF (SELECT count(*) FROM pg_policy WHERE polrelid = 'report_daily_item_sales'::regclass AND polname = 'report_rls_branch_nums') = 0 THEN
-    RAISE EXCEPTION 'Migration 200: item_sales 缺 branch RLS 策略';
+  IF (SELECT count(*) FROM pg_policy WHERE polrelid = 'report_daily_item_sales'::regclass AND polname = 'report_rls_scope') = 0 THEN
+    RAISE EXCEPTION 'Migration 200: item_sales 缺 report_rls_scope 策略';
   END IF;
   RAISE NOTICE 'Migration 200: 完成（item 表 branch 粒度 + RLS + RPC 过滤 + compute 定义）';
 END $do$;
