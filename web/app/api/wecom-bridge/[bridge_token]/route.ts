@@ -9,7 +9,48 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyBridge } from '@/lib/push/bridge-verify';
-import { sendWecomMarkdown } from '@/lib/wecom-send';
+import {
+  sendWecomMarkdown,
+  sendWecomText,
+  sendWecomMessage,
+  buildWecomTextcard,
+  buildWecomNews,
+  buildWecomTemplateCard,
+  type SendResult,
+} from '@/lib/wecom-send';
+
+/**
+ * 结构化 dispatch（2026-08-20 扩展）：Novu chat content 若为 JSON 契约（含 msgtype），
+ *   按类型构造对应企微消息体（text/markdown/textcard/news/template_card）；
+ *   否则按 markdown 发送（向后兼容）。
+ */
+async function dispatchWecom(wecomId: string, structured: Record<string, unknown>): Promise<SendResult> {
+  const msgtype = String(structured.msgtype);
+  switch (msgtype) {
+    case 'text':
+      return sendWecomText(wecomId, String(structured.content ?? ''));
+    case 'markdown':
+      return sendWecomMarkdown(wecomId, String(structured.content ?? ''), structured.title ? String(structured.title) : undefined);
+    case 'textcard':
+      return sendWecomMessage(buildWecomTextcard(wecomId, {
+        title: String(structured.title ?? ''),
+        description: String(structured.description ?? ''),
+        url: String(structured.url ?? ''),
+        btntxt: structured.btntxt ? String(structured.btntxt) : undefined,
+      }));
+    case 'news':
+      return sendWecomMessage(buildWecomNews(wecomId, Array.isArray(structured.articles) ? structured.articles as Array<{ title: string; description?: string; url: string; picurl?: string }> : []));
+    case 'template_card':
+      return sendWecomMessage(buildWecomTemplateCard(wecomId, {
+        main_title: String(structured.main_title ?? ''),
+        sub_title_text: structured.sub_title_text ? String(structured.sub_title_text) : undefined,
+        url: structured.url ? String(structured.url) : undefined,
+      }));
+    default:
+      // 未知 msgtype → 回退 markdown（原样序列化，避免丢内容）
+      return sendWecomMarkdown(wecomId, JSON.stringify(structured));
+  }
+}
 
 // ---- PostgREST 客户端（查 push_subscriber_tokens） ----
 
@@ -71,20 +112,20 @@ export async function POST(
     return NextResponse.json({ error: 'missing content' }, { status: 400 });
   }
 
-  // 5. 发送企微消息
+  // 5. 发送企微消息：content 为 JSON 契约（含 msgtype）→ 结构化 dispatch；否则 markdown（向后兼容）
+  let parsed: Record<string, unknown> | null = null;
   try {
-    const sendResult = await sendWecomMarkdown(result.wecomId!, content);
+    parsed = JSON.parse(content);
+  } catch {
+    // 非 JSON（普通 markdown/text）→ 走 markdown
+  }
 
-    if (!sendResult.ok) {
-      // 企微 60020 等错误：返非 2xx 让 Novu 重试
-      console.error('[wecom-bridge] send failed', sendResult);
-      return NextResponse.json(
-        { error: 'wecom_send_failed', detail: sendResult },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json({ ok: true, sent_to: result.wecomId });
+  let sendResult: SendResult;
+  try {
+    sendResult =
+      parsed && typeof parsed === 'object' && typeof parsed.msgtype === 'string'
+        ? await dispatchWecom(result.wecomId!, parsed)
+        : await sendWecomMarkdown(result.wecomId!, content);
   } catch (err) {
     console.error('[wecom-bridge] send error', err);
     return NextResponse.json(
@@ -92,4 +133,15 @@ export async function POST(
       { status: 500 }
     );
   }
+
+  if (!sendResult.ok) {
+    // 企微 60020 等错误：返非 2xx 让 Novu 重试
+    console.error('[wecom-bridge] send failed', sendResult);
+    return NextResponse.json(
+      { error: 'wecom_send_failed', detail: sendResult },
+      { status: 502 }
+    );
+  }
+
+  return NextResponse.json({ ok: true, sent_to: result.wecomId });
 }
