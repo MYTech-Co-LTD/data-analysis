@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 interface Store { n: string; name: string; branchNumber: string; dup: boolean }
 interface Region { name: string; grantable: boolean; users: number; stores: Store[] }
 interface WarZone { name: string; grantable: boolean; users: number; storeCount: number; regions: Region[] }
-interface TreeData { tree: WarZone[]; totalStores: number }
+interface TreeData { tree: WarZone[]; totalStores: number; allStore?: { users: number } }
 
 const resOf = (s: Store) => `范围|${s.dup ? s.branchNumber : s.name}`;
 
@@ -93,6 +93,18 @@ export function ScopeTree() {
       </div>
 
       <div className="rounded-lg border border-slate-200 bg-white max-h-[28rem] overflow-auto">
+        {/* 全门店（置顶，恒可授权：登录解析通配 → branch_nums=['*']） */}
+        <div className="flex items-center gap-2 px-3 py-2 bg-blue-50/60 border-b border-blue-100 sticky top-0 z-10">
+          <label className="flex items-center gap-1.5 text-sm font-medium text-blue-800 cursor-pointer">
+            <input type="checkbox" checked={checked.has('范围|全店')} onChange={() => toggleCheck('范围|全店')} />
+            全门店
+          </label>
+          <span className="text-[11px] text-slate-400">{data.totalStores} 店（通配 *，不随组织变化维护）</span>
+          <span className="text-[11px] text-green-600">✓ 范围包</span>
+          {(data.allStore?.users ?? 0) > 0 && <span className="text-[11px] text-blue-500">{data.allStore?.users} 人在用</span>}
+          <button className="ml-auto text-[11px] text-slate-400 hover:text-slate-700"
+            onClick={() => copyText('范围|全店')}>复制</button>
+        </div>
         {data.tree.map((wz) => {
           const wzRes = `范围|${wz.name}`;
           const wzRegionsVisible = effectiveExpanded.has(wz.name);
