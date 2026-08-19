@@ -114,8 +114,10 @@ export async function getVariableValueDefault(
     // 缺口 2 修复（2026-08-19）：URL 只带 jwt——scope 全在代签 JWT 里（RLS 读 data_scope），
     //   branch/brand/category 参数冗余且会把 URL 撑到 2000+ 字符（分区 69 店 = 843 字符）→ 企微截断。
     //   明细页 /report/detail 直接以 jwt 为 PostgREST Bearer，RLS 裁剪；scope 从 JWT 解码显示。
+    //   2026-08-19 二次修复：绝对 URL（PUSH_BRIDGE_BASE_URL=公共 host）——相对路径在企微里不可点。
     const view = code.replace('_url', '');
-    return `/report/${view}?jwt=${encodeURIComponent(jwt)}`;
+    const base = process.env.PUSH_BRIDGE_BASE_URL || '';
+    return `${base}/report/${view}?jwt=${encodeURIComponent(jwt)}`;
   }
 
   // 数值型变量 → 从视图聚合查询
