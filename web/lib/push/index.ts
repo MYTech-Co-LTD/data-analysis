@@ -104,6 +104,50 @@ async function getPermsStrict(wecomId: string): Promise<Perms | null> {
   };
 }
 
+// 语义指标 → achievement 视图 metric_code 映射（§12.1 数值取值；扩展时在此追加）
+const METRIC_TO_VIEW: Record<string, string> = {
+  sale_amount: 'sale',
+  sale_rate: 'sale',
+  delivery_amount: 'delivery',
+  outbound_amt: 'outbound_amt',
+  outbound_profit: 'outbound_profit',
+};
+
+const fmtCN = (n: number): string => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Math.round(n));
+
+/**
+ * 数值指标取值（§12.1，2026-08-20）：
+ *   用代签 JWT 查 report_achievement_gen（RLS 按 data_scope 裁剪）→ 按 metric 聚合 actual/target →
+ *   格式化（金额 ¥ / 比率 %）。查询失败或取不到 → null（该变量不渲染，避免占位符）。
+ */
+async function resolveNumericValue(metricCode: string | undefined, jwt: string): Promise<string | null> {
+  if (!metricCode) return null;
+  const viewMetric = METRIC_TO_VIEW[metricCode];
+  if (!viewMetric) return null;
+  const { postgrestUrl } = getConfig();
+  if (!postgrestUrl) return null;
+  try {
+    const resp = await fetch(
+      `${postgrestUrl}/report_achievement_gen?select=metric_code,actual_value,target_value&metric_code=eq.${viewMetric}`,
+      { headers: { Authorization: `Bearer ${jwt}` } },
+    );
+    if (!resp.ok) return null;
+    const rows = await resp.json() as Array<{ metric_code: string; actual_value: number; target_value: number }>;
+    if (!Array.isArray(rows) || rows.length === 0) return null;
+    let actual = 0, target = 0;
+    for (const r of rows) {
+      actual += Number(r.actual_value) || 0;
+      target += Number(r.target_value) || 0;
+    }
+    if (metricCode === 'sale_rate') {
+      return target > 0 ? `${((actual / target) * 100).toFixed(1)}%` : null;
+    }
+    return `¥${fmtCN(actual)}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * 加载 workflow 的消息呈现 preset（push_message_presets；平台能力 2026-08-20）
  * 无 preset / 查询失败 → null（走默认 Novu content，向后兼容）
@@ -338,8 +382,9 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
             const base = (process.env.PUSH_BRIDGE_BASE_URL || '').replace(/\/api\/wecom-bridge$/, '');
             return `${base}/report/${view}?jwt=${encodeURIComponent(jwt)}`;
           }
-          // 数值型 → 占位（实际由 Novu 模板渲染；M7 守卫在 live 拒投占位）
-          return `{{${code}}}`;
+          // 数值型 → 语义视图取真值（§12.1）；取不到 → null（该变量不渲染，M7 不拦）
+          const v = enabledVars.find((x) => x.var_code === code);
+          return await resolveNumericValue(v?.metric_code, jwt);
         },
         group.perms
       );
