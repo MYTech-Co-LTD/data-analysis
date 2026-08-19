@@ -107,6 +107,11 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
     }
     const profitActual = hasProfit ? profitSum : null;
     const dailyProfit = hasDailyProfit ? dailyProfitSum : null;
+    // 194 语义对齐（2026-08-19）：受限用户（目标无门店分解）视图把明细行 rate/remaining 掩空 →
+    // 前端合计行同步置空，禁止「裁剪分子/全店分母」的失真完成率；判据 = 明细行 rate 全空。
+    // 全店用户明细行 rate 有值 → 正常前端重算（与视图 F3 对账）。
+    const ratesMasked = detailRows.every((r) => r.sale_rate == null);
+    const remainingMasked = detailRows.every((r) => r.remaining_daily_profit_target == null);
     return {
       saleTarget,
       saleActual,
@@ -114,9 +119,9 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
       profitActual,
       dailyAmount,
       dailyProfit,
-      remainingDailyProfitTarget,
-      saleRate: saleTarget > 0 ? saleActual / saleTarget : null,
-      profitRate: profitActual != null && profitTarget > 0 ? profitActual / profitTarget : null,
+      remainingDailyProfitTarget: remainingMasked ? null : remainingDailyProfitTarget,
+      saleRate: ratesMasked ? null : saleTarget > 0 ? saleActual / saleTarget : null,
+      profitRate: ratesMasked ? null : profitActual != null && profitTarget > 0 ? profitActual / profitTarget : null,
       profitMargin: profitActual != null && saleActual > 0 ? profitActual / saleActual : null,
       dailyProfitMargin: dailyProfit != null && dailyAmount > 0 ? dailyProfit / dailyAmount : null,
     };
@@ -126,6 +131,9 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
   const totalAnomaly = useMemo(() => {
     const vr = rows.find((r) => r.category === "合计");
     if (!vr || detailRows.length === 0) return false;
+    // 194 掩空场景：视图 rate/remaining 已 NULL，前端合计也 NULL（ratesMasked）→ 跳过率类对账（两侧恒等），
+    // 金额类照常校验；此前不跳会误报「合计异常」（前端 15.6% vs 视图 NULL）。
+    const ratesMasked = detailRows.every((r) => r.sale_rate == null);
     return !(
       numMatch(totals.saleTarget, vr.sale_target, 1, amountsClose) &&
       numMatch(totals.saleActual, vr.sale_actual, 1, amountsClose) &&
@@ -133,14 +141,14 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
       numMatch(totals.profitActual, vr.profit_actual, 1, amountsClose) &&
       numMatch(totals.dailyAmount, vr.daily_amount, 1, amountsClose) &&
       numMatch(totals.dailyProfit, vr.daily_profit, 1, amountsClose) &&
-      numMatch(
+      (ratesMasked || numMatch(
         totals.remainingDailyProfitTarget,
         vr.remaining_daily_profit_target,
         1,
         amountsClose,
-      ) &&
-      numMatch(totals.saleRate, vr.sale_rate, 1e-3, ratesClose) &&
-      numMatch(totals.profitRate, vr.profit_rate, 1e-3, ratesClose) &&
+      )) &&
+      (ratesMasked || numMatch(totals.saleRate, vr.sale_rate, 1e-3, ratesClose)) &&
+      (ratesMasked || numMatch(totals.profitRate, vr.profit_rate, 1e-3, ratesClose)) &&
       numMatch(totals.profitMargin, vr.profit_margin, 1e-3, ratesClose) &&
       numMatch(totals.dailyProfitMargin, vr.daily_profit_margin, 1e-3, ratesClose)
     );
@@ -182,7 +190,7 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
       totals.saleTarget, totals.saleActual, fmtRate(totals.saleRate),
       totals.profitTarget, totals.profitActual ?? "", fmtRate(totals.profitRate), fmtRate(totals.profitMargin),
       totals.dailyAmount, totals.dailyProfit ?? "", fmtRate(totals.dailyProfitMargin),
-      totals.remainingDailyProfitTarget,
+      totals.remainingDailyProfitTarget ?? "",
     ]);
     exportExcel([head, ...body], `${targetMonth}月仓储出库数据报表`);
   };
