@@ -105,7 +105,7 @@ for (const [f, key] of Object.entries(friendly)) {
   eq(normalizeFriendlyPerm(f), key, `通俗名归一：${f} → ${key}`);
 }
 // 23 条映射全部断言过（防漏同步）
-eq(Object.keys(FRIENDLY_TO_KEY).length, 23, 'FRIENDLY_TO_KEY 恰 23 条（8 catalog + 8 看板（2026-08-19 商品TOP 拆销售/出库）+ 6 KPI + 1 旧名兼容兑底）');
+eq(Object.keys(FRIENDLY_TO_KEY).length, 25, 'FRIENDLY_TO_KEY 恰 24 条（8 catalog + 8 看板（含空格正式+无空格兼容变体）+ 6 KPI + 1 旧名兼容）');
 
 // 2. 未命中的值原样返回（key / 通配 / push 裸 key / 未知串都不动）
 eq(normalizeFriendlyPerm('data-analysis:view-board:*'), 'data-analysis:view-board:*', '通配原样透传');

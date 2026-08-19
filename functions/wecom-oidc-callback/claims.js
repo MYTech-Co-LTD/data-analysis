@@ -84,7 +84,9 @@ const FRIENDLY_TO_KEY = {
   '看板|指标概览': 'data-analysis:view-board:kpi',
   '看板|品牌×指标': 'data-analysis:view-board:brand',
   '看板|门店战区': 'data-analysis:view-board:region',
-  '看板|商品TOP·销售': 'data-analysis:view-board:item-top-sale',
+  '看板|商品 TOP·销售': 'data-analysis:view-board:item-top-sale',   // 正式（catalog 展示名，商品 TOP 带空格）
+  '看板|商品 TOP·出库': 'data-analysis:view-board:item-top-outbound',
+  '看板|商品TOP·销售': 'data-analysis:view-board:item-top-sale',   // 兼容（无空格变体）
   '看板|商品TOP·出库': 'data-analysis:view-board:item-top-outbound',
   // 旧名兼容（2026-08-19 拆分前存量授权）→ 归并到销售；存量已批量更新为新双键，此行仅兑底
   '看板|商品 TOP': 'data-analysis:view-board:item-top-sale',
