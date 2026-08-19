@@ -124,7 +124,7 @@ function normalizeFriendlyPerm(value) {
   return FRIENDLY_TO_KEY[value] ?? value;
 }
 
-module.exports = { buildClaims, collapseFullStore, resolveScopeKeys, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE, matchRolePermissions };
+module.exports = { buildClaims, collapseFullStore, resolveScopeKeys, FRIENDLY_TO_KEY, normalizeFriendlyPerm, BOARD_VIEW_COVERAGE, matchRolePermissions, extractScopeResources };
 
 // 范围资源键 → 门店集解析（2026-08-18 门店范围显式授权，纯函数供测试）：
 //   键形态：'*' 通配 | 包名（maps.group_id，dept 多行）| branch_number（3120-0006）| 门店中文名（dim_branch.branch_name 唯一命中）
@@ -187,6 +187,26 @@ function matchRolePermissions(perms, myRoleCodes) {
     const hit = pr.some((r) => mine.has(r) || mine.has(String(r).split('/').pop()));
     if (!hit) continue;
     for (const res of p.resources ?? []) if (typeof res === 'string') out.add(res);
+  }
+  return [...out];
+}
+
+// 范围资源键提取（2026-08-18 门店范围唯一真相 + 迁移 199 投影）：
+//   从角色链可达对象里抽出「范围相关」资源键（归一化形态 data-analysis:branch:X（X=范围|后原值）/
+//   data-analysis:brand:X / data-analysis:category:X / data-analysis:field:X），供登录写穿
+//   org_users.scope_resources（无会话链路 run_push/agent-query/preview 解析 data_scope 的唯一输入）。
+//   归一走 normalizeFriendlyPerm（静态表 + 范围|前缀规则）；能力键（view/view-board/push:* 等）排除。
+//   纯函数，无 I/O —— claims.test.js 契约断言防回归；index.js 登录写穿复用。空入参 → []（防御，不抛）。
+function extractScopeResources(reachable) {
+  const out = new Set();
+  for (const k of reachable ?? []) {
+    if (typeof k !== 'string' || k.length === 0) continue;
+    const norm = normalizeFriendlyPerm(k);
+    if (typeof norm !== 'string' || norm.length === 0) continue;
+    if (norm.startsWith('data-analysis:branch:') ||
+        norm.startsWith('data-analysis:brand:') ||
+        norm.startsWith('data-analysis:category:') ||
+        norm.startsWith('data-analysis:field:')) out.add(norm);
   }
   return [...out];
 }

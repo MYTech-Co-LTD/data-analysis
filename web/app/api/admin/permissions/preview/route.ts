@@ -4,7 +4,8 @@
 // ★2026-08-18 门店范围唯一真相：新增 target 字段 = 按「真实登录口径」推导的生效范围——
 //   Casdoor get-all-objects（与登录 fetchAllObjects 同源并集，含角色挂载）→ 提取 范围|/品牌|/品类|/字段|
 //   → 范围|X 经 scope-expand（claims.js resolveScopeKeys 的 web 版）展开成 branch_nums。
-//   get_user_perms 的 branch_nums 是 groups 推导的 legacy 合成（展示对照，非登录授权源）。
+//   get_user_perms 现为 scope_resources 双形输出（方案 A，migration 200）：effective 读 data_scope/fields，
+//   旧顶层四维仅供展示对照（M6 sunset 后仅 data_scope/fields）。
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdmin } from '@/lib/admin-api-auth';
 import { casdoorFetch } from '@/lib/sync/casdoor-client';
@@ -84,7 +85,7 @@ export async function GET(req: NextRequest) {
     effective: permsRes,
     layers: { user, role: roleArr?.[0] ?? null, departments, permissions: perms },
     // ★2026-08-18 门店范围唯一真相：target = 真实登录口径生效范围（范围|X 资源展开）；
-    //   effective.branch_nums（get_user_perms）为 groups 推导 legacy 合成，仅对照。
+    //   effective（get_user_perms）为 scope_resources 双形输出（200），读 data_scope/fields，仅对照。
     target,
   });
 }

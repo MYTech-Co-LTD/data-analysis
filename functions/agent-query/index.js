@@ -118,14 +118,16 @@ const normKey = (s) => String(s).replace(/^([0-9]+)-0+([0-9]+)$/, "$1-$2");
 // 文件路径（QA/c1 同款 regexp_extract(filename) 提取）；claims 授权是规范复合键——比较前
 // 双侧归一（186 同款尾段去前导零）。裸授权值（无 '-'）跨账套不唯一不参与匹配（deny 方向）。
 async function runDuckdb(userSelect, perms, reg) {
-  const allBranches = !Array.isArray(perms.branch_nums) || perms.branch_nums.includes("*");
-  const authKeys = [...new Set((perms.branch_nums || []).filter((v) => String(v).includes("-")).map(normKey))];
+  // T7/M4：消费 data_scope/fields 新形状（get_user_perms 双形同源同值，M6 摘旧 key 前置）
+  const branchNums = perms.data_scope?.branch_nums ?? [];
+  const allBranches = !Array.isArray(branchNums) || branchNums.includes("*");
+  const authKeys = [...new Set(branchNums.filter((v) => String(v).includes("-")).map(normKey))];
   const branchFilter = allBranches
     ? ""
     : authKeys.length === 0
       ? "WHERE 1=0"
       : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
-  const canSee = perms.can_see_cost ? "TRUE" : "FALSE";
+  const canSee = perms.fields?.cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
   let viewSql =
     "CREATE OR REPLACE TEMP VIEW retail_detail AS " +
@@ -160,12 +162,12 @@ async function runPg(userSelect, userId, perms) {
       sub: userId,
       role: "authenticated",
       data_scope: {
-        branch_nums: perms.branch_nums,
-        brands: perms.brands || [],
-        categories: perms.categories || [],
+        branch_nums: perms.data_scope?.branch_nums ?? [],
+        brands: perms.data_scope?.brands || [],
+        categories: perms.data_scope?.categories || [],
       },
-      fields: { cost: !!perms.can_see_cost },
-      can_see_cost: !!perms.can_see_cost,
+      fields: { cost: !!perms.fields?.cost },
+      can_see_cost: !!perms.fields?.cost,
       iss: "agent-query",
       iat: now,
       exp: now + SHORT_JWT_TTL,
@@ -346,7 +348,10 @@ module.exports = async function (req) {
   } catch (e) {
     return json({ error: "perm_resolve_failed", detail: String(e) }, 502);
   }
-  if (!perms || perms.error || !Array.isArray(perms.branch_nums)) {
+  // 异种 review #11：双形 fallback——旧形状（无 data_scope 段）也接受顶层 branch_nums，防 function-only
+  // 部署在迁移 200 前单独上线时全员 403（部署纪律窗口，runbook 标注）。
+  const branchNums = perms.data_scope?.branch_nums ?? perms.branch_nums;
+  if (!perms || perms.error || !Array.isArray(branchNums)) {
     return json({ error: "no_permission", detail: perms && perms.error }, 403);
   }
 

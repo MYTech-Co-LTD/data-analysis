@@ -714,6 +714,8 @@ PostgreSQL RLS 策略（执行点机制不变；W3 起新增策略分支，见�
 - **合成规则**（`get_user_perms`，登录时写入 claims）：基底 = 角色 ∪ 部门各维 UNION（忽略 NULL，过滤过期条目）→ 个人 override 某维非 NULL 则**按字段覆盖**；`can_see_cost` = 个人 user 行配了该维即**整体替换基底**（配 `false` 可显式收回）；兜底不变（claim 缺失 / 含 `"*"` → 放行，空数组兜底 `["*"]`——**该兜底仅限无 data_scope 段的旧形状令牌（双氧期）；W3 起新签发 claims 带 data_scope 段，段存在但空 = authorized ∅ = deny，不收敛 `["*"]`**，enforce 走上节策略分支，铁律见 CLAUDE.md「catalog 单真相纪律」）。引擎侧 strict wrapper 语义见 §7.4（未知用户 NULL fail-close，空集 ≠ NULL）。
 - 智能问数 perms（`get_user_perms` 返回）= `{ branch_nums, brands, categories, can_see_cost }` + 角色 UI 字段：详见 §4.2
 
+**数据范围持久投影（方案 A，2026-08-18 推送系统 IAM 适配；spec：`docs/superpowers/specs/2026-08-18-push-iam-adaptation-design.md`）**：`org_users.scope_resources TEXT[]` = **Casdoor 角色链范围资源键的持久投影**（非真相源，只被**登录 / 薄同步 / drift 对账**写穿，不经业务 API 直写）——把「角色」投影（`role_codes`）推广到「数据范围资源」，同款写穿/对账模型（§6.1 薄同步链）。**无会话链路（run_push / agent-query / preview）经 `get_user_perms` 解析此投影拿 `data_scope`，是唯一输入**（Casdoor 宕机数据面不受影响）。投影存**归一化原始资源键**（`data-analysis:branch:X`（X=`范围|` 后原值）/ `data-analysis:brand:*` / `category:*` / `field:*`；**裸 `*` 非投影键**）不存展开门店集（maps/dim_branch 变动可重解析，不写全表）。**`get_user_perms` 在 SQL 内解析投影键**产出**新形状 `{ data_scope:{brands,categories,branch_nums}, fields:{cost} }`**（语义对齐 claims.js `resolveScopeKeys` + `collapseFullStore`：`全店`→`['*']` 短路、覆盖全集→收敛 `['*']`、分区包/单店/中文名唯一命中、未知/歧义键 fail-close 空集 = deny、无 branch 资源 → `[]`）。**双形过渡**：过渡期 `get_user_perms` 同源同值输出旧顶层四维 + 新 `data_scope`/`fields`（M6 显式摘旧 key），消费端逐一迁新形状（**兜底恒 deny：`?? []` / `?? false`，禁 `|| ["*"]`**）。
+
 **身份视图一致性总表（哪个消费端读哪份身份快照、多旧、怎么失效）：**
 
 | 消费端 | 数据源 | TTL/时效 | 失效方式 |
@@ -925,6 +927,8 @@ spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md
   → 企微 App B message/send（共享 wecom 发送库，双运行时副本+契约测试）
 降级：Novu 连续失败 → 自动回退 wecom-notify 直投——走同一引擎渲染的分组产物，只换投递通道
 ```
+
+- **代签 JWT 形状（2026-08-18 推送 IAM 适配，方案 A）**：`generateScopedJwt` 每组短时代签 JWT（≤10min）payload = `{ role:'authenticated', data_scope:{brands,categories,branch_nums}, fields:{cost}, departments, iat, exp }`——**内嵌 `data_scope`/`fields`，与登录 claims 同形状（§6.1）**，RLS（scope_match_v2）读 `data_scope` 段放行；**移除**旧顶层 `branch_nums`/`brands`/`categories`/`can_see_cost`/`scope`（无消费方，185 已摘）。scope 签名（scope-signature.ts）数据源 = 解析后的 `data_scope` + `fields.cost`，canonical 四维 key 不变。数据来源 = 逐人实时 `get_user_perms` 读 `scope_resources` 投影解析（§6.2），不消费 7 天 JWT claims。
 
 - **变量注册表**：`push_variables`（var_code PK / metric_code REFERENCES metric_registry / scope_dim / extra_filter JSONB）；口径复用 `metric_registry`（AST），**生成器零改动**——新可推指标 = INSERT 一行；extra_filter 写入校验**禁裸 `branch_num`**（门店键铁律）。
 - **双向白名单**：data 机（出口 113.249.120.84）↔ 控制面；Novu API 白名单仅接受 data IP（CE 是否原生支持 IP allowlist 待 V1b 验证，否则前置 nginx 限流）；wireguard 隧道 P0-V4 评估（不可行退双向白名单）。

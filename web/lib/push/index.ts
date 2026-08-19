@@ -89,11 +89,17 @@ async function getPermsStrict(wecomId: string): Promise<Perms | null> {
   const data = await resp.json();
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const row = data as Record<string, unknown>;
+  // M4/方案 A：解析新形状 data_scope + fields + departments（get_user_perms 双形输出）
+  const ds = (row.data_scope ?? {}) as Record<string, unknown>;
+  const f = (row.fields ?? {}) as Record<string, unknown>;
   return {
-    brands: Array.isArray(row.brands) ? (row.brands as string[]) : undefined,
-    branch_nums: Array.isArray(row.branch_nums) ? (row.branch_nums as string[]) : undefined,
-    categories: Array.isArray(row.categories) ? (row.categories as string[]) : undefined,
-    can_see_cost: typeof row.can_see_cost === 'boolean' ? row.can_see_cost : undefined,
+    data_scope: {
+      brands: Array.isArray(ds.brands) ? (ds.brands as string[]) : [],
+      categories: Array.isArray(ds.categories) ? (ds.categories as string[]) : [],
+      branch_nums: Array.isArray(ds.branch_nums) ? (ds.branch_nums as string[]) : [],
+    },
+    fields: { cost: f.cost === true },
+    departments: Array.isArray(row.departments) ? (row.departments as string[]) : [],
   };
 }
 
@@ -303,17 +309,18 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       const rendered = await renderVariables(
         enabledVars,
         async (code, perms, jwt) => {
-          // URL 型变量
+          // URL 型变量（S7：branch_nums 非空才渲染）
           if (code.endsWith('_url')) {
+            if (!perms.data_scope?.branch_nums?.length) return null;
             const view = code.replace('_url', '');
             const params = new URLSearchParams();
-            if (perms.brands?.length) params.set('brand', perms.brands.join(','));
-            if (perms.branch_nums?.length) params.set('branch', perms.branch_nums.join(','));
-            if (perms.categories?.length) params.set('category', perms.categories.join(','));
+            if (perms.data_scope?.brands?.length) params.set('brand', perms.data_scope.brands.join(','));
+            if (perms.data_scope?.branch_nums?.length) params.set('branch', perms.data_scope.branch_nums.join(','));
+            if (perms.data_scope?.categories?.length) params.set('category', perms.data_scope.categories.join(','));
             params.set('jwt', jwt);
             return `/report/${view}?${params.toString()}`;
           }
-          // 数值型 → 占位（实际由 Novu 模板渲染）
+          // 数值型 → 占位（实际由 Novu 模板渲染；M7 守卫在 live 拒投占位）
           return `{{${code}}}`;
         },
         group.perms

@@ -13,17 +13,13 @@ import { POSTGREST_URL, INSFORGE_API_KEY } from '../jobs/env';
 
 // ---- 类型（引擎实现后从源模块导入；shadow 仅消费 deliver=false 分支） ----
 import type { Selector } from './selectors';
+import type { Perms } from './push-variables';
 
 /** 单组渲染产物（引擎 runPush renderedGroups 元素） */
 export interface RenderedGroup {
   signature: string;
   members: string[];
-  perms: {
-    brands?: string[];
-    branch_nums?: string[];
-    categories?: string[];
-    can_see_cost?: boolean;
-  };
+  perms: Perms;
   rendered: Record<string, string>;
 }
 
