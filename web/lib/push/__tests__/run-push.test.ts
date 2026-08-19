@@ -290,17 +290,18 @@ describe('runPush', () => {
     expect(sendWecomMarkdown).toHaveBeenCalled();
   });
 
-  it('live 模式数值变量仍是占位符 → 拒绝投递（M7 fail-closed）', async () => {
-    // 默认 PUSH_VARIABLES_JSON 含 sale_amount/cost_amount/profit_amount（数值变量）
+  it('live 模式数值变量取不到 → 跳过不渲染，不拒投递（§12.1 新语义；字面占位符仍 M7 拒绝）', async () => {
+    // 默认 PUSH_VARIABLES_JSON 含 sale_amount/cost_amount/profit_amount（数值变量）。
+    // 2026-08-19 §12.1：resolveNumericValue 取不到 → null（变量不渲染），不再以占位符形式拒投；
+    // M7 守卫仍对字面 {{code}} 拒绝（此处无该路径 → 应正常 resolve）。
     const { runPush } = await import('../index');
-    await expect(
-      runPush({
-        workflowId: 'test',
-        selector: { kind: 'all' },
-        operatorId: 'admin',
-        broadcastPerm: true,
-        deliver: true,
-      })
-    ).rejects.toThrow('占位符');
+    const result = await runPush({
+      workflowId: 'test',
+      selector: { kind: 'all' },
+      operatorId: 'admin',
+      broadcastPerm: true,
+      deliver: true,
+    });
+    expect(result).toBeTruthy();
   });
 });
