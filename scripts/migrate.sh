@@ -25,6 +25,12 @@ if ! docker compose exec -T postgres pg_isready -U "$PGUSER" >/dev/null 2>&1; th
 fi
 
 echo "▶ 执行数据库迁移（${MIGRATIONS_DIR}）..."
+
+# 迁移 spec 铁律（2026-08-19）：破坏性迁移必须关联 spec（本地 guard 脚本在则检查；
+# 服务器部署包可能未携带 scripts/，缺失时降级跳过——CI quality job 已是硬门禁）
+if [ -x "${ROOT}/scripts/guard-migration-spec.sh" ]; then
+  bash "${ROOT}/scripts/guard-migration-spec.sh"
+fi
 shopt -s nullglob
 for sql in "$MIGRATIONS_DIR"/*.sql; do
   name="$(basename "$sql")"

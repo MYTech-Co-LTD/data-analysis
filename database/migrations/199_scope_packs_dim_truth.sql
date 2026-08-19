@@ -1,4 +1,5 @@
 -- 199_scope_packs_dim_truth.sql
+-- spec: docs/superpowers/specs/2026-08-19-scope-packs-dim-truth.md
 -- maps_branch_group 真相源切换（2026-08-19 用户裁定）：
 --   能力页（dim_branch 区域体系）= 唯一真相源；maps 是它的投影，能力页有的区域包必须存在。
 --   背景：2026-08-17 rebuild 按企微部门名驱动，dim_branch 4 个区域（其他门店/其余门店1/广西大区/
