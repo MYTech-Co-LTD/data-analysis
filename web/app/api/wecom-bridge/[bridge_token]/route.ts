@@ -41,10 +41,14 @@ async function dispatchWecom(wecomId: string, structured: Record<string, unknown
     case 'news':
       return sendWecomMessage(buildWecomNews(wecomId, Array.isArray(structured.articles) ? structured.articles as Array<{ title: string; description?: string; url: string; picurl?: string }> : []));
     case 'template_card':
+      // 2026-08-20：透传原始 template_card 对象（支持 news_notice 带 card_image 等所有 card_type），
+      //   兼容简写 main_title/url（text_notice 便捷形态）
       return sendWecomMessage(buildWecomTemplateCard(wecomId, {
-        main_title: String(structured.main_title ?? ''),
-        sub_title_text: structured.sub_title_text ? String(structured.sub_title_text) : undefined,
-        url: structured.url ? String(structured.url) : undefined,
+        ...(typeof structured.template_card === 'object' && structured.template_card !== null
+          ? (structured.template_card as Record<string, unknown>)
+          : {}),
+        ...(structured.main_title ? { main_title: { title: String(structured.main_title) } } : {}),
+        ...(structured.url ? { url: String(structured.url) } : {}),
       }));
     default:
       // 未知 msgtype → 回退 markdown（原样序列化，避免丢内容）
