@@ -25,6 +25,7 @@ import { fallbackSend, type FallbackGroup } from './fallback';
 import { getPushVariables } from './push-variables';
 import { isPaused } from './guards';
 import { auditPushTrigger, auditPushPayload } from './audit';
+import { renderPresetContent, type MessagePreset } from './message-preset';
 
 // 运行时配置
 function getConfig() {
@@ -101,6 +102,26 @@ async function getPermsStrict(wecomId: string): Promise<Perms | null> {
     fields: { cost: f.cost === true },
     departments: Array.isArray(row.departments) ? (row.departments as string[]) : [],
   };
+}
+
+/**
+ * 加载 workflow 的消息呈现 preset（push_message_presets；平台能力 2026-08-20）
+ * 无 preset / 查询失败 → null（走默认 Novu content，向后兼容）
+ */
+async function loadWorkflowPreset(workflowId: string): Promise<MessagePreset | null> {
+  const { postgrestUrl, postgrestKey } = getConfig();
+  if (!postgrestUrl || !postgrestKey) return null;
+  try {
+    const resp = await fetch(
+      `${postgrestUrl}/push_message_presets?workflow_id=eq.${encodeURIComponent(workflowId)}&enabled=eq.true`,
+      { headers: { Authorization: `Bearer ${postgrestKey}` } },
+    );
+    if (!resp.ok) return null;
+    const rows = await resp.json() as MessagePreset[];
+    return Array.isArray(rows) && rows[0] ? rows[0] : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -329,6 +350,16 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       };
     })
   );
+
+  // ─── 消息呈现 preset（平台能力 2026-08-20）───
+  //   workflow 配了 push_message_presets → 渲染 message_content（JSON 契约）进 payload，
+  //   Novu content 固定 {{payload.message_content}}，bridge 按 content JSON dispatch 多消息类型。
+  const preset = await loadWorkflowPreset(opts.workflowId);
+  if (preset) {
+    for (const g of renderedGroups) {
+      g.rendered.message_content = renderPresetContent(preset, g.rendered);
+    }
+  }
 
   // ─── 审计日志（预写） ───
 
