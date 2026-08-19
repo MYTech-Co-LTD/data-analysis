@@ -109,6 +109,9 @@ export async function POST(
 
   const content = body.content as string;
   if (!content || typeof content !== 'string') {
+    // TEMP-DIAG 2026-08-20：定位复杂 markdown 400 —— 记录 Novu 实际 body 结构
+    console.error('[wecom-bridge][diag] missing content. body keys:', Object.keys(body),
+      '| body sample:', JSON.stringify(body).slice(0, 400));
     return NextResponse.json({ error: 'missing content' }, { status: 400 });
   }
 
