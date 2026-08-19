@@ -114,14 +114,16 @@ jobs:
 
       - name: rsync 代码到服务器（migrate 所需：database/scripts/deploy + specs——迁移 spec 铁律在 migrate.sh 防御性复检需在场）
         run: |
-          rsync -avz --delete \
+          # -R 相对模式：多源 rsync 只拷 basename（specs 会落到根下），-R 保留 docs/superpowers/specs 路径
+          rsync -avzR --delete \
             --exclude '.git' \
             --exclude 'node_modules' \
             --exclude '.next' \
             --exclude '.env' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            ./database ./scripts ./deploy ./docs/superpowers/specs \
+            ./database ./scripts ./deploy docs/superpowers/specs \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "rm -rf ${{ secrets.DEPLOY_PATH }}/specs"
 
       - name: SSH 执行数据库迁移（起后端栈 + migrate + 刷 postgrest 缓存）
         uses: appleboy/ssh-action@v1.2.0
