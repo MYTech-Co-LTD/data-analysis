@@ -116,9 +116,12 @@ const METRIC_TO_VIEW: Record<string, string> = {
 const fmtCN = (n: number): string => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Math.round(n));
 
 /**
- * 数值指标取值（§12.1，2026-08-20）：
- *   用代签 JWT 查 report_achievement_gen（RLS 按 data_scope 裁剪）→ 按 metric 聚合 actual/target →
- *   格式化（金额 ¥ / 比率 %）。查询失败或取不到 → null（该变量不渲染，避免占位符）。
+ * 数值指标取值（§12.1，2026-08-20；同日修复跨周期累计 bug）：
+ *   用代签 JWT 查 report_achievement_gen（RLS 按 data_scope 裁剪）。
+ *   视图按目标周期（target）一行——必须只取 status=active 的当前周期行，
+ *   不能 SUM 全部行（closed 历史周期会被跨期累计：实测 7月+8月 SUM 出 81.7% 假达成率）。
+ *   比率直接用视图 achievement_rate（与报表页同口径），金额用 actual_value。
+ *   查询失败或取不到 → null（该变量不渲染，避免占位符）。
  */
 async function resolveNumericValue(metricCode: string | undefined, jwt: string): Promise<string | null> {
   if (!metricCode) return null;
@@ -128,21 +131,20 @@ async function resolveNumericValue(metricCode: string | undefined, jwt: string):
   if (!postgrestUrl) return null;
   try {
     const resp = await fetch(
-      `${postgrestUrl}/report_achievement_gen?select=metric_code,actual_value,target_value&metric_code=eq.${viewMetric}`,
+      `${postgrestUrl}/report_achievement_gen?select=metric_code,actual_value,target_value,achievement_rate`
+      + `&metric_code=eq.${viewMetric}&status=eq.active&order=start_date.desc&limit=1`,
       { headers: { Authorization: `Bearer ${jwt}` } },
     );
     if (!resp.ok) return null;
-    const rows = await resp.json() as Array<{ metric_code: string; actual_value: number; target_value: number }>;
+    const rows = await resp.json() as Array<{ actual_value: number | null; achievement_rate: number | null }>;
     if (!Array.isArray(rows) || rows.length === 0) return null;
-    let actual = 0, target = 0;
-    for (const r of rows) {
-      actual += Number(r.actual_value) || 0;
-      target += Number(r.target_value) || 0;
-    }
+    const row = rows[0];
     if (metricCode === 'sale_rate') {
-      return target > 0 ? `${((actual / target) * 100).toFixed(1)}%` : null;
+      const rate = Number(row.achievement_rate);
+      return rate > 0 ? `${(rate * 100).toFixed(1)}%` : null;
     }
-    return `¥${fmtCN(actual)}`;
+    if (row.actual_value === null || row.actual_value === undefined) return null;
+    return `¥${fmtCN(Number(row.actual_value))}`;
   } catch {
     return null;
   }

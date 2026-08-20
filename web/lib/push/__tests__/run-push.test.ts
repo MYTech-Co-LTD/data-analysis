@@ -305,4 +305,70 @@ describe('runPush', () => {
     expect(result).toHaveProperty('txnId');
     expect(result.error).toBeUndefined();
   });
+
+  it('§12.1 数值取当前 active 周期单行（回归：跨周期 SUM 出 7月+8月=81.7% 假达成率）', async () => {
+    // 2026-08-20 生产 bug：resolveNumericValue 对 metric_code=eq.sale 无 status 过滤直接 SUM 全部行，
+    //   7月 closed(104.4%) + 8月 active(60.6%) 加总出 81.7% 假达成率。
+    // 修复：只取 status=active 单行；rate 用视图 achievement_rate（与报表页同口径），金额用 actual_value。
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+      { var_code: 'sale_rate', name: '销售达成率', metric_code: 'sale_rate', scope_dim: 'total', unit: '%', enabled: true },
+    ]));
+    const { resetCache } = await import('../push-variables');
+    resetCache();
+
+    // 模拟视图（已按 URL 过滤条件返回 active 8月单行——若查询漏 status 过滤本测试的 URL 断言会拦下）
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('require_push_owner')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+      }
+      if (url.includes('org_users')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { id: 'u1', wecom_id: 'wx1', is_active: true },
+          ]),
+        });
+      }
+      if (url.includes('get_user_perms_strict')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }),
+        });
+      }
+      if (url.includes('report_achievement_gen')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { metric_code: 'sale', actual_value: 4164063.06, target_value: 6873288, achievement_rate: 0.6058 },
+          ]),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    const { runPush } = await import('../index');
+    const result = await runPush({
+      workflowId: 'test',
+      selector: { kind: 'person', ids: ['wx1'] },
+      operatorId: 'admin',
+      broadcastPerm: false,
+    });
+
+    // 1. 查询必须带 active 周期过滤 + 单行截断（防回归 SUM 全部行）
+    const genCalls = mockFetch.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.includes('report_achievement_gen'));
+    expect(genCalls.length).toBeGreaterThan(0);
+    for (const url of genCalls) {
+      expect(url).toContain('status=eq.active');
+      expect(url).toContain('limit=1');
+      expect(url).toContain('order=start_date.desc');
+    }
+
+    // 2. 渲染值 = 8月单周期（¥4,164,063 / 60.6%），非跨周期合计（¥10,843,212 / 81.7%）
+    const rendered = result.renderedGroups?.[0]?.rendered ?? {};
+    expect(rendered.sale_amount).toBe('¥4,164,063');
+    expect(rendered.sale_rate).toBe('60.6%');
+  });
 });
