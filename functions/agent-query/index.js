@@ -231,10 +231,14 @@ async function runDuckdb(userSelect, perms, reg) {
       : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.fields?.cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
+  // ★新增计算列 system_book_code（从 filename 提取 sbc）：让模型 join 维表时用复合键
+  // （system_book_code + branch_num），杜绝裸 branch_num 跨品牌扇出错标（2026-08-20 实测：
+  // 东部数据 join dim_branch 裸 branch_num 被错标成中部/南部/西部）。
   let viewSql =
     "CREATE OR REPLACE TEMP VIEW retail_detail AS " +
-    "SELECT * REPLACE (" + replaceList + ") " +
-    "FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ";";
+    "SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code " +
+    "FROM (SELECT * REPLACE (" + replaceList + ") " +
+    "FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t;";
   // C3: dim_* carry 视图（字典全可见；敏感列如 dim_item.item_cost_price 按 can_see_cost 脱敏，与 retail_detail 同机制）
   for (const d of (reg.dimCarry || [])) {
     const sens = d.sensitiveColumns || [];

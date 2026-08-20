@@ -34,6 +34,13 @@ metadata:
 
 **2. 日期忠于原话 + 必须显式标注**：明细日期列 `order_detail_bizday`（YYYYMMDD 字符串）；汇总日期列 `biz_date`/`week_start`（DATE）。"今天/最近/最新"用一条 SQL：`WHERE 日期列=(SELECT MAX(日期列) FROM 表)` 并带出 `data_date`；若 data_date≠今天就说"今天暂无，以下为最新 data_date 的数据"。回答里始终写明数据属于哪一天，绝不拿旧日冒充今天。按北京时间（容器 Asia/Shanghai）。
 
+**2.5 JOIN 复合键铁律（跨品牌防串号，实测教训）**：`branch_num` 跨品牌共享（3120/64188 同号不同店）。
+明细 join 维表（dim_branch/dim_region）**必须用复合键**：
+`ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num`
+（retail_detail 自带 `system_book_code` 列，网关已从文件名提取）。
+**禁止** `ON rd.branch_num = db.branch_num` 裸键 join——会把本战区数据扇出错标成其他战区/品牌
+（曾把东部数据错标成中部一/二/三区，金额是重复计数的假象）。
+
 **3. 成本列无权限 = NULL，别当 0**：成本/利润为 NULL（无权限）→如实说"成本列无权限"，**别把 NULL 当 0 算进总额**（list_datasets 里 is_sensitive=true 的列即为成本组）。
 
 **4. 一问一查**：能一条 SQL 搞定别拆多条。总额/计数/排名/占比用 SUM/COUNT 聚合，别把明细拉回来自己算。

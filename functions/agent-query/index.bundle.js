@@ -251,7 +251,7 @@ async function runDuckdb(userSelect, perms, reg) {
   const branchFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.fields?.cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
-  let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ";";
+  let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code FROM (SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t;";
   for (const d of reg.dimCarry || []) {
     const sens = d.sensitiveColumns || [];
     const dimReplace = sens.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
