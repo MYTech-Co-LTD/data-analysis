@@ -50,7 +50,7 @@ push_message_presets（DB 配置：msgtype + 字段模板）
 
 ⚠️ **Novu 模板 variables 铁律**：Novu content 模板里的 `{{payload.X}}` 变量，**必须在 workflow step 的 `template.variables` 里声明**，否则渲染为空（实测踩坑：多次 PUT 只改 content 清空 variables → `{{payload.X}}` 全渲染空 → bridge 400 missing content）。
 
-⚠️ **不要用 `{{payload.message_content}}` 转发整段**：曾用「引擎渲染 message_content → Novu content = `{{payload.message_content}}`」方案，Novu 渲染该值不稳定（空）。正确做法：Novu content 直接用变量模板（`{{payload.detail_url}}` 等），或静态 JSON 契约。
+⚠️ **`{{payload.message_content}}` 整段转发（2026-08-20 复测更正）**：此前判「渲染不稳定（空）」的根因就是**漏声明 variables**——只要 workflow step 的 `template.variables` 里声明了 `message_content`，整段转发可靠（生产实测 status=sent + 企微收到动态卡片）。这是 preset 平台能力的投递形态：Novu content 固定 `{{payload.message_content}}` + variables 声明，呈现细节全部由 DB 侧 `push_message_presets` 决定。
 
 ## 4. 快速选用指引
 

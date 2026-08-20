@@ -907,9 +907,9 @@ lemeng-datasource/
 - 跨品牌查询用 glob：`read_parquet('s3://lemeng-datasource/lemeng/retail_detail/*/{date}/all.parquet')`
 - 历史数据（2026-07-04 的 3120）曾写在无 company_id 的旧路径，已迁移或由下次全量核对重写
 
-### 7.4 Novu 统一推送中心（2026-08-15 设计，未实施）
+### 7.4 Novu 统一推送中心（2026-08-15 设计；2026-08-20 已上线含多消息类型呈现层）
 
-spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md`。**业务推送**（订阅/定时/agent 推送）统一切换到 Novu；**系统告警留 `wecom-notify` 不动**（§7.1.1）；wecom-push 退役（停 cron 不删码，一键回退）。
+spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM 适配 `2026-08-18-push-iam-adaptation-design.md`。**业务推送**（订阅/定时/agent 推送）统一切换到 Novu；**系统告警留 `wecom-notify` 不动**（§7.1.1）；wecom-push 退役（停 cron 不删码，一键回退）。
 
 **拓扑与链路（控制面 113.249.101.33，与 Casdoor 同机 26G 盘）：**
 
@@ -919,7 +919,9 @@ spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md
       selector 解析 → 悬空守卫 → 存在性守卫 → 数据就绪守卫
       → 逐人实时 get_user_perms（PERMS_INPUT 感知，不消费 7 天 JWT claims）
       → scope 签名分组（四维 canonical JSON，can_see_cost 必入签名）→ 每组短时 JWT（≤10min）代签
-      → 查语义视图算变量（cost_sensitive × 组 can_see_cost=false → 脱敏）
+      → 查语义视图算变量（数值变量= 代签 JWT 查 report_achievement_gen 聚合 actual/target，
+        RLS 按组 scope 裁剪——§12.1 取值，取不到=变量跳过不渲染；URL 变量= /report/<view>?jwt=…；
+        cost_sensitive × 组 can_see_cost=false → 脱敏）
       → NovuGateway.triggerBulk（≤100/批，txnId 贯穿）
   → Novu 社区版（org=shanhai 山海租户；dumb pipe，不反查业务库）
   → chat-webhook（官方扩展点；不 fork 不自研 provider）
@@ -931,6 +933,7 @@ spec：`docs/superpowers/specs/2026-08-15-platform-casbin-novu-unified-design.md
 - **代签 JWT 形状（2026-08-18 推送 IAM 适配，方案 A）**：`generateScopedJwt` 每组短时代签 JWT（≤10min）payload = `{ role:'authenticated', data_scope:{brands,categories,branch_nums}, fields:{cost}, departments, iat, exp }`——**内嵌 `data_scope`/`fields`，与登录 claims 同形状（§6.1）**，RLS（scope_match_v2）读 `data_scope` 段放行；**移除**旧顶层 `branch_nums`/`brands`/`categories`/`can_see_cost`/`scope`（无消费方，185 已摘）。scope 签名（scope-signature.ts）数据源 = 解析后的 `data_scope` + `fields.cost`，canonical 四维 key 不变。数据来源 = 逐人实时 `get_user_perms` 读 `scope_resources` 投影解析（§6.2），不消费 7 天 JWT claims。
 
 - **变量注册表**：`push_variables`（var_code PK / metric_code REFERENCES metric_registry / scope_dim / extra_filter JSONB）；口径复用 `metric_registry`（AST），**生成器零改动**——新可推指标 = INSERT 一行；extra_filter 写入校验**禁裸 `branch_num`**（门店键铁律）。
+- **呈现层 preset（2026-08-20 平台能力）**：`push_message_presets` 按 workflow 配置消息形态（msgtype = text/markdown/textcard/news/template_card + 字段模板，支持 `{{var}}` 插值）→ 引擎渲染成 `message_content`（JSON 契约）进 payload → Novu content 固定 `{{payload.message_content}}`（**必须在 step template.variables 声明**，漏声明=渲染空）→ bridge 按 content JSON 的 `msgtype` dispatch 到企微对应消息体，纯文本走 markdown。改卡片样式/消息类型 = 改 preset 行，不动 Novu 模板与代码。字段限制实测：markdown content≤2048B 且无内联图；textcard url 必填；news picurl≤2048B url；template_card card_action.url≤1024B（JWT 长链超限→用短链）；多区域独立跳转 = card_action + quote_area/image_text_area/horizontal[type=1] 各自 url。速查：`docs/ops/wecom-message-capabilities.md`。
 - **双向白名单**：data 机（出口 113.249.120.84）↔ 控制面；Novu API 白名单仅接受 data IP（CE 是否原生支持 IP allowlist 待 V1b 验证，否则前置 nginx 限流）；wireguard 隧道 P0-V4 评估（不可行退双向白名单）。
 - **探活方向从 data 侧发起**（挂 monitor/probe evaluators）——控制面单机不能自证存活。
 - **容量 gate / TTL / 备份 / 水位**：上线前磁盘余量 ≥8G + RAM 实测（栈常驻 2-4G，与 Casdoor 同机）；镜像经天翼云仓搬运（跨境拉取不通）；mongodb TTL 索引 90 天；磁盘水位 80% 告警；workflow 定义每日 export 落对象存储（mongodump 仅磁盘充裕时加做）。
