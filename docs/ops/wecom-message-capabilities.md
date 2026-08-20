@@ -39,23 +39,32 @@
 ## 3. 平台链路（preset → Novu → bridge）
 
 ```
-push_message_presets（DB 配置：msgtype + 字段模板）
-  → 引擎 runPush 渲染变量（detail_url 等）进 payload
-  → Novu workflow content = 模板（静态或含 {{payload.X}}；模板需在 Novu 声明 variables 才会渲染）
+push_message_presets（DB 配置：msgtype + 字段模板 / card_json 完整 card）
+  → 引擎 runPush 渲染变量（sale_amount 等）进 payload
+  → Novu workflow content = {{{message_content}}}（triple-stash + variables 声明）
   → chat-webhook → bridge
   → bridge 解析 content：JSON 含 msgtype → dispatch（text/markdown/textcard/news/template_card）
-                       纯文本 → markdown
+                       疑似 JSON 却 parse 失败 → 告警日志 + markdown 降级（不静默）
   → 企微 message/send
 ```
 
-⚠️ **Novu 模板 variables 铁律**：Novu content 模板里的 `{{payload.X}}` 变量，**必须在 workflow step 的 `template.variables` 里声明**，否则渲染为空（实测踩坑：多次 PUT 只改 content 清空 variables → `{{payload.X}}` 全渲染空 → bridge 400 missing content）。
+⚠️ **Novu 模板三合一铁律（2026-08-20 生产两连踩后定稿）**：Novu content 模板必须写 **`{{{message_content}}}`（triple-stash、无 `payload.` 前缀）**，且变量在 workflow step 的 `template.variables` 里声明。三条各自炸过：
 
-⚠️ **`{{payload.message_content}}` 整段转发（2026-08-20 复测更正）**：此前判「渲染不稳定（空）」的根因就是**漏声明 variables**——只要 workflow step 的 `template.variables` 里声明了 `message_content`，整段转发可靠（生产实测 status=sent + 企微收到动态卡片）。这是 preset 平台能力的投递形态：Novu content 固定 `{{payload.message_content}}` + variables 声明，呈现细节全部由 DB 侧 `push_message_presets` 决定。
+1. **`{{payload.X}}` 前缀恒空**——worker `getCompilePayload` 把 payload **平铺**进渲染上下文，没有 `payload.` 包装层 → 渲染空串 → bridge 400 missing content → Novu 对 4xx 不重试照标 sent（收不到、无告警）。
+2. **双花括号 `{{X}}` HTML 转义**——`CompileTemplateUsecase` 用原生 Handlebars，`"`→`&quot;` → JSON 契约被破坏 → bridge parse 失败 → markdown 兜底 → **用户收到 JSON 裸文本而非卡片（链路照样 200/sent 全绿）**。修复=triple-stash `{{{X}}}`（handlebars raw 输出）。
+3. **variables 漏声明**——多次 PUT 只改 content 清空 variables → 变量全渲染空。PUT 后必须复查 `template.variables`。
+
+> 注：2026-08-20 上午曾记录「`{{payload.message_content}}` 整段转发可靠（sent+收到卡片）」——该结论已被推翻：当时 sent 是真，但「收到动态卡片」实为 markdown 兜底的 JSON 裸文本误判（status=sent 与 bridge 200 均不能证明卡片渲染成功，判真只有收件人看到的消息形态）。
+
+**呈现层 preset 投递形态（定稿）**：Novu content 固定 `{{{message_content}}}` + variables 声明 `message_content`，呈现细节全部由 DB 侧 `push_message_presets` 决定（text/markdown 用 content_template；template_card 用 card_json 完整 card 对象，`{{var}}` 深度插值，migration 203）。
 
 ## 4. 快速选用指引
 
+> **统一裁定（2026-08-20 用户裁定）**：推送消息**统一用 `template_card` `news_notice`**——大图 + 主副标题 + 键值列表 + 整卡跳转（card_action 短链 `/reports/targets`，企微会话自带权限，避开 1024B URL 限制）。其它类型仅作特殊场景备选。
+
 | 需求 | 推荐类型 |
 |---|---|
+| **标准推送卡片（日报/告警/通知）** | `template_card` `news_notice`（**统一默认**，preset 配 card_json） |
 | 纯文本 / 简单通知 | `text` 或 `markdown` |
 | 富文本日报（标题/加粗/颜色/引用） | `markdown`（无图） |
 | **带图消息** | `news`（picurl）或 `template_card` `news_notice`（card_image） |

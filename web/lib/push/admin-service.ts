@@ -115,7 +115,11 @@ export async function createNovuWorkflow(input: CreateWorkflowInput): Promise<No
     body: JSON.stringify({
       name: input.name,
       description: input.description || input.name,
-      steps: input.steps || [{ type: 'in_app', content: '{{payload.content}}' }],
+      // ⚠️ 模板变量语法（2026-08-20 生产两连踩）：
+      //    1. 渲染上下文是 trigger payload 平铺（getCompilePayload）——{{payload.X}} 恒渲染空串
+      //    2. 值可能是 JSON 契约（textcard 等）——必须 triple-stash {{{X}}}，双花括号会 HTML
+      //       转义（" → &quot;）致 bridge JSON.parse 失败降级发裸文本
+      steps: input.steps || [{ type: 'in_app', content: '{{{content}}}' }],
       tags: input.tags || ['push-admin'],
     }),
   });

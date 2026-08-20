@@ -121,7 +121,14 @@ export async function POST(
   try {
     parsed = JSON.parse(content);
   } catch {
-    // 非 JSON（普通 markdown/text）→ 走 markdown
+    // 像 JSON 契约却解析失败 → 大概率模板层破坏了 JSON（如 Handlebars HTML 转义，2026-08-20 踩过）
+    // 打告警保留降级发送（不丢消息），但不再静默
+    if (content.trimStart().startsWith('{')) {
+      console.error(
+        '[wecom-bridge] content 疑似 JSON 契约但解析失败（可能被模板层转义/截断），降级 markdown 发送',
+        { wecomId: result.wecomId, head: content.slice(0, 200) }
+      );
+    }
   }
 
   let sendResult: SendResult;

@@ -400,7 +400,8 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
 
   // ─── 消息呈现 preset（平台能力 2026-08-20）───
   //   workflow 配了 push_message_presets → 渲染 message_content（JSON 契约）进 payload，
-  //   Novu content 固定 {{payload.message_content}}，bridge 按 content JSON dispatch 多消息类型。
+  //   Novu content 固定 {{{message_content}}}（triple-stash：平铺上下文无 payload. 前缀 +
+  //   双花括号会 HTML 转义破坏 JSON 契约，详见 message-preset.ts 头注释），
   const preset = await loadWorkflowPreset(opts.workflowId);
   if (preset) {
     for (const g of renderedGroups) {

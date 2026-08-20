@@ -2,7 +2,12 @@
 // 推送消息呈现配置渲染（平台能力，2026-08-20）：
 //   push_message_presets 定义 workflow 的消息类型（text/markdown/textcard/news/template_card）+ 字段；
 //   本模块把 preset + 已渲染变量（detail_url 等）渲染成 message_content（JSON 契约给 bridge dispatch）。
-//   引擎把 message_content 放进 payload，Novu content 固定 {{payload.message_content}}。
+//   引擎把 message_content 放进 payload，Novu content 固定 {{{message_content}}}。
+//   ⚠️ 两条 Novu 模板语法铁律（2026-08-20 生产两连踩，详见 push-system-prod memory）：
+//   1. 无 payload. 前缀：渲染上下文是 payload 平铺（worker getCompilePayload），{{payload.X}} 恒渲染空串
+//      → bridge 400 missing content。
+//   2. 必须 triple-stash {{{X}}}：CompileTemplateUsecase 用原生 Handlebars，双花括号 {{X}} 会 HTML
+//      转义（" → &quot;）→ JSON.parse 失败 → bridge markdown 兜底 → 用户收到 JSON 裸文本而非卡片。
 
 export interface MessagePreset {
   preset_id: string;
@@ -13,6 +18,8 @@ export interface MessagePreset {
   url_var?: string | null;
   btntxt?: string | null;
   articles_json?: unknown;
+  /** template_card：完整 card 对象模板（news_notice 等 card_type；{{var}} 深度插值） */
+  card_json?: unknown;
   content_template?: string | null;
   enabled: boolean;
 }
@@ -23,6 +30,20 @@ function interpolate(tpl: string, vars: Record<string, unknown>): string {
     const v = vars[key];
     return typeof v === 'string' ? v : `{{${key}}}`;
   });
+}
+
+/** {{var}} 深度插值（对象/数组递归；card_json 等 JSONB 模板用） */
+function deepInterpolate(node: unknown, vars: Record<string, unknown>): unknown {
+  if (typeof node === 'string') return interpolate(node, vars);
+  if (Array.isArray(node)) return node.map((n) => deepInterpolate(n, vars));
+  if (node && typeof node === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      out[k] = deepInterpolate(v, vars);
+    }
+    return out;
+  }
+  return node;
 }
 
 /** 取 URL（url_var 指向的变量值；空则无跳转） */
@@ -69,13 +90,24 @@ export function renderPresetContent(preset: MessagePreset, vars: Record<string, 
       });
     }
 
-    case 'template_card':
+    case 'template_card': {
+      // card_json：完整 card 模板（news_notice 等 card_type）——嵌套进 template_card 键透传，
+      //   bridge route 对该键原样下发（支持 card_image/card_action/vertical_content_list 全字段）
+      const card = preset.card_json;
+      if (card && typeof card === 'object' && !Array.isArray(card)) {
+        return JSON.stringify({
+          msgtype: 'template_card',
+          template_card: deepInterpolate(card, vars),
+        });
+      }
+      // 简写：main_title + sub_title_text + url（text_notice 便捷）
       return JSON.stringify({
         msgtype: 'template_card',
         main_title: interpolate(preset.title ?? '', vars),
         sub_title_text: preset.description ? interpolate(preset.description, vars) : undefined,
         ...(url ? { url } : {}),
       });
+    }
 
     default:
       return JSON.stringify({ msgtype: 'text', content: interpolate(preset.title ?? '', vars) });

@@ -1,6 +1,7 @@
 -- 202_push_message_presets.sql
 -- 推送消息呈现配置（平台能力，2026-08-20）：多消息类型（text/markdown/textcard/news/template_card）
---   由平台配置，引擎渲染 message_content（JSON 契约）进 payload，Novu content 固定 {{payload.message_content}}，
+--   由平台配置，引擎渲染 message_content（JSON 契约）进 payload，Novu content 固定 {{{message_content}}}
+--   （triple-stash 无 payload. 前缀——见 wecom-message-capabilities.md §3 铁律），
 --   bridge 按 content JSON dispatch（web/lib/wecom-send.ts 多类型发送）。
 -- 幂等：CREATE TABLE IF NOT EXISTS / IF NOT EXISTS 索引。
 BEGIN;
