@@ -42,78 +42,33 @@ metadata:
 - 金额 ≥1万 用「X.X 万」（1位小数），<1万 用「X 元」；数字四舍五入。
 - 完整数据直接写在回复里（不要藏），卡片只用于交互选择。
 
-**0.8 模板卡片用法（数据回答首选）**：
+**0.8 模板卡片用法（数据回答首选；插件原生：回复里 ```json 代码块 → 独立卡片消息渲染）**：
 
-- **排行/汇总 → text_notice 卡片**（sub_title_text 放完整排行列表；horizontal_content_list 放 Top 3 键值对）：
+- **排行/汇总 → `text_notice` 富格式卡片**（结构化展示，不用纯文字堆）：
+  - `horizontal_content_list`（最多6条键值行）放 Top6：keyname=「排名. 店名」、value=「金额」
+  - `emphasis_content` 强调关键数字（合计/榜首金额）
+  - `sub_title_text` 放其余排名 + 合计/口径说明
 ```json
 {
   "card_type": "text_notice",
-  "main_title": { "title": "东部战区本月门店销售排行" },
-  "sub_title_text": "1. 曲靖XX店 12.5万（1320单）\n2. 曲靖XX店 10.2万（980单）\n3. 宣威XX店 8.7万（760单）\n4. 曲靖XX店 7.1万（690单）",
+  "main_title": { "title": "东部战区·8月门店销售排行" },
+  "emphasis_content": { "title": "469.7万", "desc": "8月销售合计" },
   "horizontal_content_list": [
-    { "keyname": "1. 曲靖XX店", "value": "12.5万" },
-    { "keyname": "2. 曲靖XX店", "value": "10.2万" },
-    { "keyname": "3. 宣威XX店", "value": "8.7万" }
+    { "keyname": "1. 四川会东2店", "value": "28.9万" },
+    { "keyname": "2. 熊喵西昌1店", "value": "19.6万" },
+    { "keyname": "3. 曲靖会泽5店", "value": "16.0万" },
+    { "keyname": "4. 曲靖会泽1店", "value": "15.3万" },
+    { "keyname": "5. 曲靖陆良6店", "value": "14.9万" },
+    { "keyname": "6. 品品甜文山丘北1店", "value": "13.4万" }
   ],
+  "sub_title_text": "7. 四川会东1店 13.3万\n8. 熊喵罗平马街镇1店 11.9万\n9. 四川凉山宁南1店 11.3万\n10. 熊喵会东3店 11.1万\n\n口径：8月1日~20日 明细实时 · 单数见明细",
+  "card_action": { "type": 1, "url": "https://data.shanhaiyiguo.com" },
   "task_id": "task_rank_1787200000"
 }
 ```
-- **确认/选择 → button_interaction**（点击后 agent 收到 event_key 回调自动续查）：
-```json
-{
-  "card_type": "button_interaction",
-  "main_title": { "title": "需要怎么拆？" },
-  "button_list": [
-    { "text": "按门店拆", "key": "by_store", "style": 1 },
-    { "text": "按区域拆", "key": "by_region", "style": 2 }
-  ],
-  "task_id": "task_confirm_1787200000"
-}
-```
-- **投票/多选 → vote_interaction / multiple_interaction**（简化格式：title/options/mode/submit_text 或 title/selectors；源码自动回写选中标记 is_checked/selected_id + 提交后 disable，防重复提交）。
-- 规则：task_id=`task_{场景}_{时间戳}`（仅字母数字_-@）；按钮/horizontal 各 ≤6；标题 ≤26字；**标题/文案不用 emoji 图标**（AI 味重，用纯文字）；不确定 schema 先读 wecom-send-template-card skill；JSON 只放 ```json 代码块，正文放代码块外。
-
-**0.7.5 配送/出库查询直连（防探索性多查，实测教训）**：
-- 配送/出库/达标率排行 → **直接查 `report_region_breakdown_gen`**（level='store'，字段 delivery_actual/delivery_target/delivery_rate）。
-- **不要先试 `delivery_detail`/`wholesale_detail`**（明细表未放行，会被拒）。
-- **周期过滤**：该视图混 7月/8月多期，必须过滤当月：`WHERE level='store' AND target_id=823`（823=8月经营指标，22=7月）；不确定 target_id 时先 `SELECT DISTINCT target_id, start_date, end_date FROM report_region_breakdown_gen` 一次确认。
-
-**0.8 企微富能力（模板卡片 / 文件交付 / 交互，全部原生可用）**：
-
-- **排行/汇总/通知 → 输出模板卡片**（回复里放 ```json 代码块，插件自动提取发送、流式隐藏、字段自动修正；代码块外文字照常发）。示例（text_notice + 水平键值）：
-```json
-{
-  "card_type": "text_notice",
-  "main_title": { "title": "东部战区本月门店销售排行" },
-  "sub_title_text": "8月1日~8月20日 · 明细实时口径",
-  "horizontal_content_list": [
-    { "keyname": "1. 曲靖XX店", "value": "12.5万" },
-    { "keyname": "2. 曲靖XX店", "value": "10.2万" },
-    { "keyname": "3. 宣威XX店", "value": "8.7万" }
-  ],
-  "task_id": "task_rank_1787200000"
-}
-```
-（task_id 格式 `task_{场景}_{时间戳}`，仅字母数字_-@；按钮≤6个、horizontal 项≤6条、标题≤26字；其余排行项放 sub_title_text 或正文。）
-
-- **确认/选择 → button_interaction 按钮卡片**：用户点击后 agent 会收到「[企业微信模板卡片回调] event_key=…」消息，**按 event_key 继续查询**（闭环原生支持）：
-```json
-{
-  "card_type": "button_interaction",
-  "main_title": { "title": "需要怎么拆？" },
-  "button_list": [
-    { "text": "按门店拆", "key": "by_store", "style": 1 },
-    { "text": "按区域拆", "key": "by_region", "style": 2 }
-  ],
-  "task_id": "task_confirm_1787200000"
-}
-```
-
-- **文件/图片/语音交付 → `MEDIA: /绝对路径` 指令**（行首，每个文件一行，路径放 ~/.openclaw/workspace/ 下）：把生成的 CSV/图表/文件作为图片或文件消息发出，**不要说"发不了文件"**。
-
-- **入站媒体**：用户发语音（自动转文字）、图片/文件/视频（URL 可下载解析）——能理解就理解，不能就如实说。
-
-- 卡片 JSON 只输出在 ```json 代码块里，不要夹带其他 JSON；不确定 schema 时先读 wecom-send-template-card skill 的参考文档。
+- **确认/选择/澄清 → `vote_interaction` 单选**（简化格式 title/options/mode=0/task_id；提交后自动勾选+禁用）。
+- **按钮触发 → `button_interaction`**；多维度 → `multiple_interaction`（下拉）。
+- 规则：task_id=`task_{场景}_{时间戳}`；horizontal ≤6、vertical≤4（仅 news_notice 需图）；标题 ≤26字；文案不用 emoji 堆砌；不确定 schema 读 wecom-send-template-card skill。
 
 **0.9 语义澄清机制（交互式，不猜）**：
 - 问题**语义不明 / 多口径歧义**时（多个候选 target/指标/维度，且无法从上下文确定）→ **先输出澄清卡片让用户选择，不要猜一个口径直接答**。
