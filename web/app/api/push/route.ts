@@ -121,7 +121,8 @@ const PERM_STALE_TTL_MS = 24 * 60 * 60 * 1000; // 24h stale
 
 const permCache = new Map<string, PermCacheEntry>();
 
-async function checkPushPerm(
+// export：供 /api/admin/push-presets 模板库 CRUD 复用同一权限判定（Task 7，避免复制实现）
+export async function checkPushPerm(
   userId: string,
   perm: string,
   claims?: { permissions?: string[] },
