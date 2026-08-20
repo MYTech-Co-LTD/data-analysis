@@ -1,5 +1,6 @@
 // web/lib/push/preset-validate.ts
 // preset card_json 服务端校验（限制表：docs/ops/wecom-message-capabilities.md）
+// Review 加固：card_type 收敛 news_notice（全局统一裁定）+ aspect_ratio/title 严格类型（拒 NaN/非字符串）
 
 export function validateCardJson(card: unknown): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
@@ -9,21 +10,35 @@ export function validateCardJson(card: unknown): { ok: boolean; errors: string[]
   const c = card as Record<string, unknown>;
   const bytes = (s: unknown) => (typeof s === 'string' ? Buffer.byteLength(s, 'utf8') : 0);
 
-  const title = (c.main_title as Record<string, unknown> | undefined)?.title;
-  if (!c.main_title || !title) errors.push('main_title.title 必填');
-  else if (bytes(title) > 128) errors.push('main_title.title >128 字节');
-
-  const desc = (c.main_title as Record<string, unknown> | undefined)?.desc;
-  if (desc && bytes(desc) > 512) errors.push('main_title.desc >512 字节');
-
-  if (!c.card_image || !(c.card_image as Record<string, unknown>)?.url) errors.push('card_image.url 必填');
-  else {
-    const ar = Number((c.card_image as Record<string, unknown>).aspect_ratio);
-    if (ar && (ar < 1.3 || ar > 2.25)) errors.push('card_image.aspect_ratio 须在 1.3~2.25');
+  // 全局约束：消息类型统一 template_card news_notice（docs/ops/wecom-message-capabilities.md 统一裁定 2026-08-20）
+  if (c.card_type !== undefined && c.card_type !== 'news_notice') {
+    errors.push(`card_type 仅支持 news_notice（当前: ${String(c.card_type)}）`);
   }
 
-  if (!c.card_action || !(c.card_action as Record<string, unknown>)?.url) errors.push('card_action.url 必填');
-  else if (bytes((c.card_action as Record<string, unknown>).url) > 1024) errors.push('card_action.url >1024 字节');
+  const mt = c.main_title as Record<string, unknown> | undefined;
+  const title = mt?.title;
+  if (typeof title !== 'string' || title.length === 0) errors.push('main_title.title 必填');
+  else if (bytes(title) > 128) errors.push('main_title.title >128 字节');
+
+  const desc = mt?.desc;
+  if (desc !== undefined && typeof desc !== 'string') errors.push('main_title.desc 必须是字符串');
+  else if (desc && bytes(desc) > 512) errors.push('main_title.desc >512 字节');
+
+  const ci = c.card_image as Record<string, unknown> | undefined;
+  if (!ci?.url) errors.push('card_image.url 必填');
+  else {
+    const ar = ci.aspect_ratio;
+    if (ar !== undefined) {
+      // 必须是有穷数字且落在 1.3~2.25（Number('abc')→NaN 不再静默通过）
+      if (typeof ar !== 'number' || !Number.isFinite(ar) || ar < 1.3 || ar > 2.25) {
+        errors.push('card_image.aspect_ratio 须是 1.3~2.25 的数字');
+      }
+    }
+  }
+
+  const ca = c.card_action as Record<string, unknown> | undefined;
+  if (!ca?.url) errors.push('card_action.url 必填');
+  else if (bytes(ca.url) > 1024) errors.push('card_action.url >1024 字节');
 
   const vcl = c.vertical_content_list;
   if (Array.isArray(vcl) && vcl.length > 4) errors.push('vertical_content_list 最多 4 行');
