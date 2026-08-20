@@ -468,7 +468,7 @@ module.exports = async function (req) {
   // ③ SQL 白名单（表引用正向白名单：引擎路由前先给全量合法表集——DuckDB 权限视图
   // + carry 维表视图 + PG 路由表，均为权限强制面；CTE 由 validateSql 自行识别）
   const regPre = await loadRegistry();
-  const allowedTables = ["retail_detail", ...reg.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
+  const allowedTables = ["retail_detail", ...regPre.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
   let finalSql;
   try {
     finalSql = validateSql(sql, allowedTables);

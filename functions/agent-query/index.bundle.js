@@ -453,7 +453,7 @@ module.exports = async function(req) {
     return json({ error: "no_permission", detail: perms && perms.error }, 403);
   }
   const regPre = await loadRegistry();
-  const allowedTables = ["retail_detail", ...reg.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
+  const allowedTables = ["retail_detail", ...regPre.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
   let finalSql;
   try {
     finalSql = validateSql(sql, allowedTables);
