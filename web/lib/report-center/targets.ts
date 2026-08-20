@@ -46,16 +46,24 @@ export async function getTargetList(
     if (status) q = q.eq("status", status);
     const { data, error } = await q.order("status").order("start_date",{ascending:false});
     if (error) throw error;
-    // 按 target_id 去重（取 metric_code 优先 sale 的行）
+    // 按 target_id 去重：主指标固定 sale（2026-08-19 修复——此前取“第一行”，
+    // metric 行序不保证，受限用户 outbound 族 rate=NULL 时曾整卡显示 0%）。
+    // sale 行缺失（未配销售目标）→ 回退首个 rate 非空行 → 再回退首行。
     const byId = new Map<number, TargetSummary>();
+    const toSummary = (r: (typeof data)[number]): TargetSummary => ({
+      target_id: r.target_id, name: r.name, status: r.status, target_type: r.target_type,
+      start_date: r.start_date, end_date: r.end_date,
+      sample_metric: r.metric_code, sample_achievement_rate: r.achievement_rate ?? 0,
+      sample_progress_rate: r.progress_rate ?? 0,
+    });
     for (const r of data ?? []) {
-      if (byId.has(r.target_id)) continue;
-      byId.set(r.target_id, {
-        target_id: r.target_id, name: r.name, status: r.status, target_type: r.target_type,
-        start_date: r.start_date, end_date: r.end_date,
-        sample_metric: r.metric_code, sample_achievement_rate: r.achievement_rate ?? 0,
-        sample_progress_rate: r.progress_rate ?? 0,
-      });
+      const cur = byId.get(r.target_id);
+      if (!cur) { byId.set(r.target_id, toSummary(r)); continue; }
+      if (cur.sample_metric === "sale") continue;                  // 已是 sale，不再覆盖
+      if (r.metric_code === "sale"                                // sale 优先
+        || (cur.sample_achievement_rate === 0 && (r.achievement_rate ?? 0) > 0)) {  // 或当前是 0 而新行非 0
+        byId.set(r.target_id, toSummary(r));
+      }
     }
     return okResult([...byId.values()]);
   } catch (e) {
