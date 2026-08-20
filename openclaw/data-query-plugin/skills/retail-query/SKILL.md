@@ -69,7 +69,7 @@ metadata:
   "task_id": "task_confirm_1787200000"
 }
 ```
-- **投票/多选 → vote_interaction / multiple_interaction**（含 checkbox/select_list/submit_button）。
+- **投票/多选 → vote_interaction / multiple_interaction**（简化格式：title/options/mode/submit_text 或 title/selectors；源码自动回写选中标记 is_checked/selected_id + 提交后 disable，防重复提交）。
 - 规则：task_id=`task_{场景}_{时间戳}`（仅字母数字_-@）；按钮/horizontal 各 ≤6；标题 ≤26字；不确定 schema 先读 wecom-send-template-card skill；JSON 只放 ```json 代码块，正文放代码块外。
 
 **0.7.5 配送/出库查询直连（防探索性多查，实测教训）**：
@@ -117,22 +117,24 @@ metadata:
 **0.9 语义澄清机制（交互式，不猜）**：
 - 问题**语义不明 / 多口径歧义**时（多个候选 target/指标/维度，且无法从上下文确定）→ **先输出澄清卡片让用户选择，不要猜一个口径直接答**。
   典型歧义：问「销售达成率」但有 7月/8月 两个目标期 × 销售/配送/出库/出库毛利 多个指标；问「本月排行」但没说门店/区域/商品。
-- 澄清用 `button_interaction` 卡片（选项=候选口径，≤6 个；不确定候选时先用一次 `SELECT DISTINCT name,status FROM report_achievement_gen` 等确认候选）：
+- 澄清用 **`vote_interaction` 单选卡片**（源码机制：用户选择提交后选项带勾选标记 is_checked 且整体禁用，天然防重复提交；简化格式自动转 API）：
 ```json
 {
-  "card_type": "button_interaction",
-  "main_title": { "title": "哪个口径的达成率？" },
-  "sub_title_text": "当前有多个目标期与指标，请选择",
-  "button_list": [
-    { "text": "8月·销售", "key": "aug_sale", "style": 1 },
-    { "text": "8月·配送", "key": "aug_delivery", "style": 2 },
-    { "text": "8月·出库", "key": "aug_outbound", "style": 3 },
-    { "text": "7月·销售", "key": "jul_sale", "style": 2 }
+  "card_type": "vote_interaction",
+  "title": "哪个口径的达成率？",
+  "description": "当前有多个目标期与指标，请选择",
+  "options": [
+    { "id": "aug_sale", "text": "8月·销售" },
+    { "id": "aug_delivery", "text": "8月·配送" },
+    { "id": "aug_outbound", "text": "8月·出库" },
+    { "id": "jul_sale", "text": "7月·销售" }
   ],
+  "mode": 0,
   "task_id": "task_clarify_1787200000"
 }
 ```
-- **点击回流**：用户点按钮后，你会收到一条 `[企业微信模板卡片回调]` 消息，内含 `event_key(事件 key): aug_sale` 等字段。**看到回调就按 event_key 对应的口径立即查询回答，不要重问、不要解释卡片机制**。
+（vote/multiple 卡片才带选中标记+提交禁用；**button_interaction 按钮没有标记机制**，只用于触发动作如"重新查一下"。选项≤20、标题/按钮文案短（≤20字），完整说明放正文不放卡片，防截断。）
+- **点击回流**：用户选择提交后，你会收到一条 `[企业微信模板卡片回调]` 消息，内含 `event_key(事件 key): aug_sale` 和 `selected_items` 字段。**看到回调就按 event_key 对应的口径立即查询回答，不要重问、不要解释卡片机制**。
 - 澄清卡片文案要包含候选含义（如"8月·销售"）；一次只澄清一个维度（先口径再维度，别一次问太多）。
 - 只有真歧义才澄清：能从上下文/历史确定口径时直接查，不要为了澄清而澄清。
 
