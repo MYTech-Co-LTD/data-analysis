@@ -18,7 +18,7 @@ seg_end = body_end + 3
 
 new_block = '''// ★本地补丁 emoji-allow-2026-08-20：剥离除"洋气白名单"外的 emoji（AI 味图标剔除，保留 ✨🔥💯📈 等克制的装饰）；不碰 markdown 语法
 const EMOJI_RE = /[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\u{2B00}-\\u{2BFF}\\u{FE0F}]/gu;
-const EMOJI_ALLOWED = new Set(["✨", "🔥", "💯", "📈", "💡", "🎯", "⚡", "💎", "🎉", "⭐"]);
+const EMOJI_ALLOWED = new Set(["✨", "💯", "💡", "🎯", "⚡", "💎", "🎉", "⭐"]);
 export function stripEmojiAndMarkdown(text) {
   if (typeof text !== "string") return text;
   let out = text.replace(EMOJI_RE, (m) => (EMOJI_ALLOWED.has(m) ? m : ""));
