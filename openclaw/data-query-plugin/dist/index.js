@@ -67,6 +67,9 @@ async function gatewayHeadersAndBody(body) {
   return { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, agent_api_key: process.env.AGENT_API_KEY }) };
 }
 
+// ★U1c 修复（2026-08-20）：模块级 userId 兜底——同一轮后续工具调用若 ctx.requesterSenderId 为空，复用首个捕获值
+let lastUserId = "";
+
 const TOOL_NAME = "query_retail_data";
 const TOOL_DESC =
   "查询零售销售数据。可直接查明细视图 retail_detail（乐檬 POS 订单明细），" +
@@ -160,6 +163,8 @@ async function executeQuery({ sql }, userId, cronSessionKey) {
       error: "网关密钥未配置（openclaw 容器缺 AGENT_API_KEY env），请联系管理员。",
     };
   }
+  // eslint-disable-next-line no-console
+  if (process.env.DQ_DEBUG === '1') console.log(`[data-query] exec sqlLen=${(sql||'').length} userId=${JSON.stringify(userId)} cron=${JSON.stringify(cronSessionKey)}`);
   if (!userId && !cronSessionKey) {
     return {
       error: "无法识别请求者身份（requesterSenderId 和 cronSessionKey 都缺失），出于权限安全不予查询。",
@@ -227,7 +232,8 @@ export default definePluginEntry({
   register(api) {
     api.registerTool(
       (ctx) => {
-        const userId = ctx && ctx.requesterSenderId;
+        const userId = (ctx && ctx.requesterSenderId) || lastUserId;
+        if (userId) lastUserId = userId;
         // 首次调用打一行诊断（确认 sender 注入路径）。
         if (!globalThis.__DQ_DIAG) {
           globalThis.__DQ_DIAG = 1;
@@ -295,7 +301,8 @@ export default definePluginEntry({
     // list_datasets：拉活字典（转发 agent-query 的 dictionary 模式）
     api.registerTool(
       (ctx) => {
-        const userId = ctx && ctx.requesterSenderId;
+        const userId = (ctx && ctx.requesterSenderId) || lastUserId;
+        if (userId) lastUserId = userId;
         return {
           name: LIST_TOOL_NAME,
           description: LIST_TOOL_DESC,
