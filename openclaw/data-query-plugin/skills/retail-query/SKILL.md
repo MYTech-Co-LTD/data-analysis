@@ -42,33 +42,15 @@ metadata:
 - 金额 ≥1万 用「X.X 万」（1位小数），<1万 用「X 元」；数字四舍五入。
 - 完整数据直接写在回复里（不要藏），卡片只用于交互选择。
 
-**0.8 模板卡片用法（数据回答首选；插件原生：回复里 ```json 代码块 → 独立卡片消息渲染）**：
-
-- **排行/汇总 → `text_notice` 富格式卡片**（结构化展示，不用纯文字堆）：
-  - `horizontal_content_list`（最多6条键值行）放 Top6：keyname=「排名. 店名」、value=「金额」
-  - `emphasis_content` 强调关键数字（合计/榜首金额）
-  - `sub_title_text` 放其余排名 + 合计/口径说明
-```json
-{
-  "card_type": "text_notice",
-  "main_title": { "title": "东部战区·8月门店销售排行" },
-  "emphasis_content": { "title": "469.7万", "desc": "8月销售合计" },
-  "horizontal_content_list": [
-    { "keyname": "1. 四川会东2店", "value": "28.9万" },
-    { "keyname": "2. 熊喵西昌1店", "value": "19.6万" },
-    { "keyname": "3. 曲靖会泽5店", "value": "16.0万" },
-    { "keyname": "4. 曲靖会泽1店", "value": "15.3万" },
-    { "keyname": "5. 曲靖陆良6店", "value": "14.9万" },
-    { "keyname": "6. 品品甜文山丘北1店", "value": "13.4万" }
-  ],
-  "sub_title_text": "7. 四川会东1店 13.3万\n8. 熊喵罗平马街镇1店 11.9万\n9. 四川凉山宁南1店 11.3万\n10. 熊喵会东3店 11.1万\n\n口径：8月1日~20日 明细实时 · 单数见明细",
-  "card_action": { "type": 1, "url": "https://data.shanhaiyiguo.com" },
-  "task_id": "task_rank_1787200000"
-}
-```
-- **确认/选择/澄清 → `vote_interaction` 单选**（简化格式 title/options/mode=0/task_id；提交后自动勾选+禁用）。
-- **按钮触发 → `button_interaction`**；多维度 → `multiple_interaction`（下拉）。
-- 规则：task_id=`task_{场景}_{时间戳}`；horizontal ≤6、vertical≤4（仅 news_notice 需图）；标题 ≤26字；文案不用 emoji 堆砌；不确定 schema 读 wecom-send-template-card skill。
+**0.8 卡片只用于「交互」，数据展示用纯文本**：
+- **卡片 = 需要用户点选/确认时才用**：语义澄清（0.9）、维度选择、投票、是/否确认。
+- **数据结果（排行/汇总/明细）默认纯文本富格式**（0.7 的编号行+分隔线+合计），**不要**为展示数据发卡片。
+- 只有当用户**明确要求**"发个卡片/图表"时，才用 `text_notice` 卡片展示排行。
+- 交互卡片类型：
+  - `vote_interaction` 单选（澄清/选维度；简化格式 title/options/mode=0/task_id）
+  - `button_interaction` 按钮（确认/触发动作）
+  - `multiple_interaction` 多维度下拉
+- 规则：task_id=`task_{场景}_{时间戳}`；选项≤20、按钮≤6、horizontal≤6；标题 ≤26字；文案不用 emoji 堆砌；不确定 schema 读 wecom-send-template-card skill。
 
 **0.9 语义澄清机制（交互式，不猜）**：
 - 问题**语义不明 / 多口径歧义**时（多个候选 target/指标/维度，且无法从上下文确定）→ **先输出澄清卡片让用户选择，不要猜一个口径直接答**。
