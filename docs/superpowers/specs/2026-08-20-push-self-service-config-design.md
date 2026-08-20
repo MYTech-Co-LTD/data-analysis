@@ -79,7 +79,22 @@ fixed        : + &target_id=eq.<target_id>        （视图需补 target_id 输�
 
 ### 3.3 变量面扩展
 
-`push_variables` 补齐核心指标（var_code 沿用现有命名风格）：现有 sale_amount / achievement_rate / detail_url，新增 **delivery_amount / delivery_rate / outbound_amt / outbound_profit** 四行。`METRIC_TO_VIEW` 映射已含全部所需 metric_code（sale / sale_rate / delivery / outbound_amt / outbound_profit）——rate 类按视图 `achievement_rate` 列取，零引擎代码改动。
+`push_variables` 补齐核心指标并**全面通俗化命名**（var_code 沿用现有技术码仅内部使用；UI 只显示 name + description，业务人员不见任何英文码）：
+
+- 表加 `description` 列（TEXT，通俗口径说明，管理页悬浮提示用）；现有行的技术细节从 name 中移出（如「明细链接（10min 代签 JWT）」→ name 改通俗名，JWT 说明移入 description）
+- 完整变量清单（迁移 INSERT 定稿）：
+
+| var_code（内部） | name（UI 显示） | description（悬浮说明） | unit |
+|---|---|---|---|
+| sale_amount | 销售额 | 当前进行中目标的销售实际值，按收件人权限范围统计 | 元 |
+| achievement_rate | 销售达成率 | 销售实际÷目标（当前进行中目标），按收件人权限范围 | % |
+| delivery_amount | 配送额 | 当前进行中目标的配送实际值 | 元 |
+| delivery_rate | 配送达成率 | 配送实际÷目标（当前进行中目标） | % |
+| outbound_amt | 出库金额 | 配送+批发出库合计金额 | 元 |
+| outbound_profit | 出库毛利 | 配送+批发出库合计毛利 | 元 |
+| detail_url | 门店明细入口 | 点开直达收件人有权限的门店明细报表 | — |
+
+`METRIC_TO_VIEW` 映射已含全部所需 metric_code（sale / sale_rate / delivery / outbound_amt / outbound_profit）——rate 类按视图 `achievement_rate` 列取，零引擎代码改动。
 
 ### 3.4 结束守卫
 
@@ -93,7 +108,7 @@ scheduler 触发前：follow 试查「今天落区间」是否有行 / fixed 查
 
 - **列表**：模板卡片（名称 + 缩略预览 + 启用开关 + 「被 N 个任务引用」）；被引用的模板不可删（提示引用清单）
 - **编辑器**：按企微卡片区域建模的表单——主标题/副标题/来源行/大图（URL 或上传至 web/public/push/）/键值行 0-4/整卡跳转；高级区域可增删（引用块/左图右文/区域独立跳转）
-- **变量点选器**：拉 `push_variables` 启用变量，点击插入光标处（业务人员不写 `{{}}` 语法）
+- **变量点选器**：拉 `push_variables` 启用变量，**显示通俗中文名（name）+ 口径悬浮说明（description）**，var_code 不出现在 UI；点击插入光标处（业务人员不写 `{{}}` 语法）
 - **实时预览**：右侧按 `card_json` 渲染企微 news_notice 卡片 mock，改动即时刷新
 - **测试发送**：一键发到操作者自己企微（走引擎完整链路：真实数值 + 真实卡片）
 
