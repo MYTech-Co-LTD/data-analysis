@@ -226,11 +226,16 @@ export function __resetFirstTriggerForTest(): void {
 
 interface RunPushOpts {
   workflowId: string;
+  /** T8 模板页直取 preset（透传引擎 RunPushOpts.presetId） */
+  presetId?: string;
   selector: Selector;
   operatorId: string;
   broadcastPerm: boolean;
   deliver?: boolean;
-  variables?: string[];
+  targetMode?: 'follow' | 'fixed';
+  targetId?: number;
+  /** route 兼容字段（透传引擎，暂无消费方） */
+  variables?: Record<string, string>;
 }
 
 interface RunPushResult {
@@ -251,10 +256,14 @@ async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   // B2 修复：调用真实引擎（web/lib/push/index.ts runPush）
   return engineRunPush({
     workflowId: opts.workflowId,
+    presetId: opts.presetId,
     selector: opts.selector,
     operatorId: opts.operatorId,
     broadcastPerm: opts.broadcastPerm,
     deliver: opts.deliver ?? true,
+    targetMode: opts.targetMode,
+    targetId: opts.targetId,
+    variables: opts.variables,
   });
 }
 
@@ -388,12 +397,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (!body.workflowId) {
     return NextResponse.json({ ok: false, error: 'workflowId required' }, { status: 400 });
   }
-  if (!body.selector) {
+  if (!body.selector && !(body as Record<string, unknown>).selfTest) {
     return NextResponse.json({ ok: false, error: 'selector required' }, { status: 400 });
   }
 
   // Selector 校验（双闸：只允许组织维）
-  const selResult = validateSelector(body.selector);
+  // selfTest 分支 selector 可省：最终 selector 由下方强制覆盖为操作者本人，不依赖此值
+  const selResult = body.selector
+    ? validateSelector(body.selector)
+    : { ok: true as const, value: { kind: 'person' as const, ids: [] as string[] } };
   if (!selResult.ok) {
     return NextResponse.json({ ok: false, error: 'invalid_selector', detail: selResult.error }, { status: 400 });
   }
@@ -439,7 +451,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const firstTime = isFirstTrigger(body.workflowId);
   let finalSelector = selector;
   if (firstTime) {
-    // 首触发：强制 selector 为 person=[operatorId]
+    finalSelector = { kind: 'person', ids: [operatorId] };
+  }
+  // selfTest：模板编辑器「测试发送」——服务端强制发操作者本人，不信任前端 selector
+  if ((body as Record<string, unknown>).selfTest === true) {
     finalSelector = { kind: 'person', ids: [operatorId] };
   }
 
@@ -447,11 +462,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const result = await runPush({
       workflowId: body.workflowId,
+      presetId: (body as Record<string, unknown>).presetId as string | undefined,
       selector: finalSelector,
       operatorId,
       broadcastPerm,
       deliver: true, // M4 修复：首触发也真投递（selector 已被强制为 person=[自己]）
-      variables: body.variables,
+      targetMode: ((body as Record<string, unknown>).targetMode as 'follow' | 'fixed') || undefined,
+      targetId: (body as Record<string, unknown>).targetId as number | undefined,
+      variables: (body as Record<string, unknown>).variables as Record<string, string> | undefined,
     });
 
     // 标记已触发（解除首触发限制）

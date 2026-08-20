@@ -383,6 +383,63 @@ describe('push API 基本校验', () => {
     expect(body.groups).toBe(1);
   });
 
+  it('selfTest=true：强制 selector=操作者本人（伪造的 body.selector 被覆盖）', async () => {
+    // 先正常触发一次解除首触发门（否则首触发门同样强制本人，测不到 selfTest 分支）
+    await POST(mkPushReq({
+      workflowId: 'wf-selftest',
+      selector: VALID_SELECTOR,
+      userId: 'ZhangDuo',
+    }));
+    expect(runPushMock).toHaveBeenCalledTimes(1);
+    runPushMock.mockClear();
+
+    // 伪造 selector 指向他人——selfTest 必须服务端覆盖为操作者本人
+    const res = await POST(mkPushReq({
+      workflowId: 'wf-selftest',
+      selector: { kind: 'person', ids: ['SomeoneElse'] },
+      userId: 'ZhangDuo',
+      selfTest: true,
+    }));
+
+    expect(res.status).toBe(200);
+    // runPush 收到的 selector 必须是 person:[ZhangDuo]
+    expect(runPushMock).toHaveBeenCalledWith(expect.objectContaining({
+      selector: { kind: 'person', ids: ['ZhangDuo'] },
+    }));
+  });
+
+  it('selfTest=true：selector 可省（放宽 selector required，强制发本人）', async () => {
+    await POST(mkPushReq({
+      workflowId: 'wf-selftest-nosel',
+      selector: VALID_SELECTOR,
+      userId: 'ZhangDuo',
+    }));
+    runPushMock.mockClear();
+
+    const res = await POST(mkPushReq({
+      workflowId: 'wf-selftest-nosel',
+      userId: 'ZhangDuo',
+      selfTest: true,
+    }));
+
+    expect(res.status).toBe(200);
+    expect(runPushMock).toHaveBeenCalledWith(expect.objectContaining({
+      selector: { kind: 'person', ids: ['ZhangDuo'] },
+    }));
+  });
+
+  it('presetId 透传到 runPush', async () => {
+    const res = await POST(mkPushReq({
+      workflowId: 'wf-preset',
+      presetId: 'preset-xyz',
+      selector: { kind: 'person', ids: ['ZhangDuo'] },
+      userId: 'ZhangDuo',
+    }));
+
+    expect(res.status).toBe(200);
+    expect(runPushMock).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'preset-xyz' }));
+  });
+
   it('首触发安全门：新 workflow 首次触发只发给自己', async () => {
     const res = await POST(mkPushReq({
       workflowId: 'wf-new',

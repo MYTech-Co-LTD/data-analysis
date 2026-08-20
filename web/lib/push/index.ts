@@ -151,7 +151,8 @@ async function resolveNumericValue(
     // follow：今天落区间（周期结束自动取不到→变量跳过；提前建下月不误取）
     //   tie-break：start_date.desc, end_date.asc = 取开始最晚结束最早的周期（粒度最细，8月优先于Q3）
     // fixed：锁定 target_id（视图外层已输出 target_id 列，见 report_achievement_gen.sql）
-    const today = new Date().toISOString().slice(0, 10);
+    // 「今天」按北京时区取（UTC+8）——否则北京 0-8 点触发会取 UTC 昨日，周期切换日清晨推错周期
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const targetFilter = target.mode === 'fixed' && target.id
       ? `&target_id=eq.${target.id}`
       : `&start_date=lte.${today}&end_date=gte.${today}`;

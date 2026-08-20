@@ -32,7 +32,8 @@ export async function checkTargetActive(
         : { active: false, reason: `目标 ${targetId} 已结束或不可见（status=非 active 或不在视图范围）` };
     }
     // follow：与引擎取值同口径（今天落区间），service 侧探测（不涉敏感数据，有行即可）
-    const today = new Date().toISOString().slice(0, 10);
+    // 「今天」按北京时区取（UTC+8），与引擎 resolveNumericValue 同一日界——否则北京 0-8 点误判昨日
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const resp = await fetch(
       `${url}/report_achievement_gen?select=metric_code&status=eq.active`
       + `&start_date=lte.${today}&end_date=gte.${today}&limit=1`,
