@@ -120,7 +120,8 @@ const CACHE_TTL_MS = 24 * 3600 * 1000;
 const CACHE_MAX = 64;
 
 export async function renderBannerPng(p: BannerParams): Promise<Buffer> {
-  const key = `${p.d}:${p.t}`;
+  // 键纳入全部渲染值（sale/rate 已进 URL+sig，入键安全）——避免同 (d,t) 不同分组串图
+  const key = canonicalBanner(p);
   const now = Date.now();
   const hit = cache.get(key);
   if (hit && hit.expiresAt > now) return hit.png;

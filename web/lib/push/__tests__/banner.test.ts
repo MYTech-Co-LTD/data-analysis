@@ -147,6 +147,13 @@ describe('renderBannerPng 缓存', () => {
     expect(sharpMock).toHaveBeenCalledTimes(1);
   });
 
+  it('同 (d,t) 不同 sale/rate → 不命中缓存（键纳入值字段）', async () => {
+    const { renderBannerPng } = await import('../banner');
+    await renderBannerPng(p); // sale=¥128,500 rate=86.4%
+    await renderBannerPng({ ...p, sale: '¥999,999', rate: '72.1%' }); // 同 d/t 不同值
+    expect(sharpMock).toHaveBeenCalledTimes(2);
+  });
+
   it('TTL 过期后重建（24h）', async () => {
     vi.useFakeTimers();
     try {
