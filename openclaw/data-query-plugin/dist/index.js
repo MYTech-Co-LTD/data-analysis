@@ -191,6 +191,8 @@ async function executeQuery({ sql }, userId, cronSessionKey) {
       hint =
         "该关键词被禁止（" + rule + "）。明细请查 retail_detail 视图，不要用 read_parquet。";
     else if (body.error === "no_permission") hint = "你当前没有数据查询权限。";
+    else if (rule === "forbidden_branch_join" || rule === "forbidden_cross_join")
+      hint = "join 维表必须用复合键：ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num（禁止裸 branch_num join，会跨品牌串号）。区域聚合可直接 GROUP BY retail_detail 自带的 region_name，无需 join。";
     else if (rule === "forbidden_string_table" || rule === "forbidden_file_reference" || rule === "forbidden_table_function")
       hint = "禁止直接引用文件或表函数。只能查 retail_detail / report_* / dim_* 这些权限视图。";
     else if (rule && String(rule).startsWith("forbidden_table:"))

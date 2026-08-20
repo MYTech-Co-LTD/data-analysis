@@ -240,6 +240,31 @@ function validateSql(raw, allowedTables) {
   while ((m = FROM_JOIN_REF_RE.exec(trimmed)) !== null) {
     if (!allowed.has(m[2].toLowerCase())) throw new Error("forbidden_table:" + m[2]);
   }
+  if (/\bCROSS\s+JOIN\b/i.test(trimmed)) throw new Error("forbidden_cross_join");
+  const aliasRe = "(?:\\s+(?:AS\\s+)?[A-Za-z_][A-Za-z0-9_]*)?";
+  const joinRe = new RegExp(
+    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+ON\\b([\\s\\S]*?)(?=\\b(?:JOIN|WHERE|GROUP BY|ORDER BY|LIMIT|HAVING|UNION)\\b|$)",
+    "gi"
+  );
+  let jm;
+  joinRe.lastIndex = 0;
+  while ((jm = joinRe.exec(trimmed)) !== null) {
+    const onClause = jm[1] || "";
+    if (/\bbranch_num\b/i.test(onClause) && !/\bsystem_book_code\b/i.test(onClause)) {
+      throw new Error("forbidden_branch_join");
+    }
+  }
+  const usingRe = new RegExp(
+    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+USING\\s*\\(([^)]*)\\)",
+    "gi"
+  );
+  let um;
+  usingRe.lastIndex = 0;
+  while ((um = usingRe.exec(trimmed)) !== null) {
+    if (/\bbranch_num\b/i.test(um[1]) && !/\bsystem_book_code\b/i.test(um[1])) {
+      throw new Error("forbidden_branch_join");
+    }
+  }
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
 }
@@ -251,13 +276,14 @@ async function runDuckdb(userSelect, perms, reg) {
   const branchFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.fields?.cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
-  let viewSql = "CREATE OR REPLACE TEMP VIEW retail_detail AS SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code FROM (SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t;";
+  let viewSql = "";
   for (const d of reg.dimCarry || []) {
     const sens = d.sensitiveColumns || [];
     const dimReplace = sens.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
     const replaceClause = dimReplace ? `SELECT * REPLACE (${dimReplace}) ` : "SELECT * ";
     viewSql += "\nCREATE OR REPLACE TEMP VIEW " + d.name + " AS " + replaceClause + "FROM read_parquet('" + d.glob + "');";
   }
+  viewSql += "\nCREATE OR REPLACE TEMP VIEW retail_detail AS SELECT rd.*, db.region_name, db.first_level_region AS war_zone_name FROM (SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code FROM (SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t) rd LEFT JOIN dim_branch db ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num;";
   const combined = viewSql + "\n" + userSelect;
   const res = await fetch(DUCKDB_URL + "/query", {
     method: "POST",

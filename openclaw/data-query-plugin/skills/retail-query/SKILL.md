@@ -34,12 +34,13 @@ metadata:
 
 **2. 日期忠于原话 + 必须显式标注**：明细日期列 `order_detail_bizday`（YYYYMMDD 字符串）；汇总日期列 `biz_date`/`week_start`（DATE）。"今天/最近/最新"用一条 SQL：`WHERE 日期列=(SELECT MAX(日期列) FROM 表)` 并带出 `data_date`；若 data_date≠今天就说"今天暂无，以下为最新 data_date 的数据"。回答里始终写明数据属于哪一天，绝不拿旧日冒充今天。按北京时间（容器 Asia/Shanghai）。
 
-**2.5 JOIN 复合键铁律（跨品牌防串号，实测教训）**：`branch_num` 跨品牌共享（3120/64188 同号不同店）。
-明细 join 维表（dim_branch/dim_region）**必须用复合键**：
-`ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num`
-（retail_detail 自带 `system_book_code` 列，网关已从文件名提取）。
-**禁止** `ON rd.branch_num = db.branch_num` 裸键 join——会把本战区数据扇出错标成其他战区/品牌
-（曾把东部数据错标成中部一/二/三区，金额是重复计数的假象）。
+**2.5 区域聚合免 join（首选）+ JOIN 复合键铁律**：
+- **retail_detail 已自带区域列**：`region_name`（东部一区…）、`war_zone_name`（东部战区）、`system_book_code`（3120/64188）。
+  区域/战区排行**直接** `GROUP BY region_name`（或 war_zone_name），**不要 join 任何维表**：
+  `SELECT region_name, SUM(CAST(sale_money AS DOUBLE)) FROM retail_detail WHERE substr(order_detail_bizday,1,6)='202608' GROUP BY 1`。
+- 若必须 join 维表（如要品牌名/商品名）：`branch_num` 跨品牌共享（3120/64188 同号不同店），**必须用复合键** `ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num`；
+  **禁止** `ON rd.branch_num = db.branch_num` 裸键 join（网关会拒绝并报 forbidden_branch_join；
+  裸键会把本战区数据扇出错标成其他战区/品牌，金额是重复计数假象）。
 
 **3. 成本列无权限 = NULL，别当 0**：成本/利润为 NULL（无权限）→如实说"成本列无权限"，**别把 NULL 当 0 算进总额**（list_datasets 里 is_sensitive=true 的列即为成本组）。
 

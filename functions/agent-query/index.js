@@ -206,6 +206,30 @@ function validateSql(raw, allowedTables) {
   while ((m = FROM_JOIN_REF_RE.exec(trimmed)) !== null) {
     if (!allowed.has(m[2].toLowerCase())) throw new Error("forbidden_table:" + m[2]);
   }
+  // ⑤ JOIN 复合键铁律（机械强制，2026-08-20 三次实测：裸 branch_num 跨品牌扇出错标）：
+  //    ON/USING 里出现 branch_num 必须同时带 system_book_code；CROSS JOIN 一律拒。
+  if (/\bCROSS\s+JOIN\b/i.test(trimmed)) throw new Error("forbidden_cross_join");
+  // 表名后可选别名（带 AS 或裸别名，如 dim_branch b）
+  const aliasRe = "(?:\\s+(?:AS\\s+)?[A-Za-z_][A-Za-z0-9_]*)?";
+  const joinRe = new RegExp(
+    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+ON\\b([\\s\\S]*?)(?=\\b(?:JOIN|WHERE|GROUP BY|ORDER BY|LIMIT|HAVING|UNION)\\b|$)", "gi");
+  let jm;
+  joinRe.lastIndex = 0;
+  while ((jm = joinRe.exec(trimmed)) !== null) {
+    const onClause = jm[1] || "";
+    if (/\bbranch_num\b/i.test(onClause) && !/\bsystem_book_code\b/i.test(onClause)) {
+      throw new Error("forbidden_branch_join");
+    }
+  }
+  const usingRe = new RegExp(
+    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+USING\\s*\\(([^)]*)\\)", "gi");
+  let um;
+  usingRe.lastIndex = 0;
+  while ((um = usingRe.exec(trimmed)) !== null) {
+    if (/\bbranch_num\b/i.test(um[1]) && !/\bsystem_book_code\b/i.test(um[1])) {
+      throw new Error("forbidden_branch_join");
+    }
+  }
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
 }
@@ -231,21 +255,24 @@ async function runDuckdb(userSelect, perms, reg) {
       : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const canSee = perms.fields?.cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
-  // ★新增计算列 system_book_code（从 filename 提取 sbc）：让模型 join 维表时用复合键
-  // （system_book_code + branch_num），杜绝裸 branch_num 跨品牌扇出错标（2026-08-20 实测：
-  // 东部数据 join dim_branch 裸 branch_num 被错标成中部/南部/西部）。
-  let viewSql =
-    "CREATE OR REPLACE TEMP VIEW retail_detail AS " +
-    "SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code " +
-    "FROM (SELECT * REPLACE (" + replaceList + ") " +
-    "FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t;";
-  // C3: dim_* carry 视图（字典全可见；敏感列如 dim_item.item_cost_price 按 can_see_cost 脱敏，与 retail_detail 同机制）
+  // 视图构建顺序（2026-08-20 重构）：dim 维表先行 → retail_detail 内联注入区域列。
+  // 1) dim_* carry 视图先建，供 retail_detail LEFT JOIN 引用；
+  // 2) retail_detail = 脱敏明细 LEFT JOIN dim_branch（复合键 system_book_code+branch_num）
+  //    注入 region_name（东部一区）/ war_zone_name（东部战区）——模型区域聚合免 join，
+  //    从根上杜绝裸 branch_num 跨品牌扇出错标（三次实测教训）。
+  let viewSql = "";
   for (const d of (reg.dimCarry || [])) {
     const sens = d.sensitiveColumns || [];
     const dimReplace = sens.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
     const replaceClause = dimReplace ? `SELECT * REPLACE (${dimReplace}) ` : "SELECT * ";
     viewSql += "\nCREATE OR REPLACE TEMP VIEW " + d.name + " AS " + replaceClause + "FROM read_parquet('" + d.glob + "');";
   }
+  viewSql += "\nCREATE OR REPLACE TEMP VIEW retail_detail AS " +
+    "SELECT rd.*, db.region_name, db.first_level_region AS war_zone_name " +
+    "FROM (SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code " +
+    "FROM (SELECT * REPLACE (" + replaceList + ") " +
+    "FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t) rd " +
+    "LEFT JOIN dim_branch db ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num;";
   // 一次提交：建视图 + 用户 SELECT（同连接，临时视图隔离，已实测）
   const combined = viewSql + "\n" + userSelect;
   const res = await fetch(DUCKDB_URL + "/query", {
