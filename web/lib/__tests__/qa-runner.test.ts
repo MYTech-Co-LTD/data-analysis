@@ -22,7 +22,7 @@ function makeDb(overrides: Record<string, unknown> = {}) {
     _inserted: inserted,
     ...overrides,
   };
-  return db as any;
+  return db as unknown as Parameters<typeof runQaChecks>[0]['db'];
 }
 
 describe('runQaChecks', () => {
@@ -61,7 +61,7 @@ describe('runQaChecks', () => {
     const d2 = results.find((r) => r.check_type === 'D2' && r.check_name === 'item_sales');
     expect(d2?.status).toBe('pass');
     // RPC 收到聚合表与键
-    expect(db.rpc).toHaveBeenCalledWith('qa_d2_dup_rows', { p_table: 'report_daily_item_sales', p_keys: ['system_book_code', 'item_num', 'biz_date'] });
+    expect(db.rpc).toHaveBeenCalledWith('qa_d2_dup_rows', { p_table: 'report_daily_item_sales', p_keys: ['system_book_code', 'branch_num', 'item_num', 'biz_date'] });
   });
 
   it('D1 数据未到：duck 抛 No files found → no-data（独立预警，非 error）', async () => {
@@ -73,9 +73,9 @@ describe('runQaChecks', () => {
     const d1 = results.find((r) => r.check_type === 'D1');
     expect(d1?.status).toBe('no-data');
     expect(d1?.diff).toBeNull();
-    expect((d1?.detail as any[])[0].error).toContain('No files found');
+    expect(((d1?.detail as Array<{error?:string}>)[0]).error).toContain('No files found');
     // 写库的是 no-data 行
-    const inserted = (db as any)._inserted.find((r: any) => r.check_type === 'D1');
+    const inserted = ((db as {_inserted: Array<{check_type?:string}>})._inserted).find((r) => r.check_type === 'D1');
     expect(inserted?.status).toBe('no-data');
   });
 
@@ -111,7 +111,7 @@ describe('runQaChecks', () => {
           single: vi.fn(() => qb),
           order: vi.fn(() => qb),
           limit: vi.fn(() => qb),
-          insert: vi.fn(async (rows: unknown[]) => { (db as any)._inserted.push(...(rows as unknown[])); return { data: rows, error: null }; }),
+          insert: vi.fn(async (rows: unknown[]) => { ((db as {_inserted: unknown[]})._inserted).push(...(rows as unknown[])); return { data: rows, error: null }; }),
           then: (resolve: (v: unknown) => void) => resolve(t.endsWith('_qa') ? { data: undefined, error: 'relation does not exist' } : { data: [], error: null }),
         };
         return qb;
@@ -167,6 +167,6 @@ describe('runQaChecks', () => {
     const c4 = results.find((r) => r.check_type === 'C4');
     expect(c4?.status).toBe('fail');
     expect(c4?.diff).toBe(1);
-    expect((c4?.detail as any[])[0]).toEqual({ issue: 'derived 指标 m2 依赖未定义指标 m3' });
+    expect(((c4?.detail as Array<Record<string, unknown>>)[0])).toEqual({ issue: 'derived 指标 m2 依赖未定义指标 m3' });
   });
 });
