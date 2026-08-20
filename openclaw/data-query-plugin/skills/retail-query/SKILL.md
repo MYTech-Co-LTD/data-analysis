@@ -32,6 +32,15 @@ metadata:
 
 **1. 忠于用户原话**：说"前 N/Top N"→加 LIMIT N；说"排名/所有/全部"→不写 LIMIT（网关兜底），呈现时如实告知总数与是否截断。点名某店/品类→LIKE '%关键字%'；没点名→全量（权限自动过滤）。
 
+**1.5 报表口径铁律（与报表中心 100% 一致）**：
+- 报表中心有的口径（**区域/战区排行、达标率、汇总、趋势、品类出库、批发**）→ **必须查 `report_*_gen` 视图**
+  （report_region_breakdown_gen / report_achievement_gen / report_category_summary_gen / report_brand_metric_gen /
+   report_wholesale_*_gen / report_supply_chain_outbound_gen）——这些视图就是报表中心的数据源，
+  **同视图同 SQL = 数字逐字节一致**。
+- **禁止用 `retail_detail` 自行聚合替代报表口径**（明细聚合无评估门店/目标关联等口径，数字对不上报表中心）。
+  区域排行示例：`SELECT sub_region_name, SUM(sale_actual) FROM report_region_breakdown_gen WHERE level='sub_region' GROUP BY 1`。
+- `retail_detail` 只用于报表中心**没有**的自由分析（商品级、任意日期切片、自选维度）——此类无对应报表，无一致性概念。
+
 **2. 日期忠于原话 + 必须显式标注**：明细日期列 `order_detail_bizday`（YYYYMMDD 字符串）；汇总日期列 `biz_date`/`week_start`（DATE）。"今天/最近/最新"用一条 SQL：`WHERE 日期列=(SELECT MAX(日期列) FROM 表)` 并带出 `data_date`；若 data_date≠今天就说"今天暂无，以下为最新 data_date 的数据"。回答里始终写明数据属于哪一天，绝不拿旧日冒充今天。按北京时间（容器 Asia/Shanghai）。
 
 **2.5 区域聚合免 join（首选）+ JOIN 复合键铁律**：
