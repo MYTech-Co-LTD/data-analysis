@@ -1,7 +1,7 @@
 import { ReactNode } from 'react';
 import Link from 'next/link';
 import { cookies } from 'next/headers';
-import { LayoutDashboard, Package, Store, Target, Users, ExternalLink, Boxes, Layers, ListTree, ShieldCheck, ClipboardCheck } from 'lucide-react';
+import { LayoutDashboard, Package, Store, Target, Users, ExternalLink, Boxes, Layers, ListTree, ShieldCheck, ClipboardCheck, Send, Bell } from 'lucide-react';
 import { Toaster } from 'sonner';
 
 export default async function AdminLayout({
@@ -69,6 +69,11 @@ export default async function AdminLayout({
                 <Users size={16} /> 用户管理（Casdoor）
                 <ExternalLink size={12} className="text-slate-400" />
               </a>
+            </div>
+            <div className="pt-4 border-t">
+              <div className="text-xs text-slate-400 px-3 pb-1">推送管理</div>
+              <NavItem href="/admin/push/presets" icon={<Send size={16} />}>推送模板</NavItem>
+              <NavItem href="/admin/push/configs" icon={<Bell size={16} />}>推送任务</NavItem>
             </div>
           </nav>
         </aside>
