@@ -40,45 +40,8 @@ for f in ["message-sender.js", "template-card-manager.js", "monitor.js"]:
     print(f"restored {f}")
 
 # ── 2) embed：template-card-manager.js ──
-p = os.path.join(SRC, "template-card-manager.js")
-s = read(p)
-old = "    await sendTemplateCards({ ...params, cards });\n    return { remainingText, cardsDetected: true };"
-new = "    await sendTemplateCards({ ...params, cards, remainingText });\n    return { remainingText, cardsDetected: true };"
-expect(old, s, "embed-proc"); s = s.replace(old, new, 1)
-
-old = """export async function sendTemplateCards(params) {
-    const { wsClient, frame, state, runtime, account, cards } = params;
-    const body = frame.body;
-    const chatId = body.chatid || body.from.userid;
-    for (const card of cards) {"""
-new = """export async function sendTemplateCards(params) {
-    const { wsClient, frame, state, runtime, account, cards, remainingText } = params;
-    const body = frame.body;
-    const chatId = body.chatid || body.from.userid;
-    // ★embed 补丁（2026-08-20）：首卡与剩余文本作为一条 stream_with_template_card 消息发出
-    const embedCard = cards[0];
-    if (embedCard && typeof embedCard.cardJson?.card_type === "string" && wsClient.replyStreamWithCard) {
-        try {
-            await wsClient.replyStreamWithCard(frame, state.streamId || "stream_embed", remainingText || "", true, {
-                templateCard: embedCard.cardJson,
-            });
-            state.hasTemplateCard = true;
-            state.embeddedCardSent = true;
-            saveTemplateCardToCache({ accountId: account.accountId, templateCard: embedCard.cardJson, runtime });
-            runtime.log?.(`[wecom][template-card] Card EMBEDDED in stream reply: card_type=${embedCard.cardType}`);
-            for (const card of cards.slice(1)) {
-                if (typeof card.cardJson?.card_type !== "string") continue;
-                await wsClient.sendMessage(chatId, { msgtype: "template_card", template_card: card.cardJson });
-                saveTemplateCardToCache({ accountId: account.accountId, templateCard: card.cardJson, runtime });
-            }
-            return;
-        } catch (err) {
-            runtime.error?.(`[wecom][template-card] Embed failed, fallback separate: ${String(err).slice(0, 120)}`);
-        }
-    }
-    for (const card of cards) {"""
-expect(old, s, "embed-send"); s = s.replace(old, new, 1)
-write(p, s)
+# ★2026-08-20 实测：stream_with_template_card 嵌入模式在企微客户端不渲染卡片（用户看不到）。
+# 回退：保持 pristine 的独立 sendMessage 发卡片（企微原生渲染，用户可见可点击）。不应用 embed。
 
 # ── 3) emoji：message-sender.js（sanitizer 插入 + 两处调用点） ──
 p = os.path.join(SRC, "message-sender.js")
@@ -125,26 +88,13 @@ function stripCardEmoji(obj) {
 function cloneTemplateCard(card) {'''
 s = s.replace(anchor, helper, 1)
 
-old = "    const embedCard = cards[0];\n    if (embedCard"
-new = "    for (const card of cards) {\n        if (card && card.cardJson) card.cardJson = stripCardEmoji(card.cardJson);\n    }\n    const embedCard = cards[0];\n    if (embedCard"
-expect(old, s, "emoji-tcm-use"); s = s.replace(old, new, 1)
-write(p, s)
-
-# ── 2b) embed：monitor.js（finishThinkingStream 跳过已嵌入文本） ──
-p = os.path.join(SRC, "monitor.js")
-s = read(p)
-old = """async function finishThinkingStream(ctx) {
-    const { wsClient, frame, state, runtime } = ctx;
-    const body = frame.body;"""
-new = """async function finishThinkingStream(ctx) {
-    const { wsClient, frame, state, runtime } = ctx;
-    // ★embed 补丁（2026-08-20）：卡片+文本已作为一条 stream_with_template_card 发出，跳过重复文本
-    if (state.embeddedCardSent) {
-        runtime.log?.(`[wecom] Final text already embedded with template card, skipping separate text`);
-        return;
-    }
-    const body = frame.body;"""
-expect(old, s, "embed-monitor"); s = s.replace(old, new, 1)
+old = "    for (const card of cards) {"
+new = "    for (const card of cards) {\n        if (card && card.cardJson) card.cardJson = stripCardEmoji(card.cardJson);\n    }\n    for (const card of cards) {"
+# 原代码只有一个 for 循环；改为在其前插入 stripCardEmoji 遍历（仅当该锚点唯一）
+count = s.count(old)
+assert count >= 1, "card loop not found"
+# 只替换第一个匹配（sendTemplateCards 的循环），其余 for 不动
+s = s.replace(old, new, 1)
 write(p, s)
 
 print("✅ 全部补丁应用完成 ->", SRC)

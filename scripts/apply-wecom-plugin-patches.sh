@@ -2,8 +2,8 @@
 # scripts/apply-wecom-plugin-patches.sh
 # 应用 wecom 插件的本地补丁（openclaw 更新/插件收敛后会被覆盖，需重跑本脚本）：
 #   1) pristine 恢复（npm 原始包 @wecom/wecom-openclaw-plugin@2026.5.7 的三个文件）
-#   2) embed   —— 模板卡片嵌入流式回复（文本+卡片一条消息）
-#   3) emoji   —— 只剔除 📊🔥📈，其余 emoji 保留；不剥离 markdown
+#   2) emoji   —— 只剔除 📊🔥📈，其余 emoji 保留；不剥离 markdown
+#   （注：卡片保持企微原生独立消息发送——实测 stream_with_template_card 嵌入不渲染）
 # 幂等：基于 pristine 全量重建，任意状态可重跑。
 # 用法（服务器上）：
 #   bash scripts/apply-wecom-plugin-patches.sh
