@@ -97,4 +97,33 @@ assert count >= 1, "card loop not found"
 s = s.replace(old, new, 1)
 write(p, s)
 
+# ── 4) thinking 提示：事件帧（卡片回调）改用主动 sendMessage（事件不支持 replyStream） ──
+p = os.path.join(SRC, "monitor.js")
+s = read(p)
+old = """async function sendThinkingReply(params) {
+    const { wsClient, frame, streamId, runtime, state } = params;
+    try {
+        await sendWeComReply({"""
+new = """async function sendThinkingReply(params) {
+    const { wsClient, frame, streamId, runtime, state } = params;
+    // ★thinking 补丁（2026-08-20）：事件帧（模板卡片回调）不支持 replyStream，
+    //    sendWeComReply 会跳过非最终帧 → 卡片点击后无"正在处理"提示。改用主动 sendMessage。
+    if (frame && frame.body && frame.body.msgtype === "event") {
+        const chatId = frame.body.chatid || (frame.body.from && frame.body.from.userid);
+        if (chatId) {
+            try {
+                await wsClient.sendMessage(chatId, { msgtype: "markdown", markdown: { content: THINKING_MESSAGE } });
+                return;
+            } catch (e) {
+                runtime.error?.(`[wecom] Failed to send thinking via sendMessage: ${String(e)}`);
+                return;
+            }
+        }
+    }
+    try {
+        await sendWeComReply({"""
+expect(old, s, "thinking-event"); s = s.replace(old, new, 1)
+write(p, s)
+print("thinking event patch applied")
+
 print("✅ 全部补丁应用完成 ->", SRC)
