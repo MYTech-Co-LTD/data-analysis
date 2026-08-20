@@ -16,7 +16,8 @@ function validateSpec(b: Record<string, unknown>): string | null {
   if (!b.name) return 'name required';
   const cs = b.cron_spec as Record<string, unknown> | undefined;
   if (!cs || !['daily', 'weekly', 'monthly'].includes(String(cs.kind))) return 'cron_spec.kind 须为 daily/weekly/monthly';
-  if (!/^\d{2}:\d{2}$/.test(String(cs.time))) return 'cron_spec.time 须为 HH:mm';
+  // Fix 2b：收紧 HH:mm 合法性（0-23:0-59），拒 99:99 等畸形值（旧正则 \d{2} 只查位数不查范围）
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(String(cs.time))) return 'cron_spec.time 须为 HH:mm';
   if (cs.kind === 'weekly' && !(Number(cs.weekday) >= 1 && Number(cs.weekday) <= 7)) return 'weekly 须带 weekday 1-7';
   if (cs.kind === 'monthly' && !(Number(cs.day) >= 1 && Number(cs.day) <= 31)) return 'monthly 须带 day 1-31';
   const sel = b.selector as Record<string, unknown> | undefined;

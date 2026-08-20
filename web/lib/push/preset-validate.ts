@@ -11,8 +11,10 @@ export function validateCardJson(card: unknown): { ok: boolean; errors: string[]
   const bytes = (s: unknown) => (typeof s === 'string' ? Buffer.byteLength(s, 'utf8') : 0);
 
   // 全局约束：消息类型统一 template_card news_notice（docs/ops/wecom-message-capabilities.md 统一裁定 2026-08-20）
-  if (c.card_type !== undefined && c.card_type !== 'news_notice') {
-    errors.push(`card_type 仅支持 news_notice（当前: ${String(c.card_type)}）`);
+  // 终审 I5：card_type 整个缺失也必须拒——企微卡片必需 card_type，缺字段发卡必败。
+  //   旧写法只在字段存在时拒非 news_notice，字段缺失则通过 → 全局约束被绕过。
+  if ((c as { card_type?: unknown }).card_type !== 'news_notice') {
+    errors.push('card_type 必须为 news_notice');
   }
 
   const mt = c.main_title as Record<string, unknown> | undefined;

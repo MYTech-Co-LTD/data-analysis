@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS push_configs (
   selector_json        JSONB NOT NULL,        -- {kind: dept|person, ids: [...]}
   target_mode          TEXT NOT NULL DEFAULT 'follow' CHECK (target_mode IN ('follow','fixed')),
   target_id            BIGINT,                -- fixed 模式必填 → targets.id
-  preset_id            TEXT NOT NULL,
+  preset_id            TEXT NOT NULL REFERENCES push_message_presets(preset_id),
   owner_wecom_id       TEXT NOT NULL,
   last_run_date        DATE,
   last_run_txn_id      TEXT,
@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS push_configs (
 );
 CREATE INDEX IF NOT EXISTS idx_push_configs_enabled ON push_configs(enabled) WHERE enabled;
 GRANT SELECT, INSERT, UPDATE ON push_configs TO anon, authenticated;
+
+-- ⚠️ C1（终审 Critical）：push_configs.preset_id 缺 FK → PostgREST 无法建 has_many 关系，
+--    `push_message_presets?select=*,push_configs(count)`（模板列表嵌入计数）恒 400/502。
+--    CREATE TABLE 已内联 REFERENCES（首部署一次建好）；此处幂等补丁兜底「本地/生产已建表」
+--    （CREATE TABLE IF NOT EXISTS 跳过约束时）。DROP+ADD 为数据无关操作（UI 下拉保证 preset 必存在）。
+ALTER TABLE push_configs DROP CONSTRAINT IF EXISTS push_configs_preset_id_fkey;
+ALTER TABLE push_configs ADD CONSTRAINT push_configs_preset_id_fkey
+  FOREIGN KEY (preset_id) REFERENCES push_message_presets(preset_id);
 
 -- 旧 scheduled_reports 退役标记（生产 0 行，保留表不迁移）
 COMMENT ON TABLE scheduled_reports IS 'DEPRECATED 2026-08-20：推送任务改 push_configs（spec 2026-08-20-push-self-service-config）';

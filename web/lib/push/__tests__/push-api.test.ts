@@ -440,6 +440,26 @@ describe('push API 基本校验', () => {
     expect(runPushMock).toHaveBeenCalledWith(expect.objectContaining({ presetId: 'preset-xyz' }));
   });
 
+  it('终审 I1：preset 推送不消耗首触发门——selector 保持配置值（非 owner 收件人）', async () => {
+    // workflowId 'wf-preset-gate' 从未触发过（不在 firstTriggerSent），但 presetId 显式传入 →
+    // 首触发门必须被跳过：selector 不被强制为 owner，收件人就是配置的 selector（SomeOtherUser）
+    const res = await POST(mkPushReq({
+      workflowId: 'wf-preset-gate',
+      presetId: 'preset-xyz',
+      selector: { kind: 'person', ids: ['SomeOtherUser'] },
+      userId: 'ZhangDuo',
+    }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.firstTrigger).toBe(false);
+    expect(body.note).toBeUndefined();
+    expect(runPushMock).toHaveBeenCalledWith(expect.objectContaining({
+      selector: { kind: 'person', ids: ['SomeOtherUser'] },
+      deliver: true,
+    }));
+  });
+
   it('首触发安全门：新 workflow 首次触发只发给自己', async () => {
     const res = await POST(mkPushReq({
       workflowId: 'wf-new',

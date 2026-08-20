@@ -50,6 +50,15 @@ describe('validateCardJson', () => {
     expect(r.ok).toBe(false);
     expect(r.errors.join()).toContain('news_notice');
   });
+  it('终审 I5：缺 card_type → 校验失败（字段缺失不可绕过全局约束）', () => {
+    const r = validateCardJson({
+      main_title: { title: 't' },
+      card_image: { url: 'u', aspect_ratio: 1.3 },
+      card_action: { type: 1, url: 'https://x' },
+    });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join()).toContain('card_type');
+  });
   it('边界容错：aspect_ratio=NaN/字符串拒、非字符串 title 拒', () => {
     expect(validateCardJson({
       card_type: 'news_notice',

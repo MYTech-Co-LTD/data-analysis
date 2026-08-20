@@ -130,6 +130,10 @@ describe('POST 校验', () => {
     const res = await postInvalid({ cron_spec: { kind: 'daily', time: '8:30' } });
     expect(res.status).toBe(400);
   });
+  it('cron_spec.time 越界（99:99）→ 400（Fix 2b：旧 \\d{2} 只查位数不查范围）', async () => {
+    const res = await postInvalid({ cron_spec: { kind: 'daily', time: '99:99' } });
+    expect(res.status).toBe(400);
+  });
   it('weekly 缺/错 weekday（非 1-7）→ 400', async () => {
     const res = await postInvalid({ cron_spec: { kind: 'weekly', time: '08:30', weekday: 8 } });
     expect(res.status).toBe(400);

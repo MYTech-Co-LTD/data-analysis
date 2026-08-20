@@ -449,7 +449,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // 首触发安全门：新 workflow 首触发先发给自己
-  const firstTime = isFirstTrigger(body.workflowId);
+  // 终审 I1：preset 路径（自服务模板/任务）不消耗首触发门——preset 任务是 push:configure 持有者
+  //   显式配置的收件人，不需要「首触发发自己验证」这道保险（test-send 已有 selfTest 强制 person:[自己]）。
+  //   调度任务统一 workflowId='scheduled-report'，若走首触发门，每次 web 重启后第一个 due 任务只发给 owner，
+  //   配置的收件人静默收不到。legacy 非 preset 路径行为完全不变。
+  const isPresetPush = Boolean((body as Record<string, unknown>).presetId);
+  const firstTime = !isPresetPush && isFirstTrigger(body.workflowId);
   let finalSelector = selector;
   if (firstTime) {
     finalSelector = { kind: 'person', ids: [operatorId] };

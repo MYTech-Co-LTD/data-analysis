@@ -8,7 +8,7 @@ import type { JobManifest, JobResult } from '../../contracts';
 import { tryAcquireLock } from '../../scheduler-lock';
 import { AGENT_API_KEY } from '../env';
 import { runningTasks } from '../state';
-import { matchesDate, type CronSpec } from './cron-match';
+import { matchesDate, isTimeReached, type CronSpec } from './cron-match';
 import { checkTargetActive, notifyOwnerOnce } from '../../push/target-guard';
 
 // run_push 接口契约（Task 9 产出，按 spec §5.4 签名）
@@ -118,13 +118,16 @@ export const scheduledReportsManifest: JobManifest = {
         return { status: 'ok', message: '无任务' };
       }
 
-      const today = new Date().toISOString().slice(0, 10);
+      // 「今天」按北京时区取（UTC+8），与引擎 resolveNumericValue / target-guard 同一日界——
+      //   否则北京 00:00-07:59 窗口内 last_run_date（UTC 串）跨日不一致 → 重复触发/错误判定（终审 I2）
+      const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
       const results: Array<{ id: string; txnId?: string; skipped?: string; error?: string }> = [];
 
       for (const cfg of configs) {
         try {
-          // 2) 今日 due 且未跑（当日内补发：错过整点下一小时补上，跨日不补）
-          const due = matchesDate(cfg.cron_spec as CronSpec, new Date());
+          // 2) 今日 due（日期 + 已过配置 time）且未跑（当日内补发：错过整点下一小时补上，跨日不补）
+          //    终审 C2：time 必须参与判定——否则「每天 08:30」的任务在当天 00:00 就触发（推昨日累计当今日）
+          const due = matchesDate(cfg.cron_spec as CronSpec, new Date()) && isTimeReached(cfg.cron_spec as CronSpec, new Date());
           const alreadyRan = cfg.last_run_date === today;
           if (!due || alreadyRan) continue;
           results.push({ id: cfg.config_id });

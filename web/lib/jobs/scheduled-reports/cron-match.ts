@@ -1,7 +1,9 @@
 // web/lib/jobs/scheduled-reports/cron-match.ts
 // cron_spec 匹配（spec §5）：结构化频率，业务人员不见 cron 表达式。
-// 当日补发语义由 job 侧实现（matchesDate 只判「该日是否 due」，time 不参与——
-//   job 每小时扫，「今日 due 且 last_run_date < 今天」即触发，跨日不补）。
+// 当日补发语义由 job 侧实现：
+//   matchesDate 只判「该日是否 due」（纯日期，time 不参与）；
+//   isTimeReached 判「当前时刻是否已过配置的 time」（当日补发：错过整点下一小时补上，跨日不补）——
+//   job 每小时扫，「今日 due 且已过 time 且 last_run_date < 今天」即触发。
 
 export interface CronSpec {
   kind: 'daily' | 'weekly' | 'monthly';
@@ -30,6 +32,18 @@ export function matchesDate(spec: CronSpec, d: Date): boolean {
     default:
       return false;
   }
+}
+
+/**
+ * 当前时刻是否已过配置的 time（当日补发：错过整点下一小时补上，跨日不补）。
+ * 畸形/越界 time 视为无时间约束（返回 true，不阻塞）——创建侧已收紧（push-configs 路由 Fix 2b），
+ * 此处只兜底历史脏数据：宁可按无时间约束跑，不可因脏 time 让任务永远不触发。
+ */
+export function isTimeReached(spec: CronSpec, now: Date): boolean {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(spec.time);
+  if (!m) return true; // 缺失/畸形 time 视为无时间约束（创建侧已收紧，见 Fix 2b）
+  const specMin = Number(m[1]) * 60 + Number(m[2]);
+  return now.getHours() * 60 + now.getMinutes() >= specMin;
 }
 
 /** 管理页「下次触发」显示 */

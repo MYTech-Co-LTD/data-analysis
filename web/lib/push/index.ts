@@ -473,6 +473,13 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
           );
         }
       }
+      // 终审 I4：整值占位检查只命中「整个值」是 {{var}} 的字段；message_content 是插值后的整串 JSON，
+      //   以 `{` 开头不命中 → 嵌在卡片里的残余 {{var}}（如 scope 今日无进行中目标 → 变量 null →
+      //   字面量泄漏进卡片）直接投给用户。此处扫描插值后 message_content 的残余 token（保留 interpolate 语义）。
+      const mc = (group.rendered as Record<string, unknown>).message_content;
+      if (typeof mc === 'string' && /\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}/.test(mc)) {
+        throw new Error('[push] message_content 含未解析变量占位符，live 模式拒绝投递');
+      }
     }
 
     // 不变量 9: subscriber upsert + push_subscriber_tokens

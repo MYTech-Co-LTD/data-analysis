@@ -499,4 +499,85 @@ describe('runPush', () => {
 
     expect(result.renderedGroups?.[0]?.rendered.message_content).toContain('X ¥42');
   });
+
+  it('终审 I4：message_content 含未解析 {{var}} → deliver=true 抛错（fail-closed）', async () => {
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+    ]));
+    const { resetCache } = await import('../push-variables');
+    resetCache();
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('require_push_owner')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+      }
+      if (url.includes('org_users')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'u1', wecom_id: 'wx1', is_active: true }]) });
+      }
+      if (url.includes('get_user_perms_strict')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }) });
+      }
+      // preset 模板引用 {{sale_amount}}（可解析）+ {{ghost_var}}（不在注册表 → 字面量保留）
+      if (url.includes('push_message_presets')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([
+          { preset_id: 'preset-ghost', workflow_id: 'w', msgtype: 'template_card', card_json: { card_type: 'news_notice', main_title: { title: 'X {{sale_amount}} {{ghost_var}}' } }, enabled: true },
+        ]) });
+      }
+      if (url.includes('report_achievement_gen')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ actual_value: 42, achievement_rate: 0.5 }]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    const { runPush } = await import('../index');
+    await expect(runPush({
+      workflowId: 'scheduled-report',
+      presetId: 'preset-ghost',
+      selector: { kind: 'person', ids: ['wx1'] },
+      operatorId: 'admin',
+      broadcastPerm: false,
+      deliver: true,
+    })).rejects.toThrow('message_content 含未解析变量占位符');
+  });
+
+  it('终审 I4：deliver=false（shadow）不受 message_content 残余占位检查影响', async () => {
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+    ]));
+    const { resetCache } = await import('../push-variables');
+    resetCache();
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('require_push_owner')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+      }
+      if (url.includes('org_users')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'u1', wecom_id: 'wx1', is_active: true }]) });
+      }
+      if (url.includes('get_user_perms_strict')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }) });
+      }
+      if (url.includes('push_message_presets')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([
+          { preset_id: 'preset-ghost2', workflow_id: 'w', msgtype: 'template_card', card_json: { card_type: 'news_notice', main_title: { title: 'X {{ghost_var}}' } }, enabled: true },
+        ]) });
+      }
+      if (url.includes('report_achievement_gen')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ actual_value: 42, achievement_rate: 0.5 }]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    const { runPush } = await import('../index');
+    const result = await runPush({
+      workflowId: 'scheduled-report',
+      presetId: 'preset-ghost2',
+      selector: { kind: 'person', ids: ['wx1'] },
+      operatorId: 'admin',
+      broadcastPerm: false,
+      deliver: false, // shadow
+    });
+    expect(result.mode).toBe('shadow');
+    expect(result.error).toBeUndefined();
+  });
 });
