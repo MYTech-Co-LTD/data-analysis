@@ -3,8 +3,8 @@
 // 缓存测试采用 brief 明示容许偏差：顶层 vi.mock('sharp')，断言命中/逐出逻辑、不实际调 sharp。
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  canonicalBanner, signBanner, verifyBanner, buildBannerUrl,
-  renderBannerSvg, injectBanner, BANNER_PLACEHOLDER_URL,
+  beijingToday, canonicalBanner, signBanner, verifyBanner, buildBannerUrl,
+  renderBannerSvg, hasBannerPlaceholder, injectBanner, BANNER_PLACEHOLDER_URL,
 } from '../banner';
 
 // sharp 全文件 mock（缓存命中路径不实际调 sharp）
@@ -19,6 +19,40 @@ vi.stubEnv('JWT_SECRET', 'test-secret-0123456789abcdef');
 vi.stubEnv('PUSH_BRIDGE_BASE_URL', 'https://data.shanhaiyiguo.com/api/wecom-bridge');
 
 const p = { d: '2026-08-20', t: '123', sale: '¥128,500', rate: '86.4%' };
+
+describe('beijingToday 北京日界', () => {
+  it('北京 00:30（UTC 昨日 16:30）取北京当日', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-19T16:30:00.000Z')); // = 北京 2026-08-20 00:30
+      expect(beijingToday()).toBe('2026-08-20');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('北京 08:00（UTC 同日 00:00）取北京当日', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-20T00:00:00.000Z')); // = 北京 2026-08-20 08:00
+      expect(beijingToday()).toBe('2026-08-20');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('hasBannerPlaceholder', () => {
+  it('占位 URL → true', () => {
+    expect(hasBannerPlaceholder({ card_image: { url: BANNER_PLACEHOLDER_URL } })).toBe(true);
+  });
+  it('其它 URL → false', () => {
+    expect(hasBannerPlaceholder({ card_image: { url: 'https://x/y.png' } })).toBe(false);
+  });
+  it('card_json 为 null/undefined → false', () => {
+    expect(hasBannerPlaceholder(null)).toBe(false);
+    expect(hasBannerPlaceholder(undefined)).toBe(false);
+  });
+});
 
 describe('canonicalBanner', () => {
   it('固定键序 JSON 数组（值内含分隔符无歧义）', () => {
@@ -88,6 +122,12 @@ describe('injectBanner（Task 2 引擎调用的助手）', () => {
     const preset2 = { msgtype: 'template_card', card_json: { card_image: { url: 'https://x/y.png' } } };
     const rendered: Record<string, string> = { sale_amount: '¥1', achievement_rate: '50%' };
     injectBanner(preset2, rendered, 1);
+    expect(rendered.banner_url).toBeUndefined();
+  });
+  it('msgtype 非 template_card → 不注入', () => {
+    const p2 = { msgtype: 'text', card_json: { card_image: { url: BANNER_PLACEHOLDER_URL } } };
+    const rendered: Record<string, string> = { sale_amount: '¥1', achievement_rate: '50%' };
+    injectBanner(p2, rendered, 1);
     expect(rendered.banner_url).toBeUndefined();
   });
 });
