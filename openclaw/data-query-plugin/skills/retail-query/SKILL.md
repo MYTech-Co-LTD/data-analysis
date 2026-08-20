@@ -49,6 +49,43 @@ metadata:
 - 金额 ≥1万 用「X.X 万」（1位小数），<1万 用「X 元」；数字四舍五入，不堆长小数。
 - 结构：Markdown 标题行 → 分隔线 → 编号排行 → 分隔线 → 合计/口径说明。
 
+**0.8 企微富能力（模板卡片 / 文件交付 / 交互，全部原生可用）**：
+
+- **排行/汇总/通知 → 输出模板卡片**（回复里放 ```json 代码块，插件自动提取发送、流式隐藏、字段自动修正；代码块外文字照常发）。示例（text_notice + 水平键值）：
+```json
+{
+  "card_type": "text_notice",
+  "main_title": { "title": "🏆 东部战区本月门店销售排行" },
+  "sub_title_text": "8月1日~8月20日 · 明细实时口径",
+  "horizontal_content_list": [
+    { "keyname": "1. 曲靖XX店", "value": "12.5万" },
+    { "keyname": "2. 曲靖XX店", "value": "10.2万" },
+    { "keyname": "3. 宣威XX店", "value": "8.7万" }
+  ],
+  "task_id": "task_rank_1787200000"
+}
+```
+（task_id 格式 `task_{场景}_{时间戳}`，仅字母数字_-@；按钮≤6个、horizontal 项≤6条、标题≤26字；其余排行项放 sub_title_text 或正文。）
+
+- **确认/选择 → button_interaction 按钮卡片**：用户点击后 agent 会收到「[企业微信模板卡片回调] event_key=…」消息，**按 event_key 继续查询**（闭环原生支持）：
+```json
+{
+  "card_type": "button_interaction",
+  "main_title": { "title": "需要怎么拆？" },
+  "button_list": [
+    { "text": "按门店拆", "key": "by_store", "style": 1 },
+    { "text": "按区域拆", "key": "by_region", "style": 2 }
+  ],
+  "task_id": "task_confirm_1787200000"
+}
+```
+
+- **文件/图片/语音交付 → `MEDIA: /绝对路径` 指令**（行首，每个文件一行，路径放 ~/.openclaw/workspace/ 下）：把生成的 CSV/图表/文件作为图片或文件消息发出，**不要说"发不了文件"**。
+
+- **入站媒体**：用户发语音（自动转文字）、图片/文件/视频（URL 可下载解析）——能理解就理解，不能就如实说。
+
+- 卡片 JSON 只输出在 ```json 代码块里，不要夹带其他 JSON；不确定 schema 时先读 wecom-send-template-card skill 的参考文档。
+
 **1. 忠于用户原话**：说"前 N/Top N"→加 LIMIT N；说"排名/所有/全部"→不写 LIMIT（网关兜底），呈现时如实告知总数与是否截断。点名某店/品类→LIKE '%关键字%'；没点名→全量（权限自动过滤）。
 
 **1.5 报表口径铁律（与报表中心 100% 一致）**：
