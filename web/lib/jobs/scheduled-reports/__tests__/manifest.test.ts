@@ -14,6 +14,7 @@ vi.mock('../../../push/target-guard', () => ({
 }));
 
 import { scheduledReportsManifest } from '../manifest';
+import type { JobContext } from '../../../contracts';
 import { tryAcquireLock } from '../../../scheduler-lock';
 import { checkTargetActive } from '../../../push/target-guard';
 
@@ -64,7 +65,7 @@ describe('scheduledReportsManifest — 终审修复回归', () => {
       return new Response(JSON.stringify({}), { status: 200 });
     });
 
-    const result = await scheduledReportsManifest.run();
+    const result = await scheduledReportsManifest.run({} as JobContext);
     expect(result.status).toBe('ok');
     const pushCalls = mockFetch.mock.calls.filter((c) => String(c[0]).includes('/api/push'));
     expect(pushCalls).toHaveLength(0);
@@ -85,7 +86,7 @@ describe('scheduledReportsManifest — 终审修复回归', () => {
       return new Response(JSON.stringify({}), { status: 200 });
     });
 
-    const result = await scheduledReportsManifest.run();
+    const result = await scheduledReportsManifest.run({} as JobContext);
     expect(result.status).toBe('ok');
     const pushCalls = mockFetch.mock.calls.filter((c) => String(c[0]).includes('/api/push'));
     expect(pushCalls).toHaveLength(0);
@@ -112,7 +113,7 @@ describe('scheduledReportsManifest — 终审修复回归', () => {
       return new Response(JSON.stringify({}), { status: 200 });
     });
 
-    const result = await scheduledReportsManifest.run();
+    const result = await scheduledReportsManifest.run({} as JobContext);
     expect(result.status).toBe('ok');
     const pushCalls = mockFetch.mock.calls.filter((c) => String(c[0]).includes('/api/push'));
     expect(pushCalls).toHaveLength(1);
