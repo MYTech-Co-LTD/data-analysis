@@ -21,6 +21,15 @@ metadata:
 
 **0. 工具调用预算（铁律，超时主因）**：一个问题最多 **3 次** `query_retail_data`。优先一条 SQL 算完（聚合+JOIN+WHERE 一次到位）；不要多表交叉验证/反复核对口径；表/列不确定 → 先调 1 次 `list_datasets` 再直接查，禁止试探性查询。超过 3 次仍没结果 → 停止，如实说明已查到的部分和缺什么，不要继续钻。
 
+**0.5 权限预检（先查范围，无权限立即答，不浪费时间）**：
+- 每次 `query_retail_data` 响应里的 **`perms.branch_nums`** 就是你的可见门店列表（网关按提问者权限裁剪后返回）。若为空数组 → 你无任何数据权限，直接告知用户「无数据查询权限」，**不再发起任何查询**。
+- 问题涉及**具体战区/区域/门店**时，第一查就做范围确认，一条 SQL 搞定：
+  `SELECT DISTINCT war_zone FROM report_region_breakdown_gen WHERE war_zone IS NOT NULL`
+  （战区）或 `SELECT DISTINCT region_name FROM report_region_breakdown_gen WHERE region_name IS NOT NULL`（区域）。
+  （该视图按你权限自动裁剪，返回即你的可见战区/区域全集。）
+- 问题目标**不在**可见范围 → **立即**如实回答「该战区/区域不在你当前可见门店范围（你可见：东部战区…）」，并**结束**，禁止再查任何表验证/尝试绕过。
+- 禁止为了确认范围做多表核对（dim_branch × 门店名匹配 × region 视图 × targets 交叉验证）——一次范围查询足够，多了就是超时主因。
+
 **1. 忠于用户原话**：说"前 N/Top N"→加 LIMIT N；说"排名/所有/全部"→不写 LIMIT（网关兜底），呈现时如实告知总数与是否截断。点名某店/品类→LIKE '%关键字%'；没点名→全量（权限自动过滤）。
 
 **2. 日期忠于原话 + 必须显式标注**：明细日期列 `order_detail_bizday`（YYYYMMDD 字符串）；汇总日期列 `biz_date`/`week_start`（DATE）。"今天/最近/最新"用一条 SQL：`WHERE 日期列=(SELECT MAX(日期列) FROM 表)` 并带出 `data_date`；若 data_date≠今天就说"今天暂无，以下为最新 data_date 的数据"。回答里始终写明数据属于哪一天，绝不拿旧日冒充今天。按北京时间（容器 Asia/Shanghai）。
