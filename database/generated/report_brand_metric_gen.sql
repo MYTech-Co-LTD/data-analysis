@@ -5,7 +5,7 @@ WITH tgt AS (
     (end_date - start_date + 1) AS total_days,
     GREATEST(LEAST(current_date, end_date) - start_date + 1, 0) AS days_elapsed,
     LEAST(current_date, end_date) AS latest_day
-  FROM targets WHERE target_level='total' AND status IN ('active')
+  FROM targets WHERE target_level='total' AND status IN ('active','closed')
 ),
 cte0 AS (
   SELECT tgt.target_id, s.system_book_code,

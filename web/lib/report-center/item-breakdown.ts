@@ -17,6 +17,23 @@ import { getClient } from "@/lib/api";
 import { wrapError, type AppError } from "@/lib/error";
 import { type GetterStatus } from "./types";
 import { cache } from "react";
+import { cookies } from "next/headers";
+
+// 2026-08-19 方案 B：受限用户（非全店）跳过 item 快照走 live 视图（快照=全店定格，无 scope 版本）；
+// 解不开/无 token → 保守走 live。与 target-snapshot.ts isBranchScopeLimited 同源语义。
+async function itemScopedUser(): Promise<boolean> {
+  try {
+    const token = (await cookies()).get("insforge_access_token")?.value;
+    if (!token) return true;
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1] ?? "", "base64").toString("utf8"),
+    ) as { data_scope?: { branch_nums?: unknown } };
+    const bn = payload.data_scope?.branch_nums;
+    return !(Array.isArray(bn) && bn.includes("*"));
+  } catch {
+    return true;
+  }
+}
 
 export interface ItemTopRow {
   item_code: string;
@@ -136,7 +153,8 @@ export const getItemBreakdownTop = cache(async function getItemBreakdownTop(
     //       active 查视图全量（toBoard 算 TOP20）
     let saleMonth: TopBoard;
     let outboundMonth: TopBoard;
-    if (closed) {
+    if (closed && !(await itemScopedUser())) {
+      // 受限用户跳过快照（方案 B）：走下方 live 视图（tgt 已含 closed 目标）
       const { data: snap, error: sErr } = await client.database
         .from("target_snapshot_breakdowns")
         .select("data")
@@ -242,7 +260,8 @@ export async function getItemOutboundListPage(
     const client = await getClient();
     // closed 目标：读 item 全量快照分页（展开抽屉才调，按需加载；不查视图因 closed 视图 tgt 不含此 target）
     const { data: t } = await client.database.from("targets").select("status").eq("id", targetId).single();
-    if (t?.status === "closed") {
+    if (t?.status === "closed" && !(await itemScopedUser())) {
+      // 受限用户跳过全量快照，走下方 live 查询（方案 B）
       const { data: snap } = await client.database
         .from("target_snapshot_breakdowns")
         .select("data")

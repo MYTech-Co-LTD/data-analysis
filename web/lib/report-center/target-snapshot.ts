@@ -9,11 +9,33 @@
 import { getClient } from "@/lib/api";
 import { wrapError } from "@/lib/error";
 import { okResult, errorResult, type GetterResult } from "./types";
+import { cookies } from "next/headers";
+
+// 2026-08-19 方案 B（用户裁定）第二部分：受限用户（branch_nums 非 '*'）跳过快照走 live。
+// 快照是关单时全店视角定格，无 scope 版本；live 视图自带 RLS 裁剪 + 194 语义。
+// 判定仅做分流（展示路径选择），真实鉴权仍由 DB 层 RLS 兜底；解不开/无 token → 保守走 live。
+async function isBranchScopeLimited(): Promise<boolean> {
+  try {
+    const token = (await cookies()).get("insforge_access_token")?.value;
+    if (!token) return true;
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1] ?? "", "base64").toString("utf8"),
+    ) as { data_scope?: { branch_nums?: unknown } };
+    const bn = payload.data_scope?.branch_nums;
+    return !(Array.isArray(bn) && bn.includes("*"));
+  } catch {
+    return true;
+  }
+}
 
 export async function getSnapshotRows(
   targetId: number,
   module: string,
 ): Promise<GetterResult<unknown>> {
+  // 受限用户：直接报"无快照"→上层 fall-through live（方案 B；全店用户保留定格语义）
+  if (await isBranchScopeLimited()) {
+    return errorResult([], wrapError(new Error("scoped user: live path")));
+  }
   try {
     const client = await getClient();
     const { data, error } = await client.database
