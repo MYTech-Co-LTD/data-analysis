@@ -62,7 +62,7 @@
     "glob_date_format": "iso",
     "natural_key": [],
     "agg_table": "report_daily_item_sales",
-    "agg_key": ["system_book_code", "item_num", "biz_date"],
+    "agg_key": ["system_book_code", "branch_num", "item_num", "biz_date"],
     "agg_metric": [
       { "detail": "sale_money", "agg": "sale_amount" },
       { "detail": "profit", "agg": "sale_profit" }
@@ -97,7 +97,7 @@
     "glob_date_format": "compact",
     "natural_key": [],
     "agg_table": "report_daily_item_outbound",
-    "agg_key": ["system_book_code", "item_num", "biz_date"],
+    "agg_key": ["system_book_code", "branch_num", "item_num", "biz_date"],
     "agg_metric": [
       { "detail": "delivery_amount", "agg": "delivery_amount" },
       { "detail": "wholesale_amount", "agg": "wholesale_amount" }
