@@ -30,7 +30,7 @@ done
 echo "  backup done ($TS)"
 
 # 应用补丁（python3 幂等：带标记检测）
-for p in patch_embed.py patch_emoji.py patch_mdstrip.py; do
+for p in patch_embed.py patch_emoji.py patch_mdstrip.py patch_emoji_allowlist.py; do
   if [ -f "$PATCH_DIR/$p" ]; then
     echo "== 应用 $p =="
     python3 "$PATCH_DIR/$p" || echo "  ⚠ $p 失败或已应用（幂等跳过）"
