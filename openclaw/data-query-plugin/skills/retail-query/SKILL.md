@@ -38,7 +38,8 @@ metadata:
 **0.7 输出形态（实测：企微对话回复渲染纯文本，markdown 语法原样显示；唯一富格式=模板卡片）**：
 - **数据类回答（排行/汇总/统计/确认/选择）默认输出模板卡片**（```json 代码块，插件自动提取发送、流式隐藏 JSON、字段自动补全）。
 - 纯文本只用于：无数据/查询失败/对话解释/纠错提示。
-- 纯文本时**禁止** markdown 语法（`**`、`##`、`- 列表`、管道符表格）——全部原样显示；用 emoji + 分隔线 + 对齐。
+- 纯文本时**禁止** markdown 语法（`**`、`##`、`- 列表`、管道符表格）——全部原样显示；用分隔线 + 全角空格对齐。
+- **禁止 emoji 图标**（🏆🥇🥈🥉📊✅🚚🔥🎯💯 等）——AI 味重；排名写「1.」、合计写「合计」，一律纯文字/数字。
 - 金额 ≥1万 用「X.X 万」（1位小数），<1万 用「X 元」。
 
 **0.8 模板卡片用法（数据回答首选）**：
@@ -47,7 +48,7 @@ metadata:
 ```json
 {
   "card_type": "text_notice",
-  "main_title": { "title": "🏆 东部战区本月门店销售排行" },
+  "main_title": { "title": "东部战区本月门店销售排行" },
   "sub_title_text": "1. 曲靖XX店 12.5万（1320单）\n2. 曲靖XX店 10.2万（980单）\n3. 宣威XX店 8.7万（760单）\n4. 曲靖XX店 7.1万（690单）",
   "horizontal_content_list": [
     { "keyname": "1. 曲靖XX店", "value": "12.5万" },
@@ -70,7 +71,7 @@ metadata:
 }
 ```
 - **投票/多选 → vote_interaction / multiple_interaction**（简化格式：title/options/mode/submit_text 或 title/selectors；源码自动回写选中标记 is_checked/selected_id + 提交后 disable，防重复提交）。
-- 规则：task_id=`task_{场景}_{时间戳}`（仅字母数字_-@）；按钮/horizontal 各 ≤6；标题 ≤26字；不确定 schema 先读 wecom-send-template-card skill；JSON 只放 ```json 代码块，正文放代码块外。
+- 规则：task_id=`task_{场景}_{时间戳}`（仅字母数字_-@）；按钮/horizontal 各 ≤6；标题 ≤26字；**标题/文案不用 emoji 图标**（AI 味重，用纯文字）；不确定 schema 先读 wecom-send-template-card skill；JSON 只放 ```json 代码块，正文放代码块外。
 
 **0.7.5 配送/出库查询直连（防探索性多查，实测教训）**：
 - 配送/出库/达标率排行 → **直接查 `report_region_breakdown_gen`**（level='store'，字段 delivery_actual/delivery_target/delivery_rate）。
@@ -83,7 +84,7 @@ metadata:
 ```json
 {
   "card_type": "text_notice",
-  "main_title": { "title": "🏆 东部战区本月门店销售排行" },
+  "main_title": { "title": "东部战区本月门店销售排行" },
   "sub_title_text": "8月1日~8月20日 · 明细实时口径",
   "horizontal_content_list": [
     { "keyname": "1. 曲靖XX店", "value": "12.5万" },
