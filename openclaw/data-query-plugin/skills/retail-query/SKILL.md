@@ -35,18 +35,42 @@ metadata:
 - 问题目标**不在**可见范围 → **立即**如实回答「该战区/区域不在你当前可见门店范围（你可见：东部战区…）」，并**结束**，禁止再查任何表验证/尝试绕过。
 - 禁止为了确认范围做多表核对（dim_branch × 门店名匹配 × region 视图 × targets 交叉验证）——一次范围查询足够，多了就是超时主因。
 
-**0.7 回答格式约定（实测：企微对话回复渲染纯文本，markdown 语法原样显示——不要用 `**`、`##`、`-` 列表）**：
-- 排行/列表输出**纯文本**：emoji 引导 + 分隔线 + 全角空格对齐，一行一条：
-  📊 东部战区 · 本月门店销售排行（8月1日~8月20日 · 明细实时口径）
-  ───────────────────
-  🏆 1. 曲靖XX店    12.5万（1320单）
-  🥈 2. 曲靖XX店    10.2万（ 980单）
-  🥉 3. 宣威XX店     8.7万（ 760单）
-  ───────────────────
-  ✅ 合计 469.7万 · 覆盖 70 家门店
-- **禁止**：`**加粗**`、`## 标题`、`- 列表`、`1. 列表` 等 markdown 语法（企微纯文本原样显示成星号井号）；管道符表格（`| --- |`）同样禁止。
-- 金额 ≥1万 用「X.X 万」（1位小数），<1万 用「X 元」；数字四舍五入。
-- 结构：标题行 → 分隔线 → 排行 → 分隔线 → 合计/口径。
+**0.7 输出形态（实测：企微对话回复渲染纯文本，markdown 语法原样显示；唯一富格式=模板卡片）**：
+- **数据类回答（排行/汇总/统计/确认/选择）默认输出模板卡片**（```json 代码块，插件自动提取发送、流式隐藏 JSON、字段自动补全）。
+- 纯文本只用于：无数据/查询失败/对话解释/纠错提示。
+- 纯文本时**禁止** markdown 语法（`**`、`##`、`- 列表`、管道符表格）——全部原样显示；用 emoji + 分隔线 + 对齐。
+- 金额 ≥1万 用「X.X 万」（1位小数），<1万 用「X 元」。
+
+**0.8 模板卡片用法（数据回答首选）**：
+
+- **排行/汇总 → text_notice 卡片**（sub_title_text 放完整排行列表；horizontal_content_list 放 Top 3 键值对）：
+```json
+{
+  "card_type": "text_notice",
+  "main_title": { "title": "🏆 东部战区本月门店销售排行" },
+  "sub_title_text": "1. 曲靖XX店 12.5万（1320单）\n2. 曲靖XX店 10.2万（980单）\n3. 宣威XX店 8.7万（760单）\n4. 曲靖XX店 7.1万（690单）",
+  "horizontal_content_list": [
+    { "keyname": "1. 曲靖XX店", "value": "12.5万" },
+    { "keyname": "2. 曲靖XX店", "value": "10.2万" },
+    { "keyname": "3. 宣威XX店", "value": "8.7万" }
+  ],
+  "task_id": "task_rank_1787200000"
+}
+```
+- **确认/选择 → button_interaction**（点击后 agent 收到 event_key 回调自动续查）：
+```json
+{
+  "card_type": "button_interaction",
+  "main_title": { "title": "需要怎么拆？" },
+  "button_list": [
+    { "text": "按门店拆", "key": "by_store", "style": 1 },
+    { "text": "按区域拆", "key": "by_region", "style": 2 }
+  ],
+  "task_id": "task_confirm_1787200000"
+}
+```
+- **投票/多选 → vote_interaction / multiple_interaction**（含 checkbox/select_list/submit_button）。
+- 规则：task_id=`task_{场景}_{时间戳}`（仅字母数字_-@）；按钮/horizontal 各 ≤6；标题 ≤26字；不确定 schema 先读 wecom-send-template-card skill；JSON 只放 ```json 代码块，正文放代码块外。
 
 **0.7.5 配送/出库查询直连（防探索性多查，实测教训）**：
 - 配送/出库/达标率排行 → **直接查 `report_region_breakdown_gen`**（level='store'，字段 delivery_actual/delivery_target/delivery_rate）。
