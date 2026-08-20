@@ -22,7 +22,8 @@ function makeDb(overrides: Record<string, unknown> = {}) {
     _inserted: inserted,
     ...overrides,
   };
-  return db as unknown as Parameters<typeof runQaChecks>[0]['db'];
+  type DbShape = typeof db & { _inserted: unknown[] };
+  return db as unknown as Parameters<typeof runQaChecks>[0]['db'] & DbShape;
 }
 
 describe('runQaChecks', () => {
@@ -75,7 +76,7 @@ describe('runQaChecks', () => {
     expect(d1?.diff).toBeNull();
     expect(((d1?.detail as Array<{error?:string}>)[0]).error).toContain('No files found');
     // 写库的是 no-data 行
-    const inserted = ((db as {_inserted: Array<{check_type?:string}>})._inserted).find((r) => r.check_type === 'D1');
+    const inserted = (db._inserted as Array<{ check_type?: string; status?: string }>).find((r) => r.check_type === 'D1');
     expect(inserted?.status).toBe('no-data');
   });
 
@@ -103,6 +104,7 @@ describe('runQaChecks', () => {
   });
 
   it('C2 视图查询报错记 error 不静默 pass', async () => {
+    const rows2: unknown[] = [];
     const db = makeDb({
       from: vi.fn((t: string) => {
         const qb = {
@@ -111,7 +113,7 @@ describe('runQaChecks', () => {
           single: vi.fn(() => qb),
           order: vi.fn(() => qb),
           limit: vi.fn(() => qb),
-          insert: vi.fn(async (rows: unknown[]) => { ((db as {_inserted: unknown[]})._inserted).push(...(rows as unknown[])); return { data: rows, error: null }; }),
+          insert: vi.fn(async (rows: unknown[]) => { rows2.push(...(rows as unknown[])); return { data: rows, error: null }; }),
           then: (resolve: (v: unknown) => void) => resolve(t.endsWith('_qa') ? { data: undefined, error: 'relation does not exist' } : { data: [], error: null }),
         };
         return qb;
