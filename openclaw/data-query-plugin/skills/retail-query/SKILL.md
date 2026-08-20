@@ -15,6 +15,80 @@ metadata:
 - **list_datasets()**：会话首查前调一次。返回可用数据集（明细/汇总/维表）+ 各列 + 成本敏感标记 + JOIN 提示 + 日期列/格式。**可用表/列以它返回为准，勿凭记忆。**
 - **query_retail_data({ sql })**：单条 SELECT。自动按权限过滤门店、脱敏成本列——**不要**在 SQL 写权限条件。只允许 SELECT；禁 read_parquet/DDL/DML。无 LIMIT 时网关自动补 LIMIT 1000。结果超 50 行只回传前 50 + truncated。
 
+## 查询模板库（与报表中心同口径，套模板填参，不要自由构思）
+
+> 口径说明：**当前月=8月经营指标 target_id=823（8/1-8/31，active）**；上月=22（7月）。
+> 所有 report_*_gen 视图已按用户权限裁剪，直接查即可；周期过滤一律用 target_id（不要用日期猜）。
+> metric_code：sale=销售 / delivery=配送 / outbound=出库 / profit=出库毛利。
+
+**① 目标达成率（report_achievement_gen）**：每目标×指标一行
+```sql
+SELECT name, status, metric_name, target_value, actual_value, achievement_rate, progress_rate
+FROM report_achievement_gen
+WHERE target_level='total' AND target_id=823 AND status='active'
+ORDER BY metric_code;
+```
+
+**② 战区/区域/门店下钻（report_region_breakdown_gen）**：level=region(战区)/sub_region(二级区域)/store(门店)
+```sql
+-- 二级区域排行（销售）
+SELECT region_name, SUM(sale_actual) actual, SUM(sale_target) target
+FROM report_region_breakdown_gen
+WHERE target_id=823 AND level='sub_region' AND region_name LIKE '东部%'
+GROUP BY 1 ORDER BY 2 DESC;
+-- 门店配送排行
+SELECT branch_name, SUM(delivery_actual) actual, SUM(delivery_target) target
+FROM report_region_breakdown_gen
+WHERE target_id=823 AND level='store'
+GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+```
+
+**③ 品类出库（report_category_summary_gen）**：category=水果/标品/耗材
+```sql
+SELECT category, SUM(actual_value) actual, SUM(target_value) target
+FROM report_category_summary_gen WHERE target_id=823 GROUP BY 1;
+```
+
+**④ 品牌指标（report_brand_metric_gen）**
+```sql
+SELECT system_book_code, metric_name, SUM(actual_value) actual, SUM(target_value) target
+FROM report_brand_metric_gen WHERE target_id=823 GROUP BY 1,2;
+```
+
+**⑤ 批发（report_wholesale_daily_gen / report_wholesale_customer_gen）**：批发额/毛利/客户
+```sql
+SELECT client_name, SUM(wholesale_money) amt FROM report_wholesale_daily_customer_gen
+WHERE target_id=823 GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+```
+
+**⑥ 供应链出库（report_supply_chain_outbound_gen）**
+```sql
+SELECT * FROM report_supply_chain_outbound_gen WHERE target_id=823 LIMIT 20;
+```
+
+**⑦ 商品下钻（report_item_breakdown_gen）**：商品级目标/实际
+```sql
+SELECT item_name, SUM(actual_value) actual FROM report_item_breakdown_gen
+WHERE target_id=823 GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+```
+
+**⑧ 日报/周趋势（report_daily_sales / report_weekly_trend）**：日常销售额/趋势
+```sql
+SELECT biz_date, SUM(total_sale) FROM report_daily_sales
+WHERE biz_date>='2026-08-01' GROUP BY 1 ORDER BY 1 DESC LIMIT 7;
+SELECT week_start, SUM(total_sale) FROM report_weekly_trend GROUP BY 1 ORDER BY 1 DESC LIMIT 4;
+```
+
+**⑨ 明细自由分析（retail_detail，报表中心没有的维度才用）**：区域列自带（region_name/war_zone_name/system_book_code），日期列 order_detail_bizday(YYYYMMDD)
+```sql
+-- 按日/区域聚合（免 join）
+SELECT region_name, SUM(CAST(sale_money AS DOUBLE)) amt FROM retail_detail
+WHERE order_detail_bizday='20260820' GROUP BY 1 ORDER BY 2 DESC;
+-- 明细 join 维表必须复合键：ON rd.system_book_code=db.system_book_code AND rd.branch_num=db.branch_num
+```
+
+**规则**：报表中心有的指标/看板 → 用 ①-⑧ 模板（同口径，禁止明细自行聚合）；只有模板没有的自由维度 → 才用 ⑨。
+
 ## 回答规则（简短，严格遵守）
 
 **1. 数据只来自 query_retail_data 返回**，绝不编造；工具没调/报错/空/无权限 → 如实说查不到。
