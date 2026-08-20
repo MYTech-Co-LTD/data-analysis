@@ -80,6 +80,18 @@ export function matchesScope(
 
 // 运行时从数据库读取（生产环境）
 let _cached: PushVariable[] | null = null;
+// TTL（仅生产 DB 读取路径生效）：改 push_variables 行后 ≤5min 自动生效，
+// 不再需要 docker restart deploy-web-1（2026-08-20 摩擦修复）。
+// 测试注入（PUSH_VARIABLES_JSON）与默认兜底不过期——确定性。
+const CACHE_TTL_MS = 5 * 60 * 1000;
+let _cachedAt = 0;
+let _cacheExpirable = false;
+
+function cacheValid(): boolean {
+  if (!_cached) return false;
+  if (!_cacheExpirable) return true;
+  return Date.now() - _cachedAt < CACHE_TTL_MS;
+}
 
 /**
  * 获取启用的推送变量列表
@@ -88,13 +100,14 @@ let _cached: PushVariable[] | null = null;
  * 生产环境从 PostgREST 读取
  */
 export async function getPushVariables(): Promise<PushVariable[]> {
-  if (_cached) return _cached;
+  if (cacheValid()) return _cached!;
 
   // 测试环境：从环境变量注入
   const jsonStr = process.env.PUSH_VARIABLES_JSON;
   if (jsonStr) {
     try {
       _cached = JSON.parse(jsonStr);
+      _cacheExpirable = false;
       return _cached!;
     } catch {
       // fallback to default
@@ -112,6 +125,8 @@ export async function getPushVariables(): Promise<PushVariable[]> {
       );
       if (resp.ok) {
         _cached = await resp.json();
+        _cachedAt = Date.now();
+        _cacheExpirable = true;
         return _cached!;
       }
     } catch {
@@ -130,6 +145,7 @@ export async function getPushVariables(): Promise<PushVariable[]> {
       enabled: true,
     },
   ];
+  _cacheExpirable = false;
   return _cached;
 }
 
@@ -138,6 +154,8 @@ export async function getPushVariables(): Promise<PushVariable[]> {
  */
 export function resetCache(): void {
   _cached = null;
+  _cachedAt = 0;
+  _cacheExpirable = false;
 }
 
 /**
