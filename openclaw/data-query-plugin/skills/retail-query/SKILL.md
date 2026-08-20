@@ -114,6 +114,28 @@ metadata:
 
 - 卡片 JSON 只输出在 ```json 代码块里，不要夹带其他 JSON；不确定 schema 时先读 wecom-send-template-card skill 的参考文档。
 
+**0.9 语义澄清机制（交互式，不猜）**：
+- 问题**语义不明 / 多口径歧义**时（多个候选 target/指标/维度，且无法从上下文确定）→ **先输出澄清卡片让用户选择，不要猜一个口径直接答**。
+  典型歧义：问「销售达成率」但有 7月/8月 两个目标期 × 销售/配送/出库/出库毛利 多个指标；问「本月排行」但没说门店/区域/商品。
+- 澄清用 `button_interaction` 卡片（选项=候选口径，≤6 个；不确定候选时先用一次 `SELECT DISTINCT name,status FROM report_achievement_gen` 等确认候选）：
+```json
+{
+  "card_type": "button_interaction",
+  "main_title": { "title": "哪个口径的达成率？" },
+  "sub_title_text": "当前有多个目标期与指标，请选择",
+  "button_list": [
+    { "text": "8月·销售", "key": "aug_sale", "style": 1 },
+    { "text": "8月·配送", "key": "aug_delivery", "style": 2 },
+    { "text": "8月·出库", "key": "aug_outbound", "style": 3 },
+    { "text": "7月·销售", "key": "jul_sale", "style": 2 }
+  ],
+  "task_id": "task_clarify_1787200000"
+}
+```
+- **点击回流**：用户点按钮后，你会收到一条 `[企业微信模板卡片回调]` 消息，内含 `event_key(事件 key): aug_sale` 等字段。**看到回调就按 event_key 对应的口径立即查询回答，不要重问、不要解释卡片机制**。
+- 澄清卡片文案要包含候选含义（如"8月·销售"）；一次只澄清一个维度（先口径再维度，别一次问太多）。
+- 只有真歧义才澄清：能从上下文/历史确定口径时直接查，不要为了澄清而澄清。
+
 **1. 忠于用户原话**：说"前 N/Top N"→加 LIMIT N；说"排名/所有/全部"→不写 LIMIT（网关兜底），呈现时如实告知总数与是否截断。点名某店/品类→LIKE '%关键字%'；没点名→全量（权限自动过滤）。
 
 **1.5 报表口径铁律（与报表中心 100% 一致）**：
