@@ -210,7 +210,8 @@ export const itemBreakdownView: ViewConfig = {
       lateral_pick: { match: 'item_code = s.pos_item_code', prefer_own: 'system_book_code = s.system_book_code' },
     },
   },
-  perm_skip_branch: true,  // item 粒度聚合表无 branch_num 列（仅 brands 过滤）
+  // （2026-08-19 已删）perm_skip_branch: true —— item 表已重建为 branch 粒度（迁移 200），
+  // branch 过滤与 brands 同款内联生效。
 };
 
 /**

@@ -13,7 +13,7 @@ cte0 AS (
     SUM(s.wholesale_profit) AS wholesale_ext_profit
   FROM report_daily_wholesale s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.latest_day
-  WHERE s.system_book_code = '3120' AND scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num))
+  WHERE s.system_book_code = '3120' AND ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[]))
   GROUP BY tgt.target_id, s.biz_date
 )
 SELECT cte0.target_id AS target_id,

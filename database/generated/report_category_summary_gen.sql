@@ -34,7 +34,7 @@ delivery_actuals AS (
   JOIN target_base tb ON d.biz_date BETWEEN tb.start_date AND tb.end_date
   WHERE (tb.system_book_code = 'ALL' OR d.system_book_code = tb.system_book_code)
     AND d.category_group IN ('水果', '标品', '耗材')
-    AND scope_match_v2('brands', d.system_book_code) AND (scope_match_v2('branch_nums', d.branch_num::text) OR scope_match_v2('branch_nums', d.system_book_code || '-' || d.branch_num))
+    AND ('*' = ANY((SELECT scope_brand_keys())::text[]) OR d.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR d.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (d.system_book_code || '-' || d.branch_num) = ANY((SELECT scope_branch_keys())::text[]))
   GROUP BY tb.target_id, d.category_group
 ),
 wholesale_actuals AS (
@@ -49,7 +49,7 @@ wholesale_actuals AS (
   JOIN target_base tb ON w.biz_date BETWEEN tb.start_date AND tb.end_date
   WHERE (tb.system_book_code = 'ALL' OR w.system_book_code = tb.system_book_code)
     AND w.category_group IN ('水果', '标品', '耗材')
-    AND scope_match_v2('brands', w.system_book_code) AND (scope_match_v2('branch_nums', w.branch_num::text) OR scope_match_v2('branch_nums', w.system_book_code || '-' || w.branch_num))
+    AND ('*' = ANY((SELECT scope_brand_keys())::text[]) OR w.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR w.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (w.system_book_code || '-' || w.branch_num) = ANY((SELECT scope_branch_keys())::text[]))
   GROUP BY tb.target_id, w.category_group
 ),
 category_actuals AS (

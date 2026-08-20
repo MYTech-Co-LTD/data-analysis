@@ -60,10 +60,24 @@ function formatTime(ts: string | null): string {
 
 export async function getClient() {
   const token = (await cookies()).get("insforge_access_token")?.value;
-  // 用 access_token（authenticated JWT）当 anonKey 传：SDK 把 anonKey 作 Authorization Bearer，
-  // PostgREST 据 JWT 的 role 切到 authenticated。token 缺失则回退 anon（已被 REVOKE SELECT，读不到）。
+  // 用 access_token（authenticated JWT）当 Bearer：PostgREST 据 JWT 的 role 切到 authenticated。
+  // token 缺失则回退 anon（已被 REVOKE SELECT，读不到）。
+  // 2026-08-19 性能修复（用户裁定）：server 侧直连 PostgREST（POSTGREST_URL=http://postgrest:3000，
+  // web 容器同网络）——InsForge SDK 的 /api/database/records 代理层实测每请求额外 1~5s，
+  // 报表页 SSR 累计 12s+。直连后降幅 >90%；浏览器侧无 POSTGREST_URL env，自动回退 SDK 公网路径。
+  // 接口兼容：InsForge SDK 的 database 模块本就是 @supabase/postgrest-js 包一层 fetch 重写，
+  // 消费方（.from/.rpc）签名不变。
+  if (process.env.POSTGREST_URL) {
+    const bearer = token || process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY!;
+    const { PostgrestClient } = await import("@supabase/postgrest-js");
+    return {
+      database: new PostgrestClient(process.env.POSTGREST_URL, {
+        headers: { Authorization: `Bearer ${bearer}`, apikey: bearer },
+      }),
+    };
+  }
   return createClient({
-    baseUrl: process.env.NEXT_PUBLIC_INSFORGE_URL!,
+    baseUrl: process.env.INSFORGE_API_BASE || process.env.NEXT_PUBLIC_INSFORGE_URL!,
     anonKey: token || process.env.NEXT_PUBLIC_INSFORGE_ANON_KEY!,
   });
 }

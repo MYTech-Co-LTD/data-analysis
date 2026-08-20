@@ -19,7 +19,8 @@ cte0 AS (
   FROM report_daily_item_sales s
   JOIN LATERAL (SELECT * FROM dim_item WHERE item_num = s.item_num ORDER BY (system_book_code = s.system_book_code) DESC LIMIT 1) di ON true
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
-  WHERE scope_match_v2('brands', s.system_book_code)
+  WHERE ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[]))
+    AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[]))
   GROUP BY tgt.target_id, di.item_code
 ),
 cte1 AS (
@@ -36,7 +37,8 @@ cte1 AS (
   FROM report_daily_item_outbound s
   JOIN LATERAL (SELECT * FROM dim_item WHERE item_code = s.pos_item_code ORDER BY (system_book_code = s.system_book_code) DESC LIMIT 1) di ON true
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
-  WHERE scope_match_v2('brands', s.system_book_code)
+  WHERE ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[]))
+    AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[]))
   GROUP BY tgt.target_id, di.item_code
 )
 SELECT COALESCE(cte0.target_id, cte1.target_id) AS target_id,

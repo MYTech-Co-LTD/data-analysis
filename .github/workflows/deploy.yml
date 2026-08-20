@@ -90,6 +90,11 @@ jobs:
       - name: Guard plugin registry (新插件必须注册)
         run: bash scripts/guard-plugin-registry.sh
 
+      # 迁移 spec 铁律（2026-08-19 用户裁定）：含破坏性 SQL 的迁移必须关联 docs/superpowers/specs/ 文档。
+      # 注意：CI checkout 无 docs 时此 guard 只检 spec 声明与文件存在——specs 随仓库全量检出，默认齐全。
+      - name: Guard migration spec (破坏性迁移须关联 spec, must pass)
+        run: bash scripts/guard-migration-spec.sh
+
   # ═══════════════ 部署拆步（P5）：migrate → functions → build-web ═══════════════
   # 数据库迁移：失败必须阻断全部（数据库先行，前端/function 依赖其 schema）。
   # if 守卫：PR 事件不部署（PR 只跑 quality 门禁），部署仅 push main / 手动触发。
@@ -107,16 +112,18 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: rsync 代码到服务器（migrate 所需：database/scripts/deploy）
+      - name: rsync 代码到服务器（migrate 所需：database/scripts/deploy + specs——迁移 spec 铁律在 migrate.sh 防御性复检需在场）
         run: |
-          rsync -avz --delete \
+          # -R 相对模式：多源 rsync 只拷 basename（specs 会落到根下），-R 保留 docs/superpowers/specs 路径
+          rsync -avzR --delete \
             --exclude '.git' \
             --exclude 'node_modules' \
             --exclude '.next' \
             --exclude '.env' \
             -e "ssh -i ~/.ssh/deploy_key" \
-            ./database ./scripts ./deploy \
+            ./database ./scripts ./deploy docs/superpowers/specs \
             ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.DEPLOY_PATH }}/
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} "rm -rf ${{ secrets.DEPLOY_PATH }}/specs"
 
       - name: SSH 执行数据库迁移（起后端栈 + migrate + 刷 postgrest 缓存）
         uses: appleboy/ssh-action@v1.2.0

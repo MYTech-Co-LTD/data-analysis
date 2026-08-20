@@ -16,6 +16,7 @@
 import { getClient } from "@/lib/api";
 import { wrapError, type AppError } from "@/lib/error";
 import { type GetterStatus } from "./types";
+import { cache } from "react";
 
 export interface ItemTopRow {
   item_code: string;
@@ -81,7 +82,9 @@ export function toBoard(
  * 月榜：视图按 target 周期聚合（含脱敏 sale_profit/outbound_profit）。
  * 日榜：RPC get_item_top_by_day 返 7 列（含脱敏利润），前端 toBoard 排序+TOP20+totals。
  */
-export async function getItemBreakdownTop(
+// cache()（2026-08-19 性能修复）：商品销售/出库两个看板各自调一次 getItemBreakdownTop，
+// 参数相同 → 请求级去重（此前同视图 507KB 拉两次）。请求上下文外（测试/脚本）自动退化为直调。
+export const getItemBreakdownTop = cache(async function getItemBreakdownTop(
   targetId: number,
   closed?: boolean,
   dates?: { startDate?: string; endDate?: string },
@@ -204,7 +207,7 @@ export async function getItemBreakdownTop(
     console.error("getItemBreakdownTop:", e);
     return { ...empty, status: "error", error: wrapError(e) };
   }
-}
+});
 
 export interface ItemOutboundListRow {
   item_code: string;

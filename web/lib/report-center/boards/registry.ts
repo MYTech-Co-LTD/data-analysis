@@ -4,8 +4,8 @@
 // 宿主只依赖本注册表 + contracts——新板块 = 新目录（boards/<id>/）+ 此处追加 1 行；
 // 板块之间禁止互相 import（§4.4 依赖方向铁律，eslint import/no-restricted-paths 已严执）。
 //
-// 渲染顺序 = 注册顺序（对齐旧 desktop/mobile 布局：KPI → 品牌 → 战区 → 商品TOP → 类别 →
-// 供应链+批发并排；item-top 内部先销售后出库，共用日榜 day state）。
+// 渲染顺序 = 注册顺序（对齐旧 desktop/mobile 布局：KPI → 品牌 → 战区 → 商品TOP销售/出库
+// （2026-08-19 拆分，独立能力可分角色配）→ 类别 → 供应链+批发并排）。
 //
 // 看板能力一致性（2026-08-17）：每个 board 必须在 capability-board.ts 单真相有对应能力
 // （data-analysis:view-board:<id>），否则该看板无法被配置权限。加载时校验防漂移——
@@ -16,7 +16,7 @@ import { BOARD_CAPABILITY_BY_ID } from "@/lib/capability-board";
 import { kpiBoard } from "./kpi/manifest";
 import { brandBoard } from "./brand/manifest";
 import { regionBoard } from "./region/manifest";
-import { itemTopBoard } from "./item-top/manifest";
+import { itemTopSaleBoard, itemTopOutboundBoard } from "./item-top/manifest";
 import { categoryBoard } from "./category/manifest";
 import { supplyChainBoard } from "./supply-chain/manifest";
 import { wholesaleBoard } from "./wholesale/manifest";
@@ -25,7 +25,8 @@ export const BOARDS: BoardManifest<any>[] = [
   kpiBoard,
   brandBoard,
   regionBoard,
-  itemTopBoard,
+  itemTopSaleBoard,
+  itemTopOutboundBoard,
   categoryBoard,
   supplyChainBoard,
   wholesaleBoard,

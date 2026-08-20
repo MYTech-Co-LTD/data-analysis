@@ -8,6 +8,7 @@ import { tryAcquireLock } from '../../scheduler-lock';
 import { POSTGREST_URL, INSFORGE_API_KEY } from '../env';
 import { runningTasks } from '../state';
 import { runDriftReport, assessAlerts, canFlipToAuto } from '../../sync/drift';
+import { syncScopePacks } from '../../sync/scope-packs';
 
 const PG_H = (): Record<string, string> => ({
   apikey: INSFORGE_API_KEY!,
@@ -72,6 +73,10 @@ export const driftReportManifest: JobManifest = {
       // M12/M13：告警之外执行收敛（翻转 manual + 回写镜像）
       const { flipped, mirrored } = await applyRemediations(report);
 
+      // 范围包同步（2026-08-19 能力页=真相源）：dim_branch 区域 → maps 投影收敛，随 drift 每日跑
+      const packs = await syncScopePacks();
+      if (!packs.ok) console.error('[drift] 范围包同步失败:', packs.error);
+
       const summary = [
         `diff1(Casdoor手工)=${report.diff1.length}`,
         `diff2(outbox积压)=${report.diff2.length}`,
@@ -79,7 +84,16 @@ export const driftReportManifest: JobManifest = {
         `backlog=${report.backlog.total}`,
         `flipped_manual=${flipped}`,
         `mirror_writeback=${mirrored}`,
+        `scope_packs=${packs.ok ? `ok(add ${packs.addedRows}/del ${packs.removedRows}${packs.skippedManual.length ? `, manual ${packs.skippedManual.length}` : ''})` : `FAIL:${packs.error}`}`,
       ].join(' | ');
+
+      // 范围包同步产出新包（曾致登录 503 的缺包场景）→ 告警提醒复盘
+      if (packs.addedPacks.length > 0) {
+        await notifyWecom(
+          '🔔 范围包已补齐（能力页真相源）',
+          `dim_branch 新区域已同步为 maps 包：${packs.addedPacks.join('、')}`,
+        ).catch(() => {});
+      }
 
       console.log(`[drift] 对账完成: ${summary}`);
 

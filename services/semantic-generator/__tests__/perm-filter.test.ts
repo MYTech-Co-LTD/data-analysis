@@ -5,12 +5,12 @@ import { generateTier1View } from '../src/generators/tier1';
 import { generateHierarchyView } from '../src/generators/hierarchy';
 import { Metric, MetricSource, ViewConfig, HierarchyLevel } from '../src/types';
 
-// T19 B 项裁决（DW2 gate_2c6ebef04ea1）：视图层行过滤切 scope_match_v2（与 179/183 RLS 同源判定）。
+// T19 B 项裁决：视图层行过滤与 RLS 同源语义。2026-08-19 起 ANY fastpath（scope_*_keys 一次性数组，同 scope_match_v2 语义）。
 // 门店维双格式 OR（T12 先例）：裸 branch_num 支接 legacy 顶层形状 + sbc-branch_num 支接新 data_scope
 // 全局键（branch_number，门店键铁律）。
-const BRANDS_PRED = `scope_match_v2('brands'`;
-const BRANCH_PRED = `scope_match_v2('branch_nums'`;
-const BRANCH_GLOBAL_KEY_PRED = (a: string) => `scope_match_v2('branch_nums', ${a}.system_book_code || '-' || ${a}.branch_num)`;
+const BRANDS_PRED = `scope_brand_keys()`;
+const BRANCH_PRED = `scope_branch_keys()`;
+const BRANCH_GLOBAL_KEY_PRED = (a: string) => `(${a}.system_book_code || '-' || ${a}.branch_num) = ANY((SELECT scope_branch_keys())::text[])`;
 
 const GEN_DIR = fileURLToPath(new URL('../../../database/generated', import.meta.url));
 
@@ -182,8 +182,8 @@ describe('权限收口：hierarchy 行级过滤注入', () => {
   it('dim 行（dim_branch）也被双维度过滤', () => {
     const sql = generateHierarchyView(hierConfig, mockMetrics, mockSources);
     // permFilterFact('db') -> scope_match_v2('brands', db.system_book_code) + 双格式 OR
-    expect(sql).toContain(`scope_match_v2('brands', db.system_book_code)`);
-    expect(sql).toContain(`scope_match_v2('branch_nums', db.branch_num::text)`);
+    expect(sql).toContain(`db.system_book_code = ANY((SELECT scope_brand_keys())::text[])`);
+    expect(sql).toContain(`db.branch_num::text = ANY((SELECT scope_branch_keys())::text[])`);
     expect(sql).toContain(BRANCH_GLOBAL_KEY_PRED('db'));
   });
 
@@ -215,7 +215,7 @@ describe('权限收口契约：所有提交产物必含行级过滤', () => {
       expect(sql).toContain(BRANDS_PRED);
       if (!skipBranch.has(f)) {
         expect(sql).toContain(BRANCH_PRED);
-        expect(sql).toContain(`scope_match_v2('branch_nums'`);   // B 项：双格式 OR 至少一支
+        expect(sql).toContain(`scope_branch_keys()`);   // B 项：双格式 OR 至少一支（2026-08-19 ANY fastpath）
       }
       expect(sql).not.toContain('claim_match_or_star');           // B 项：消费位零残留
     });

@@ -78,5 +78,13 @@ export async function GET(req: NextRequest) {
     })).sort((a, b) => a.name.localeCompare(b.name, 'zh')),
   })).sort((a, b) => a.name.localeCompare(b.name, 'zh'));
 
-  return NextResponse.json({ tree, totalStores: branches.length });
+  return NextResponse.json({
+    tree,
+    totalStores: branches.length,
+    // 全门店行（2026-08-19）：范围|全店 登录解析通配（resolveScopeKeys '全店'→['*']），恒可授权；
+    // 在用人数兼容两种写法（全店/*）取最大
+    allStore: {
+      users: Math.max(permCount.get('范围|全店') ?? 0, permCount.get('范围|*') ?? 0),
+    },
+  });
 }

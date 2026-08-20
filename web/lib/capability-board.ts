@@ -56,10 +56,17 @@ export const BOARD_CAPABILITIES: readonly BoardCapability[] = Object.freeze([
     view: ['report_region_breakdown_gen'],
   },
   {
-    key: 'data-analysis:view-board:item-top',
-    id: 'item-top',
-    name: '商品 TOP',
-    description: '商品维度 TOP 排行（销售/出库日榜）',
+    key: 'data-analysis:view-board:item-top-sale',
+    id: 'item-top-sale',
+    name: '商品 TOP·销售',
+    description: '商品销售 TOP 排行（月榜/日榜）',
+    view: ['report_item_breakdown_gen'],
+  },
+  {
+    key: 'data-analysis:view-board:item-top-outbound',
+    id: 'item-top-outbound',
+    name: '商品 TOP·出库',
+    description: '商品出库 TOP 排行（月榜/日榜，含出库毛利）',
     view: ['report_item_breakdown_gen'],
   },
   {
@@ -182,11 +189,15 @@ export const BOARD_VIEW_COVERAGE: ReadonlyMap<string, readonly string[]> = new M
 }
 
 // 方案 C：覆盖视图唯一性断言——一个底层报表视图只被一个看板覆盖，否则「报表授权 ⇒ 视图」语义歧义
+// 例外（2026-08-19 用户裁定：商品TOP 拆销售/出库）：同一数据源拆两个看板各自授权，
+// 双看板覆盖同一视图 = 任一命中即授权视图，语义无歧义，显式白名单放行。
+const MULTI_COVER_ALLOWLIST = new Set(['report_item_breakdown_gen']);
 {
   const seen = new Set<string>();
   for (const views of BOARD_VIEW_COVERAGE.values()) {
     for (const v of views) {
       if (seen.has(v)) {
+        if (MULTI_COVER_ALLOWLIST.has(v)) continue;
         throw new Error(`[capability-board] 报表视图被多看板覆盖（方案C覆盖语义歧义）：${v}`);
       }
       seen.add(v);

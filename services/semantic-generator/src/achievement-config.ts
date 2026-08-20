@@ -37,7 +37,8 @@ GROUP BY t.id` },
       SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w
       WHERE w.system_book_code = '64188' AND w.biz_date BETWEEN t.start_date AND t.end_date
         AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))
-        AND {{perm_skip:w}}
+        AND {{perm:w}}   -- 2026-08-19 修正：wholesale_customer 有 branch_num 列（收货方门店），改全谓词裁剪——
+                         -- perm_skip 时代（估 066-118 期间列尚无/键宇宙缺失）致受限用户配送 KPI 混入全量 64188 批发（张铎 398.8万 vs 真实 243.0万）
     ), 0) AS actual_value,
   count(DISTINCT d.biz_date) AS days
 FROM targets t

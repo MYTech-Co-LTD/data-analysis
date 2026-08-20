@@ -15,7 +15,7 @@ cte0 AS (
     MAX(s.system_book_code) AS system_book_code
   FROM report_daily_wholesale_customer s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
-  WHERE scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num))
+  WHERE ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[]))
   GROUP BY tgt.target_id, s.client_code
 )
 SELECT cte0.target_id AS target_id,

@@ -16,7 +16,7 @@ leaf_act_0 AS (
   FROM report_daily_delivery s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num)) AND is_assessed_war_zone(db.first_level_region)
+  WHERE ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[])) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code, s.branch_num
 ),
 leaf_act_1 AS (
@@ -28,7 +28,7 @@ leaf_act_1 AS (
   FROM report_daily_wholesale_customer s
   JOIN tgt ON s.biz_date BETWEEN tgt.start_date AND tgt.end_date
   JOIN dim_branch db ON db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num
-  WHERE s.system_book_code = '64188' AND scope_match_v2('brands', s.system_book_code) AND (scope_match_v2('branch_nums', s.branch_num::text) OR scope_match_v2('branch_nums', s.system_book_code || '-' || s.branch_num)) AND is_assessed_war_zone(db.first_level_region)
+  WHERE s.system_book_code = '64188' AND ('*' = ANY((SELECT scope_brand_keys())::text[]) OR s.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR s.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (s.system_book_code || '-' || s.branch_num) = ANY((SELECT scope_branch_keys())::text[])) AND is_assessed_war_zone(db.first_level_region)
   GROUP BY tgt.target_id, s.system_book_code, s.branch_num
 ),
 leaf_rows AS (
@@ -54,7 +54,7 @@ leaf_rows AS (
   FROM tgt CROSS JOIN dim_branch db
   LEFT JOIN leaf_act_0 a0 ON a0.target_id = tgt.target_id AND a0.system_book_code = db.system_book_code AND a0.branch_num = db.branch_num
   LEFT JOIN leaf_act_1 a1 ON a1.target_id = tgt.target_id AND a1.system_book_code = db.system_book_code AND a1.branch_num = db.branch_num
-  WHERE db.is_active AND db.branch_num <> '99' AND scope_match_v2('brands', db.system_book_code) AND (scope_match_v2('branch_nums', db.branch_num::text) OR scope_match_v2('branch_nums', db.system_book_code || '-' || db.branch_num)) AND is_assessed_war_zone(db.first_level_region)
+  WHERE db.is_active AND db.branch_num <> '99' AND ('*' = ANY((SELECT scope_brand_keys())::text[]) OR db.system_book_code = ANY((SELECT scope_brand_keys())::text[])) AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR db.branch_num::text = ANY((SELECT scope_branch_keys())::text[]) OR (db.system_book_code || '-' || db.branch_num) = ANY((SELECT scope_branch_keys())::text[])) AND is_assessed_war_zone(db.first_level_region)
 ),
 region_act AS (
   SELECT target_id, war_zone,

@@ -102,7 +102,14 @@ var require_claims = __commonJS({
       "\u770B\u677F|\u6307\u6807\u6982\u89C8": "data-analysis:view-board:kpi",
       "\u770B\u677F|\u54C1\u724C\xD7\u6307\u6807": "data-analysis:view-board:brand",
       "\u770B\u677F|\u95E8\u5E97\u6218\u533A": "data-analysis:view-board:region",
-      "\u770B\u677F|\u5546\u54C1 TOP": "data-analysis:view-board:item-top",
+      "\u770B\u677F|\u5546\u54C1 TOP\xB7\u9500\u552E": "data-analysis:view-board:item-top-sale",
+      // 正式（catalog 展示名，商品 TOP 带空格）
+      "\u770B\u677F|\u5546\u54C1 TOP\xB7\u51FA\u5E93": "data-analysis:view-board:item-top-outbound",
+      "\u770B\u677F|\u5546\u54C1TOP\xB7\u9500\u552E": "data-analysis:view-board:item-top-sale",
+      // 兼容（无空格变体）
+      "\u770B\u677F|\u5546\u54C1TOP\xB7\u51FA\u5E93": "data-analysis:view-board:item-top-outbound",
+      // 旧名兼容（2026-08-19 拆分前存量授权）→ 归并到销售；存量已批量更新为新双键，此行仅兑底
+      "\u770B\u677F|\u5546\u54C1 TOP": "data-analysis:view-board:item-top-sale",
       "\u770B\u677F|\u7C7B\u522B\u51FA\u5E93": "data-analysis:view-board:category",
       "\u770B\u677F|\u4F9B\u5E94\u94FE\u51FA\u5E93": "data-analysis:view-board:supply-chain",
       "\u770B\u677F|\u5916\u90E8\u6279\u53D1": "data-analysis:view-board:wholesale",
@@ -117,7 +124,8 @@ var require_claims = __commonJS({
     var BOARD_VIEW_COVERAGE = {
       "data-analysis:view-board:brand": ["data-analysis:view:report_brand_metric_gen"],
       "data-analysis:view-board:region": ["data-analysis:view:report_region_breakdown_gen"],
-      "data-analysis:view-board:item-top": ["data-analysis:view:report_item_breakdown_gen"],
+      "data-analysis:view-board:item-top-sale": ["data-analysis:view:report_item_breakdown_gen"],
+      "data-analysis:view-board:item-top-outbound": ["data-analysis:view:report_item_breakdown_gen"],
       "data-analysis:view-board:category": ["data-analysis:view:report_category_summary_gen"],
       "data-analysis:view-board:supply-chain": ["data-analysis:view:report_supply_chain_outbound_gen"],
       "data-analysis:view-board:wholesale": [

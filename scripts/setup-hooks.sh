@@ -33,6 +33,9 @@ bash scripts/guard-contract-drift.sh
 echo "🔍 Guard: plugin registry (新插件必须注册)..."
 bash scripts/guard-plugin-registry.sh
 
+echo "🔍 Guard: 迁移 spec 关联（破坏性 SQL 须关联 docs/superpowers/specs）..."
+bash scripts/guard-migration-spec.sh
+
 echo "✅ Pre-commit checks passed"
 HOOK
 

@@ -18,13 +18,16 @@
  */
 
 /** actual CTE（fact 表）行过滤：品牌 + 门店双维度
- *  skipBranch=true 时仅过滤品牌（item 粒度聚合表无 branch_num 列） */
+ *  skipBranch=true 时仅过滤品牌（item 粒度聚合表无 branch_num 列）
+ *  2026-08-19 ANY fastpath（迁移 201 同款）：scope_*_keys() 一次性 InitPlan 求值 + = ANY 数组，
+ *  语义与 scope_match_v2 对称（fail-close/'*'通配/前导零归一），但消除逐行 plpgsql 开销
+ *  （achievement 实测 7s→0.5s）。注意 ::text[] 强转必需——裸子查询形态会被解析为 IN 集合语义。 */
 export function permFilterFact(alias: string, skipBranch = false): string {
-  const brand = `scope_match_v2('brands', ${alias}.system_book_code)`;
+  const brand = `('*' = ANY((SELECT scope_brand_keys())::text[]) OR ${alias}.system_book_code = ANY((SELECT scope_brand_keys())::text[]))`;
   if (skipBranch) return brand;
-  const branchBare = `scope_match_v2('branch_nums', ${alias}.branch_num::text)`;
-  const branchGlobal = `scope_match_v2('branch_nums', ${alias}.system_book_code || '-' || ${alias}.branch_num)`;
-  return `${brand} AND (${branchBare} OR ${branchGlobal})`;
+  const branchBare = `${alias}.branch_num::text = ANY((SELECT scope_branch_keys())::text[])`;
+  const branchGlobal = `(${alias}.system_book_code || '-' || ${alias}.branch_num) = ANY((SELECT scope_branch_keys())::text[])`;
+  return `${brand} AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR ${branchBare} OR ${branchGlobal})`;
 }
 
 /** targets CTE 行过滤：'ALL' 汇总行（总部/总目标）恒可见，门店行按 claim 过滤 */
@@ -35,8 +38,8 @@ export function permFilterTarget(alias: string): string {
 /** FULL JOIN 行过滤：两侧 COALESCE（report_daily_delivery d FULL JOIN report_daily_wholesale w
  *  等场景，d 或 w 侧可能 NULL，用 COALESCE 取非空侧值过滤） */
 export function permFilterFullJoin(aliasA: string, aliasB: string): string {
-  const brand = `scope_match_v2('brands', COALESCE(${aliasA}.system_book_code, ${aliasB}.system_book_code))`;
-  const branchBare = `scope_match_v2('branch_nums', COALESCE(${aliasA}.branch_num, ${aliasB}.branch_num)::text)`;
-  const branchGlobal = `scope_match_v2('branch_nums', COALESCE(${aliasA}.system_book_code, ${aliasB}.system_book_code) || '-' || COALESCE(${aliasA}.branch_num, ${aliasB}.branch_num))`;
-  return `${brand} AND (${branchBare} OR ${branchGlobal})`;
+  const brand = `('*' = ANY((SELECT scope_brand_keys())::text[]) OR COALESCE(${aliasA}.system_book_code, ${aliasB}.system_book_code) = ANY((SELECT scope_brand_keys())::text[]))`;
+  const branchBare = `COALESCE(${aliasA}.branch_num, ${aliasB}.branch_num)::text = ANY((SELECT scope_branch_keys())::text[])`;
+  const branchGlobal = `(COALESCE(${aliasA}.system_book_code, ${aliasB}.system_book_code) || '-' || COALESCE(${aliasA}.branch_num, ${aliasB}.branch_num)) = ANY((SELECT scope_branch_keys())::text[])`;
+  return `${brand} AND ('*' = ANY((SELECT scope_branch_keys())::text[]) OR ${branchBare} OR ${branchGlobal})`;
 }

@@ -24,7 +24,7 @@ describe('capability-catalog 单真相', () => {
   });
   it('看板/KPI 能力入册且带通俗命名+描述（单真相 capability-board.ts）', () => {
     // 7 个看板能力
-    for (const id of ['kpi','brand','region','item-top','category','supply-chain','wholesale']) {
+    for (const id of ['kpi','brand','region','item-top-sale','item-top-outbound','category','supply-chain','wholesale']) {
       const key = `data-analysis:view-board:${id}`;
       expect(CATALOG_KEYS.has(key), `看板能力缺: ${key}`).toBe(true);
     }

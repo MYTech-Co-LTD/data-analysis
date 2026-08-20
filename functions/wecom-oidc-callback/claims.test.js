@@ -87,7 +87,9 @@ const friendly = {
   '看板|指标概览': 'data-analysis:view-board:kpi',
   '看板|品牌×指标': 'data-analysis:view-board:brand',
   '看板|门店战区': 'data-analysis:view-board:region',
-  '看板|商品 TOP': 'data-analysis:view-board:item-top',
+  '看板|商品TOP·销售': 'data-analysis:view-board:item-top-sale',
+  '看板|商品TOP·出库': 'data-analysis:view-board:item-top-outbound',
+  '看板|商品 TOP': 'data-analysis:view-board:item-top-sale', // 旧名兼容兑底
   '看板|类别出库': 'data-analysis:view-board:category',
   '看板|供应链出库': 'data-analysis:view-board:supply-chain',
   '看板|外部批发': 'data-analysis:view-board:wholesale',
@@ -103,7 +105,7 @@ for (const [f, key] of Object.entries(friendly)) {
   eq(normalizeFriendlyPerm(f), key, `通俗名归一：${f} → ${key}`);
 }
 // 23 条映射全部断言过（防漏同步）
-eq(Object.keys(FRIENDLY_TO_KEY).length, 21, 'FRIENDLY_TO_KEY 恰 21 条（8 catalog + 7 看板 + 6 KPI；2026-08-18 方案 A 删 经营总览/目标达成）');
+eq(Object.keys(FRIENDLY_TO_KEY).length, 25, 'FRIENDLY_TO_KEY 恰 24 条（8 catalog + 8 看板（含空格正式+无空格兼容变体）+ 6 KPI + 1 旧名兼容）');
 
 // 2. 未命中的值原样返回（key / 通配 / push 裸 key / 未知串都不动）
 eq(normalizeFriendlyPerm('data-analysis:view-board:*'), 'data-analysis:view-board:*', '通配原样透传');
@@ -152,7 +154,7 @@ eq(gc.permissions.includes('门禁|报表中心'), false, '门禁通俗名本身
 eq(gc.permissions.includes('data-analysis:view:reports'), false, 'claims 不展开 view-group（web 侧 buildPermPool 展开）');
 
 // 4d. 覆盖镜像与单真相同步：BOARD_VIEW_COVERAGE 恰 6 个看板有覆盖（kpi 无）
-eq(Object.keys(BOARD_VIEW_COVERAGE).length, 6, 'BOARD_VIEW_COVERAGE 恰 6 条（kpi 看板无覆盖报表视图）');
+eq(Object.keys(BOARD_VIEW_COVERAGE).length, 7, 'BOARD_VIEW_COVERAGE 恰 7 条（kpi 看板无覆盖；2026-08-19 商品TOP 拆销售/出库双条目）');
 
 console.log('方案甲/方案C 通俗名归一 + 覆盖注入 assertions passed');
 

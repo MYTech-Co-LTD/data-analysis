@@ -290,8 +290,9 @@ describe('runPush', () => {
     expect(sendWecomMarkdown).toHaveBeenCalled();
   });
 
-  it('数值变量 §12.1：无 DB 取不到 → 跳过（不产生占位符，live 不拒投）', async () => {
-    // §12.1（2026-08-20）：数值变量用代签 JWT 查语义视图取真值；无 DB/取不到 → null → 变量跳过。
+  it('live 模式数值变量 §12.1：无 DB 取不到 → 跳过不渲染，不拒投递（字面占位符仍 M7 拒绝）', async () => {
+    // 默认 PUSH_VARIABLES_JSON 含 sale_amount/cost_amount/profit_amount（数值变量）。
+    // §12.1（2026-08-20）：数值变量用代签 JWT 查语义视图取真值；无 DB/取不到 → null → 变量跳过，
     //   不再产生 {{code}} 占位符 → M7 fail-closed 不触发（M7 仅兜底字面占位符）。
     const { runPush } = await import('../index');
     const result = await runPush({
