@@ -290,10 +290,10 @@ describe('runPush', () => {
     expect(sendWecomMarkdown).toHaveBeenCalled();
   });
 
-  it('live 模式数值变量取不到 → 跳过不渲染，不拒投递（§12.1 新语义；字面占位符仍 M7 拒绝）', async () => {
+  it('live 模式数值变量 §12.1：无 DB 取不到 → 跳过不渲染，不拒投递（字面占位符仍 M7 拒绝）', async () => {
     // 默认 PUSH_VARIABLES_JSON 含 sale_amount/cost_amount/profit_amount（数值变量）。
-    // 2026-08-19 §12.1：resolveNumericValue 取不到 → null（变量不渲染），不再以占位符形式拒投；
-    // M7 守卫仍对字面 {{code}} 拒绝（此处无该路径 → 应正常 resolve）。
+    // §12.1（2026-08-20）：数值变量用代签 JWT 查语义视图取真值；无 DB/取不到 → null → 变量跳过，
+    //   不再产生 {{code}} 占位符 → M7 fail-closed 不触发（M7 仅兜底字面占位符）。
     const { runPush } = await import('../index');
     const result = await runPush({
       workflowId: 'test',
@@ -302,6 +302,7 @@ describe('runPush', () => {
       broadcastPerm: true,
       deliver: true,
     });
-    expect(result).toBeTruthy();
+    expect(result).toHaveProperty('txnId');
+    expect(result.error).toBeUndefined();
   });
 });
