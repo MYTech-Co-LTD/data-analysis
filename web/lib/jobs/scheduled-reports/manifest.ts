@@ -8,17 +8,25 @@ import type { JobManifest, JobResult } from '../../contracts';
 import { tryAcquireLock } from '../../scheduler-lock';
 import { AGENT_API_KEY } from '../env';
 import { runningTasks } from '../state';
+import { matchesDate, type CronSpec } from './cron-match';
+import { checkTargetActive, notifyOwnerOnce } from '../../push/target-guard';
 
 // run_push 接口契约（Task 9 产出，按 spec §5.4 签名）
 interface RunPushOpts {
   workflow_id: string;
   operator_id: string;
-  selector: { type: string; [key: string]: unknown };
+  // T6：selector 兼容两代格式——新 push_configs.selector_json {kind, ids}（type 可选）；
+  // normalizeSelector 对 kind/type 双格式归一
+  selector: { type?: string; kind?: string; ids?: string[]; [key: string]: unknown };
   broadcast_perm?: boolean;
   deliver?: boolean;
   template_key?: string | null;
   query_intent?: unknown | null;
   cron_job_id?: string | null;
+  /** 自助配置平台（T6）：preset 显式传 + 目标取值模式（透传 /api/push presetId/targetMode/targetId） */
+  preset_id?: string;
+  target_mode?: string;
+  target_id?: number;
 }
 
 interface RunPushResult {
@@ -61,6 +69,10 @@ async function callRunPush(opts: RunPushOpts): Promise<RunPushResult> {
       selector,
       broadcastPerm: opts.broadcast_perm ?? false,
       deliver: opts.deliver ?? true,
+      // T5 /api/push 契约（camelCase）；undefined 经 JSON.stringify 自动省略，不影响旧调用方
+      presetId: opts.preset_id,
+      targetMode: opts.target_mode,
+      targetId: opts.target_id,
     }),
   });
   if (!resp.ok) {
@@ -84,68 +96,81 @@ export const scheduledReportsManifest: JobManifest = {
     try {
       console.log('[scheduler] 定时报表推送扫描开始');
 
-      // 查询活跃的定时报表（经 PostgREST RPC）
+      // 1) 拉 enabled 任务（PostgREST 直查 push_configs）
       const postgrestUrl = process.env.POSTGREST_URL || 'http://postgrest:3000';
-      const jwtResp = await fetch(`${postgrestUrl}/rpc/get_due_scheduled_reports`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      });
-
-      if (!jwtResp.ok) {
-        console.warn('[scheduled-reports] 查询到期报表失败:', jwtResp.status);
-        return { status: 'error', message: `查询失败: ${jwtResp.status}` };
+      const pgHeaders = {
+        apikey: process.env.INSFORGE_API_KEY || '',
+        Authorization: `Bearer ${process.env.INSFORGE_API_KEY || ''}`,
+        'Content-Type': 'application/json',
+      };
+      const resp = await fetch(`${postgrestUrl}/push_configs?enabled=eq.true&select=*`, { headers: pgHeaders });
+      if (!resp.ok) {
+        console.warn('[scheduled-reports] 查询 push_configs 失败:', resp.status);
+        return { status: 'error', message: `查询失败: ${resp.status}` };
+      }
+      const configs = (await resp.json().catch(() => [])) as Array<{
+        config_id: string; name: string; cron_spec: { kind: string; time: string; weekday?: number; day?: number };
+        selector_json: { kind: string; ids?: string[] }; target_mode: 'follow' | 'fixed'; target_id: number | null;
+        preset_id: string; owner_wecom_id: string; last_run_date: string | null;
+      }>;
+      if (!Array.isArray(configs) || configs.length === 0) {
+        console.log('[scheduled-reports] 无启用任务');
+        return { status: 'ok', message: '无任务' };
       }
 
-      const reports = await jwtResp.json().catch(() => []);
-      if (!Array.isArray(reports) || reports.length === 0) {
-        console.log('[scheduled-reports] 无到期报表');
-        return { status: 'ok', message: '无到期报表' };
-      }
+      const today = new Date().toISOString().slice(0, 10);
+      const results: Array<{ id: string; txnId?: string; skipped?: string; error?: string }> = [];
 
-      console.log(`[scheduled-reports] 发现 ${reports.length} 个到期报表`);
-      const results: Array<{ id: string; txnId?: string; error?: string }> = [];
-
-      for (const report of reports) {
+      for (const cfg of configs) {
         try {
-          const pushResult = await callRunPush({
-            workflow_id: `scheduled:${report.id}`,
-            operator_id: report.owner || 'system:cron',
-            selector: report.selector || { type: 'all' },
-            template_key: report.template_key || null,
-            query_intent: report.query_intent || null,
-            broadcast_perm: false,
-            deliver: true,
-            cron_job_id: report.cron_job_id || null,
-          });
+          // 2) 今日 due 且未跑（当日内补发：错过整点下一小时补上，跨日不补）
+          const due = matchesDate(cfg.cron_spec as CronSpec, new Date());
+          const alreadyRan = cfg.last_run_date === today;
+          if (!due || alreadyRan) continue;
+          results.push({ id: cfg.config_id });
 
-          // txnId 可追：trigger log → Novu → bridge 共享此 ID
-          console.log(
-            `[scheduled-reports] ${report.id} → txnId=${pushResult.txnId} ` +
-            `groups=${pushResult.groups} skipped=${pushResult.skipped.length}` +
-            (pushResult.fallback ? ' [FALLBACK]' : ''),
-          );
-          results.push({ id: report.id, txnId: pushResult.txnId });
+          // 3) 目标守卫：无进行中目标 → 跳过 + owner 一次性提醒
+          const guard = await checkTargetActive(cfg.target_mode, cfg.target_id ?? undefined);
+          if (!guard.active) {
+            console.log(`[scheduled-reports] ${cfg.name} 跳过：${guard.reason}`);
+            await notifyOwnerOnce({ configId: cfg.config_id, ownerWecomId: cfg.owner_wecom_id, name: cfg.name });
+            results[results.length - 1].skipped = guard.reason;
+            // 守卫跳过也记当日已处理（last_run_date），避免下一小时重复提醒扫描
+            await fetch(`${postgrestUrl}/push_configs?config_id=eq.${cfg.config_id}`, {
+              method: 'PATCH', headers: { ...pgHeaders, Prefer: 'return=minimal' },
+              body: JSON.stringify({ last_run_date: today }),
+            });
+            continue;
+          }
+
+          // 4) 触发（presetId 显式传，workflow 统一 scheduled-report）
+          const pushResult = await callRunPush({
+            workflow_id: 'scheduled-report',
+            operator_id: cfg.owner_wecom_id,
+            selector: cfg.selector_json,
+            preset_id: cfg.preset_id,
+            target_mode: cfg.target_mode,
+            target_id: cfg.target_id ?? undefined,
+          });
+          console.log(`[scheduled-reports] ${cfg.name} → txnId=${pushResult.txnId} groups=${pushResult.groups}`);
+          results[results.length - 1].txnId = pushResult.txnId;
+
+          // 5) 回写
+          await fetch(`${postgrestUrl}/push_configs?config_id=eq.${cfg.config_id}`, {
+            method: 'PATCH', headers: { ...pgHeaders, Prefer: 'return=minimal' },
+            body: JSON.stringify({ last_run_date: today, last_run_txn_id: pushResult.txnId }),
+          });
         } catch (e: unknown) {
-          console.error(`[scheduled-reports] ${report.id} 推送失败:`, (e as Error).message);
-          results.push({ id: report.id, error: (e as Error).message });
+          console.error(`[scheduled-reports] ${cfg.name} 推送失败:`, (e as Error).message);
+          results[results.length - 1].error = (e as Error).message;
         }
       }
 
       const failed = results.filter((r) => r.error);
       if (failed.length > 0) {
-        return {
-          status: 'error',
-          message: `${failed.length}/${results.length} 个报表推送失败`,
-          detail: results,
-        };
+        return { status: 'error', message: `${failed.length}/${results.length} 个任务失败`, detail: results };
       }
-
-      return {
-        status: 'ok',
-        message: `${results.length} 个报表推送成功`,
-        detail: results,
-      };
+      return { status: 'ok', message: `${results.length} 个任务处理`, detail: results };
     } catch (e: unknown) {
       console.error('[scheduled-reports] 异常:', (e as Error).message);
       return { status: 'error', message: (e as Error).message };
