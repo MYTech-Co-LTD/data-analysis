@@ -4,10 +4,9 @@ import { Target } from "lucide-react";
 import { TargetSummary } from "@/lib/report-center/targets";
 
 // 目标列表卡：纯渲染 + next/link，Server Component（不加 "use client"）。
-// 进度率(progress_rate) 作主数字并按三色编码（绿>=1 / 琥珀>=0.8 / 红<0.8）；
-// 达成率(achievement_rate) 作副数字。所有数字 tabular-nums 对齐。
-// 着色口径：进行中卡「进度」主数字保持绝对（它就是进度本身）；「达成」副文本按
-// 「达成率 / 时间进度」相对着色（对齐 KPI 比率带）；已结束无时间进度概念，达成率保持绝对。
+// 达成率(achievement_rate) 作主数字并按「达成/时间进度」相对三色编码（绿>=1 / 琥珀>=0.8 / 红<0.8，对齐 KPI 比率带）；
+// 进度率(progress_rate) 作副小字（带「时间进度」前导标签，绝对着色）。所有数字 tabular-nums 对齐。
+// 已结束无时间进度概念，达成率保持绝对。2026-08-19 用户裁定：达成主/进度副互换。
 
 function fmtPct(r: number) {
   return (r * 100).toFixed(1) + "%";
@@ -67,19 +66,17 @@ export function TargetList({ targets }: { targets: TargetSummary[] }) {
           <div className="ml-4 shrink-0 text-right tabular-nums">
             {t.status === "active" ? (
               <>
-                <div className="text-[11px] text-slate-400">进度</div>
-                <div className={`text-xl font-semibold ${rateColor(t.sample_progress_rate)}`}>
-                  {fmtPct(t.sample_progress_rate)}
+                <div className="text-[11px] text-slate-400">达成</div>
+                <div className={`text-xl font-semibold ${rateColorByProgress(
+                  t.sample_achievement_rate,
+                  t.sample_progress_rate,
+                )}`}>
+                  {fmtPct(t.sample_achievement_rate)}
                 </div>
                 <div className="mt-0.5 text-xs text-slate-400">
-                  达成{" "}
-                  <span
-                    className={rateColorByProgress(
-                      t.sample_achievement_rate,
-                      t.sample_progress_rate,
-                    )}
-                  >
-                    {fmtPct(t.sample_achievement_rate)}
+                  时间进度{" "}
+                  <span className={rateColor(t.sample_progress_rate)}>
+                    {fmtPct(t.sample_progress_rate)}
                   </span>
                 </div>
               </>
