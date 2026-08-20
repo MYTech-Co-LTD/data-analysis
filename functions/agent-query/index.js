@@ -77,6 +77,78 @@ async function serviceJwt() {
   return signJwt({ sub: "agent-query", role: "authenticated", iss: "agent-query", iat: now, exp: now + 60 }, JWT_SECRET);
 }
 
+// ===== 服务身份 JWT 验签（U1b 收敛：openclaw:query scope，替代共享密钥冒充面）=====
+// Casdoor client_credentials 签发的 RS256 JWT（sub=openclaw-gateway）。
+// 与 web/lib/token-verify.ts 同语义：JWKS 缓存 ≥24h + kid 不命中主动刷新；
+// iss + aud(CASDOOR_CLIENT_ID) + exp + scope 含 needScope；一切失败 fail-close 返回 null。
+// 零依赖：Deno 全局 crypto.subtle（RSASSA-PKCS1-v1_5 / SHA-256）+ fetch + atob。
+const JWKS_URL = Deno.env.get("CASDOOR_JWKS_URL") || "https://sso.shanhaiyiguo.com/.well-known/jwks";
+const JWT_ISSUER = Deno.env.get("CASDOOR_ISSUER") || "https://sso.shanhaiyiguo.com";
+const JWT_AUDIENCE = Deno.env.get("CASDOOR_CLIENT_ID") || ""; // 空串 = aud 无从校验 → fail-close
+const JWKS_TTL_MS = 24 * 60 * 60 * 1000;
+let JWKS_CACHE = null; // { keys: [{kid,kty,...}], fetchedAt }
+
+function b64uToBytes(s) {
+  const b64 = String(s).replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64 + "===".slice((b64.length + 3) % 4));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+async function loadJwks(force) {
+  const fresh = JWKS_CACHE && Date.now() - JWKS_CACHE.fetchedAt < JWKS_TTL_MS;
+  if (!force && fresh) return JWKS_CACHE.keys;
+  const res = await fetch(JWKS_URL, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error("jwks http " + res.status);
+  const body = await res.json();
+  if (!body || !Array.isArray(body.keys)) throw new Error("jwks bad payload");
+  JWKS_CACHE = { keys: body.keys, fetchedAt: Date.now() };
+  return JWKS_CACHE.keys;
+}
+
+async function verifyServiceJwt(token, needScope) {
+  try {
+    if (!token || !needScope || !JWT_AUDIENCE) return null;
+    const parts = String(token).split(".");
+    if (parts.length !== 3) return null;
+    const header = JSON.parse(new TextDecoder().decode(b64uToBytes(parts[0])));
+    if (header.alg !== "RS256" || !header.kid) return null;
+
+    let keys = await loadJwks(false).catch(() => null);
+    let jwk = keys && keys.find((k) => k.kid === header.kid);
+    if (!jwk) {
+      // kid 不命中（轮换后的新钥）→ 强制刷新一次
+      keys = await loadJwks(true);
+      jwk = keys.find((k) => k.kid === header.kid);
+      if (!jwk) return null;
+    }
+
+    const key = await crypto.subtle.importKey(
+      "jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"],
+    );
+    const okSig = await crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5", key, b64uToBytes(parts[2]),
+      new TextEncoder().encode(parts[0] + "." + parts[1]),
+    );
+    if (!okSig) return null;
+
+    const p = JSON.parse(new TextDecoder().decode(b64uToBytes(parts[1])));
+    const now = Math.floor(Date.now() / 1000);
+    if (typeof p.exp !== "number" || p.exp <= now) return null;
+    if (p.iss !== JWT_ISSUER) return null;
+    const audOk = Array.isArray(p.aud) ? p.aud.includes(JWT_AUDIENCE) : p.aud === JWT_AUDIENCE;
+    if (!audOk) return null;
+    // scope：Casdoor 签发为空格分隔字符串；兼容数组
+    const scopes = Array.isArray(p.scope)
+      ? p.scope.map(String)
+      : typeof p.scope === "string" ? p.scope.split(/[\s,]+/).filter(Boolean) : [];
+    if (!scopes.includes(needScope)) return null;
+    if (typeof p.sub !== "string" || !p.sub) return null;
+    return { sub: p.sub }; // sub=openclaw-gateway（服务身份）；数据主体仍由 userId 决定
+  } catch {
+    return null; // 一切异常 fail-close
+  }
+}
+
 // ===== 工具 =====
 // CORS 契约与 _shared 默认不同（methods 仅 POST/OPTIONS；Allow-Headers 多 x-agent-key）：
 // 用 _shared 的 json + 本地覆盖这两键，响应头逐字节不变（只换来源，不改行为）。
@@ -93,16 +165,46 @@ function sqlLit(s) {
 const isPgQuery = (sql, pgTables) => pgTables.some((t) => new RegExp("\\b" + t + "\\b", "i").test(sql));
 
 // SQL 白名单：仅 SELECT、禁 read_parquet/DDL/DML/COPY；无 LIMIT 则强制补
-function validateSql(raw) {
+// ★表引用正向白名单（防 LLM「自己发挥」直接读原文件）：DuckDB 允许
+//   FROM 's3://...'（字符串表，零关键词）、parquet_scan/read_csv/read_json 等同义/邻接函数，
+//   黑名单挡不住 → 改为：FROM/JOIN 目标只许 allowedTables（本次请求的权限视图 + PG 路由表
+//   + SQL 自身 WITH 定义的 CTE）；FROM 后跟字符串字面量/表函数调用一律拒绝。
+const FORBIDDEN_KEYWORDS = [
+  "READ_PARQUET", "PARQUET_SCAN", "READ_CSV", "READ_JSON", "READ_TEXT", "READ_BLOB",
+  "GLOB", "ST_READ", "POSTGRES_SCAN", "POSTGRES_ATTACH", "SCAN_",
+  "INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE",
+  "ALTER", "CREATE", "GRANT", "REVOKE", "COPY", "ATTACH", "PRAGMA",
+  "SET", "CALL", "INSTALL", "LOAD", "EXPORT", "IMPORT", "SECRET",
+];
+// FROM/JOIN 后的引用提取（带可选引号包裹的标识符）
+const FROM_JOIN_REF_RE = /\b(?:from|join)\s+([`"\[]?)([A-Za-z_][A-Za-z0-9_]*)\1/gi;
+function validateSql(raw, allowedTables) {
   const trimmed = raw.trim().replace(/;+\s*$/, "");
   const u = trimmed.toUpperCase();
-  if (!/^SELECT[\s(]/.test(u)) throw new Error("only_select_allowed");
-  const forbidden = [
-    "READ_PARQUET", "INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE",
-    "ALTER", "CREATE", "GRANT", "REVOKE", "COPY", "ATTACH", "PRAGMA",
-  ];
-  for (const kw of forbidden) {
+  if (!/^SELECT[\s(]/.test(u) && !/^WITH[\s(]/.test(u)) throw new Error("only_select_allowed");
+  for (const kw of FORBIDDEN_KEYWORDS) {
     if (new RegExp("\\b" + kw + "\\b").test(u)) throw new Error("forbidden_statement:" + kw);
+  }
+  // ① 字符串表/文件路径/URL：FROM 后直接跟引号串，或任何含 :// 、.parquet/.csv/.json 的字面量
+  if (/\b(?:from|join)\s*'/i.test(trimmed)) throw new Error("forbidden_string_table");
+  if (/'[^']*:\/\//i.test(trimmed) || /'[^']*\.(parquet|csv|json|tsv|jsonl)/i.test(trimmed)) {
+    throw new Error("forbidden_file_reference");
+  }
+  // ② 表函数调用：FROM x( → x 必是函数（parquet_scan 等在 FROM 位置的变体）
+  if (/\b(?:from|join)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(/i.test(trimmed)) {
+    throw new Error("forbidden_table_function");
+  }
+  // ③ CTE 名（WITH x AS / , x AS）视为合法引用目标
+  const ctes = new Set();
+  const withRe = /\b(?:with|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(/gi;
+  let wm;
+  while ((wm = withRe.exec(trimmed)) !== null) ctes.add(wm[1].toLowerCase());
+  // ④ 正向白名单：每个 FROM/JOIN 标识符 ∈ 权限视图 ∪ PG 路由表 ∪ CTE
+  const allowed = new Set([...allowedTables, ...ctes].map((t) => String(t).toLowerCase()));
+  let m;
+  FROM_JOIN_REF_RE.lastIndex = 0;
+  while ((m = FROM_JOIN_REF_RE.exec(trimmed)) !== null) {
+    if (!allowed.has(m[2].toLowerCase())) throw new Error("forbidden_table:" + m[2]);
   }
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
@@ -224,8 +326,16 @@ module.exports = async function (req) {
   const sql = body.sql;
   const key = body.agent_api_key || req.headers.get("x-agent-key");
 
-  // ① 认证（前移到 cronSessionKey 反查前，#6：避免未认证请求驱动 serviceJwt RPC 轻量 DoS）
-  if (!AGENT_API_KEY || key !== AGENT_API_KEY) return json({ error: "unauthorized" }, 401);
+  // ① 认证双通道（U1b）：Authorization Bearer Casdoor 服务 JWT（scope openclaw:query）优先；
+  // 未带 Bearer → 过渡期 AGENT_API_KEY 共享密钥兜底（与 /api/push 同款双通道，下线计划见 runbook）。
+  // 带 Bearer 但验签失败 = 显式拒绝（不得回落共享密钥，防降级攻击）。
+  const bearer = (req.headers.get("authorization") || "").trim();
+  if (bearer.toLowerCase().startsWith("bearer ")) {
+    const svc = await verifyServiceJwt(bearer.slice(7).trim(), "openclaw:query");
+    if (!svc) return json({ error: "unauthorized" }, 401);
+  } else if (!AGENT_API_KEY || key !== AGENT_API_KEY) {
+    return json({ error: "unauthorized" }, 401);
+  }
 
   // C4: cron turn 无 userId（requesterSenderId 空）→ 从 cronSessionKey 反查 scheduled_reports.run_as
   // cron turn ctx.sessionKey = agent:<agentId>:cron:<jobid>:run:<runId>（openclaw 源码确认）
@@ -355,16 +465,19 @@ module.exports = async function (req) {
     return json({ error: "no_permission", detail: perms && perms.error }, 403);
   }
 
-  // ③ SQL 白名单
+  // ③ SQL 白名单（表引用正向白名单：引擎路由前先给全量合法表集——DuckDB 权限视图
+  // + carry 维表视图 + PG 路由表，均为权限强制面；CTE 由 validateSql 自行识别）
+  const regPre = await loadRegistry();
+  const allowedTables = ["retail_detail", ...reg.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
   let finalSql;
   try {
-    finalSql = validateSql(sql);
+    finalSql = validateSql(sql, allowedTables);
   } catch (e) {
     return json({ error: "sql_rejected", rule: e.message }, 400);
   }
 
   // ④/⑤ 引擎路由（pg_table 数据集→PG，否则→DuckDB；来源注册表）
-  const reg = await loadRegistry();
+  const reg = regPre;
   const engine = isPgQuery(sql, reg.pgTables) ? "pg" : "duckdb";
   let data, err;
   try {

@@ -110,6 +110,68 @@ async function serviceJwt() {
   const now = Math.floor(Date.now() / 1e3);
   return signJwt({ sub: "agent-query", role: "authenticated", iss: "agent-query", iat: now, exp: now + 60 }, JWT_SECRET);
 }
+var JWKS_URL = Deno.env.get("CASDOOR_JWKS_URL") || "https://sso.shanhaiyiguo.com/.well-known/jwks";
+var JWT_ISSUER = Deno.env.get("CASDOOR_ISSUER") || "https://sso.shanhaiyiguo.com";
+var JWT_AUDIENCE = Deno.env.get("CASDOOR_CLIENT_ID") || "";
+var JWKS_TTL_MS = 24 * 60 * 60 * 1e3;
+var JWKS_CACHE = null;
+function b64uToBytes(s) {
+  const b64 = String(s).replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64 + "===".slice((b64.length + 3) % 4));
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+async function loadJwks(force) {
+  const fresh = JWKS_CACHE && Date.now() - JWKS_CACHE.fetchedAt < JWKS_TTL_MS;
+  if (!force && fresh) return JWKS_CACHE.keys;
+  const res = await fetch(JWKS_URL, { signal: AbortSignal.timeout(5e3) });
+  if (!res.ok) throw new Error("jwks http " + res.status);
+  const body = await res.json();
+  if (!body || !Array.isArray(body.keys)) throw new Error("jwks bad payload");
+  JWKS_CACHE = { keys: body.keys, fetchedAt: Date.now() };
+  return JWKS_CACHE.keys;
+}
+async function verifyServiceJwt(token, needScope) {
+  try {
+    if (!token || !needScope || !JWT_AUDIENCE) return null;
+    const parts = String(token).split(".");
+    if (parts.length !== 3) return null;
+    const header = JSON.parse(new TextDecoder().decode(b64uToBytes(parts[0])));
+    if (header.alg !== "RS256" || !header.kid) return null;
+    let keys = await loadJwks(false).catch(() => null);
+    let jwk = keys && keys.find((k) => k.kid === header.kid);
+    if (!jwk) {
+      keys = await loadJwks(true);
+      jwk = keys.find((k) => k.kid === header.kid);
+      if (!jwk) return null;
+    }
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+    const okSig = await crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5",
+      key,
+      b64uToBytes(parts[2]),
+      new TextEncoder().encode(parts[0] + "." + parts[1])
+    );
+    if (!okSig) return null;
+    const p = JSON.parse(new TextDecoder().decode(b64uToBytes(parts[1])));
+    const now = Math.floor(Date.now() / 1e3);
+    if (typeof p.exp !== "number" || p.exp <= now) return null;
+    if (p.iss !== JWT_ISSUER) return null;
+    const audOk = Array.isArray(p.aud) ? p.aud.includes(JWT_AUDIENCE) : p.aud === JWT_AUDIENCE;
+    if (!audOk) return null;
+    const scopes = Array.isArray(p.scope) ? p.scope.map(String) : typeof p.scope === "string" ? p.scope.split(/[\s,]+/).filter(Boolean) : [];
+    if (!scopes.includes(needScope)) return null;
+    if (typeof p.sub !== "string" || !p.sub) return null;
+    return { sub: p.sub };
+  } catch {
+    return null;
+  }
+}
 var AGENT_CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, x-agent-key"
@@ -121,27 +183,62 @@ function sqlLit(s) {
   return "'" + String(s).replace(/'/g, "''") + "'";
 }
 var isPgQuery = (sql, pgTables) => pgTables.some((t) => new RegExp("\\b" + t + "\\b", "i").test(sql));
-function validateSql(raw) {
+var FORBIDDEN_KEYWORDS = [
+  "READ_PARQUET",
+  "PARQUET_SCAN",
+  "READ_CSV",
+  "READ_JSON",
+  "READ_TEXT",
+  "READ_BLOB",
+  "GLOB",
+  "ST_READ",
+  "POSTGRES_SCAN",
+  "POSTGRES_ATTACH",
+  "SCAN_",
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "DROP",
+  "TRUNCATE",
+  "ALTER",
+  "CREATE",
+  "GRANT",
+  "REVOKE",
+  "COPY",
+  "ATTACH",
+  "PRAGMA",
+  "SET",
+  "CALL",
+  "INSTALL",
+  "LOAD",
+  "EXPORT",
+  "IMPORT",
+  "SECRET"
+];
+var FROM_JOIN_REF_RE = /\b(?:from|join)\s+([`"\[]?)([A-Za-z_][A-Za-z0-9_]*)\1/gi;
+function validateSql(raw, allowedTables) {
   const trimmed = raw.trim().replace(/;+\s*$/, "");
   const u = trimmed.toUpperCase();
-  if (!/^SELECT[\s(]/.test(u)) throw new Error("only_select_allowed");
-  const forbidden = [
-    "READ_PARQUET",
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "DROP",
-    "TRUNCATE",
-    "ALTER",
-    "CREATE",
-    "GRANT",
-    "REVOKE",
-    "COPY",
-    "ATTACH",
-    "PRAGMA"
-  ];
-  for (const kw of forbidden) {
+  if (!/^SELECT[\s(]/.test(u) && !/^WITH[\s(]/.test(u)) throw new Error("only_select_allowed");
+  for (const kw of FORBIDDEN_KEYWORDS) {
     if (new RegExp("\\b" + kw + "\\b").test(u)) throw new Error("forbidden_statement:" + kw);
+  }
+  if (/\b(?:from|join)\s*'/i.test(trimmed)) throw new Error("forbidden_string_table");
+  if (/'[^']*:\/\//i.test(trimmed) || /'[^']*\.(parquet|csv|json|tsv|jsonl)/i.test(trimmed)) {
+    throw new Error("forbidden_file_reference");
+  }
+  if (/\b(?:from|join)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(/i.test(trimmed)) {
+    throw new Error("forbidden_table_function");
+  }
+  const ctes = /* @__PURE__ */ new Set();
+  const withRe = /\b(?:with|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(/gi;
+  let wm;
+  while ((wm = withRe.exec(trimmed)) !== null) ctes.add(wm[1].toLowerCase());
+  const allowed = new Set([...allowedTables, ...ctes].map((t) => String(t).toLowerCase()));
+  let m;
+  FROM_JOIN_REF_RE.lastIndex = 0;
+  while ((m = FROM_JOIN_REF_RE.exec(trimmed)) !== null) {
+    if (!allowed.has(m[2].toLowerCase())) throw new Error("forbidden_table:" + m[2]);
   }
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
@@ -235,7 +332,13 @@ module.exports = async function(req) {
   let userId = body.userId;
   const sql = body.sql;
   const key = body.agent_api_key || req.headers.get("x-agent-key");
-  if (!AGENT_API_KEY || key !== AGENT_API_KEY) return json({ error: "unauthorized" }, 401);
+  const bearer = (req.headers.get("authorization") || "").trim();
+  if (bearer.toLowerCase().startsWith("bearer ")) {
+    const svc = await verifyServiceJwt(bearer.slice(7).trim(), "openclaw:query");
+    if (!svc) return json({ error: "unauthorized" }, 401);
+  } else if (!AGENT_API_KEY || key !== AGENT_API_KEY) {
+    return json({ error: "unauthorized" }, 401);
+  }
   if (!userId && body.cronSessionKey) {
     const m = body.cronSessionKey.match(/cron:([^:]+)/i);
     if (m) {
@@ -349,13 +452,15 @@ module.exports = async function(req) {
   if (!perms || perms.error || !Array.isArray(branchNums)) {
     return json({ error: "no_permission", detail: perms && perms.error }, 403);
   }
+  const regPre = await loadRegistry();
+  const allowedTables = ["retail_detail", ...reg.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
   let finalSql;
   try {
-    finalSql = validateSql(sql);
+    finalSql = validateSql(sql, allowedTables);
   } catch (e) {
     return json({ error: "sql_rejected", rule: e.message }, 400);
   }
-  const reg = await loadRegistry();
+  const reg = regPre;
   const engine = isPgQuery(sql, reg.pgTables) ? "pg" : "duckdb";
   let data, err;
   try {

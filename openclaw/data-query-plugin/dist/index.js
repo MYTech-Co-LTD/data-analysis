@@ -17,6 +17,56 @@ const NOTIFY_URL =
   process.env.NOTIFY_URL || "http://insforge:7130/functions/wecom-notify";
 const MAX_ROWS_TO_MODEL = 50;
 
+// ===== 服务身份 JWT（U1b：agent-query 鉴权收敛，scope openclaw:query）=====
+// 容器配了 CASDOOR_CLIENT_ID/SECRET（同 push-admin）→ client_credentials 换短时 JWT
+// 附 Authorization: Bearer；未配置/换不到 → 回落 body.agent_api_key（过渡期双通道）。
+// 60s 前置刷新，缓存复用（与 push-admin-plugin 同款）。
+const CASDOOR_ORIGIN = process.env.CASDOOR_ORIGIN || "https://sso.shanhaiyiguo.com";
+const CASDOOR_CLIENT_ID = process.env.CASDOOR_CLIENT_ID || "";
+const CASDOOR_CLIENT_SECRET = process.env.CASDOOR_CLIENT_SECRET || "";
+let cachedSvcToken = null;
+let cachedSvcTokenExpiresAt = 0;
+const SVC_TOKEN_MARGIN_MS = 60 * 1000;
+
+async function getServiceJwt() {
+  if (!CASDOOR_CLIENT_ID || !CASDOOR_CLIENT_SECRET) return null;
+  const now = Date.now();
+  if (cachedSvcToken && now < cachedSvcTokenExpiresAt - SVC_TOKEN_MARGIN_MS) {
+    return cachedSvcToken;
+  }
+  try {
+    const resp = await fetch(`${CASDOOR_ORIGIN}/api/login/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "client_credentials",
+        client_id: CASDOOR_CLIENT_ID,
+        client_secret: CASDOOR_CLIENT_SECRET,
+        scope: "openclaw:query",
+      }),
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const body = await resp.json();
+    if (!body.access_token) throw new Error("no access_token");
+    cachedSvcToken = body.access_token;
+    cachedSvcTokenExpiresAt = now + (body.expires_in || 7200) * 1000;
+    return cachedSvcToken;
+  } catch (e) {
+    console.warn("[data-query] service JWT fetch failed, fallback to shared key:", String(e));
+    return null;
+  }
+}
+
+// 网关调用公共头：JWT 可得则 Authorization Bearer（不含 agent_api_key，防降级歧义）；
+// 否则 body 补 agent_api_key（旧通道）。
+async function gatewayHeadersAndBody(body) {
+  const token = await getServiceJwt();
+  if (token) {
+    return { headers: { "Content-Type": "application/json", Authorization: "Bearer " + token }, body: JSON.stringify(body) };
+  }
+  return { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, agent_api_key: process.env.AGENT_API_KEY }) };
+}
+
 const TOOL_NAME = "query_retail_data";
 const TOOL_DESC =
   "查询零售销售数据。可直接查明细视图 retail_detail（乐檬 POS 订单明细），" +
@@ -49,11 +99,10 @@ async function fetchDictionary(userId) {
   if (!agentApiKey) return { error: "网关密钥未配置（openclaw 容器缺 AGENT_API_KEY env）。" };
   let resp;
   try {
-    resp = await fetch(GATEWAY_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "dictionary", userId, agent_api_key: agentApiKey }),
-    });
+    const { headers, body: reqBody } = await gatewayHeadersAndBody(
+      { mode: "dictionary", userId },
+    );
+    resp = await fetch(GATEWAY_URL, { method: "POST", headers, body: reqBody });
   } catch (e) {
     return { error: "查询网关不可达：" + ((e && e.message) || String(e)) };
   }
@@ -89,11 +138,8 @@ const PUSH_PARAMS = {
 };
 
 async function gatewayPost(body) {
-  const resp = await fetch(GATEWAY_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...body, agent_api_key: process.env.AGENT_API_KEY }),
-  });
+  const { headers, body: reqBody } = await gatewayHeadersAndBody(body);
+  const resp = await fetch(GATEWAY_URL, { method: "POST", headers, body: reqBody });
   return resp.json().catch(() => ({}));
 }
 
@@ -122,11 +168,10 @@ async function executeQuery({ sql }, userId, cronSessionKey) {
 
   let resp;
   try {
-    resp = await fetch(GATEWAY_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cronSessionKey ? { sql, cronSessionKey, agent_api_key: agentApiKey } : { sql, userId, agent_api_key: agentApiKey }),
-    });
+    const { headers, body: reqBody } = await gatewayHeadersAndBody(
+      cronSessionKey ? { sql, cronSessionKey } : { sql, userId },
+    );
+    resp = await fetch(GATEWAY_URL, { method: "POST", headers, body: reqBody });
   } catch (e) {
     return { error: "查询网关不可达：" + ((e && e.message) || String(e)) };
   }
@@ -146,6 +191,10 @@ async function executeQuery({ sql }, userId, cronSessionKey) {
       hint =
         "该关键词被禁止（" + rule + "）。明细请查 retail_detail 视图，不要用 read_parquet。";
     else if (body.error === "no_permission") hint = "你当前没有数据查询权限。";
+    else if (rule === "forbidden_string_table" || rule === "forbidden_file_reference" || rule === "forbidden_table_function")
+      hint = "禁止直接引用文件或表函数。只能查 retail_detail / report_* / dim_* 这些权限视图。";
+    else if (rule && String(rule).startsWith("forbidden_table:"))
+      hint = "表 " + String(rule).split(":")[1] + " 不在可查范围。可用表/列请先调 list_datasets 确认。";
     return { error: body.error || "网关返回 HTTP " + resp.status, rule, hint };
   }
 

@@ -16,7 +16,7 @@ metadata:
 send_notify({
   msgtype?: "markdown" | "text" | "textcard" | "news" | "template_card",  // 默认 markdown
   content?, title?, url?,         // 通用字段，各类型含义见下
-  touser?,                        // 省略=管理员组；"@sender"=当前用户；userid=该人；"@all"=全员
+  touser?,                        // 已废弃：收件人固定=当前提问者本人（per-sender 隔离），传任何值都被覆盖
   articles?,                      // news 专用（图文）
   template_card?,                 // 模板卡片原生对象（透传）
   mentioned_list?,                // text 专用：@ 的 userid
@@ -97,6 +97,6 @@ send_notify({ msgtype: "template_card", template_card: {
 - **只通知真实发生的事**，数字/时间必须来自工具返回或明确系统状态；**绝不编造**通知内容。
 - **按内容选格式，别炫技**：纯文字→markdown；要 @→text；引到链接→textcard/news；要强调数字+结构→template_card。简单告警用 markdown 即可，不必每次上卡片。
 - **content 简洁**：一两句 + 关键数字/时间。markdown 的加粗/列表别滥用。
-- 默认发管理员组（省略 `touser`）。用户点名某人→其 userid；说「发给我」→`"@sender"`。
+- ★收件人固定=当前提问者本人（per-sender 隔离，安全强制）：不论用户/你传什么 touser，都发给本人。用户要定时/跨人推送→引导建定时应用（push_report），不要用 send_notify。
 - 工具返回 `ok:true` → 告知用户「已通知 X」；返回 `error` → 按原文转述（密钥未配/服务不可达/无身份/参数错），**别假装已发送**。
-- `@all`（touser 或 mentioned_list）影响全员，非用户明确要求**不要**用。
+- `mentioned_list` 里的 `@all` 只在发给本人的 text 里@人，无广播效果。

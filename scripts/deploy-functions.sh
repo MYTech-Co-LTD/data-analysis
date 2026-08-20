@@ -171,6 +171,8 @@ set_secret "JWT_SECRET" "${JWT_SECRET:-}"
 set_secret "JWT_SIGNING_KEY" "${JWT_SECRET:-}"
 # 智能问数：agent-query 网关鉴权 /query 用（架构文档 §4.2）
 set_secret "AGENT_API_KEY" "${AGENT_API_KEY:-}"
+# agent-query 服务 JWT 验签的 aud（U1b：与 openclaw 容器 CASDOOR_CLIENT_ID 同源）
+set_secret "CASDOOR_CLIENT_ID" "${CASDOOR_CLIENT_ID:-}"
 # 通讯录变更事件推送（webhook 接收）
 set_secret "WECOM_TOKEN" "${WECOM_TOKEN:-}"
 set_secret "WECOM_ENCODING_AES_KEY" "${WECOM_ENCODING_AES_KEY:-}"

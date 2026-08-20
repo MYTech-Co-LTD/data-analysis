@@ -21,7 +21,7 @@ const TOOL_DESC =
   "向企业微信发送一条通知消息（系统统一通知服务 App B 发送）。支持全量应用消息格式：" +
   "markdown / text(可@人) / textcard(可点击卡片) / news(图文，可带图) / template_card(模板卡片，含交互子类型)。" +
   "用于采集完成/异常告警/定时汇报/用户要求通知某人等主动通知场景；普通对话回复不要用此工具。" +
-  "默认发给管理员组（NOTIFY_DEFAULT_TUSERS）。按内容选最合适的格式，详见 notify skill。";
+  "★收件人固定=当前提问者本人（per-sender 隔离）：传其他 touser 会被强制改回本人；跨人/定时推送走定时应用（push_report）。";
 const TOOL_PARAMS = {
   type: "object",
   properties: {
@@ -44,7 +44,7 @@ const TOOL_PARAMS = {
     touser: {
       type: "string",
       description:
-        "收件人 userid。省略=管理员组（默认）；'@sender'=发给当前提问的用户；具体 userid（如 ZhangDuo）=该人；'@all'=全员广播（慎用）。",
+        "已废弃（保留兼容）：收件人固定为当前提问者本人（per-sender 隔离），传任何值都会被覆盖。",
     },
     url: {
       type: "string",
@@ -100,17 +100,12 @@ async function sendNotify(args, senderId) {
     };
   }
 
-  // "@sender" → 当前可信 userid（核心注入，非 LLM 传）
-  let to = args.touser;
-  if (args.touser === "@sender") {
-    if (!senderId) {
-      return {
-        error:
-          "无法识别当前用户身份（requesterSenderId 缺失），不能解析 @sender。",
-      };
-    }
-    to = senderId;
-  }
+  // ★ per-sender 隔离（用户裁定 2026-08-20）：对话场景收件人强制 = 当前提问者。
+  // 不论 args.touser 传什么（具体 userid / @all / 省略），一律覆盖为 senderId——
+  // 防模型被诱导把当前用户有权看的数据（含成本）推给他人/全员（数据未越权但越过「人」）。
+  // 跨人/定时推送走 push_report（收件人从 scheduled_reports 绑定钉死=创建者）。
+  const to = senderId;
+  const overridden = args.touser && args.touser !== "@sender" && args.touser !== senderId;
 
   // 转发到 wecom-notify；undefined 字段不会进 JSON
   const payload = {
@@ -151,7 +146,14 @@ async function sendNotify(args, senderId) {
       errmsg: body.errmsg,
     };
   }
-  return { ok: true, sent_to: body.sent_to, msgtype: body.msgtype };
+  return {
+    ok: true,
+    sent_to: body.sent_to,
+    msgtype: body.msgtype,
+    ...(overridden
+      ? { note: "收件人已按 per-sender 隔离强制改为提问者本人（原 touser=" + args.touser + " 被忽略）。需要定时/跨人推送请用定时应用（push_report）。" }
+      : {}),
+  };
 }
 
 export default definePluginEntry({
