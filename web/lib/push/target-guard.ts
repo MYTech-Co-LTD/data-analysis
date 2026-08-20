@@ -1,6 +1,6 @@
 // web/lib/push/target-guard.ts
 // 目标结束守卫（spec §3.4）：触发前检查数据源目标——
-//   follow：视图「今天落区间」是否有行；fixed：targets.status 是否 active。
+//   follow：视图「今天落区间」是否有行；fixed：视图 target_id+status=active 是否有行（targets 表 RLS 拦 anon，不能直查）。
 //   不 active → 跳过本次 + owner 一次性企微提醒（last_guard_notice_at 24h 防重）。
 
 import { sendWecomMarkdown } from '../wecom-send';
@@ -20,12 +20,16 @@ export async function checkTargetActive(
   try {
     if (mode === 'fixed') {
       if (!targetId) return { active: false, reason: 'fixed 模式缺 target_id' };
-      const resp = await fetch(`${url}/targets?id=eq.${targetId}&select=id,status`, { headers });
+      // Critical-1：targets 表 SELECT 被 RLS 拦死（anon 恒空集，生产实测 200 []），
+      // 改查视图（与引擎 fixed 取值完全同路径，anon 可见）：target_id + status=eq.active。
+      const resp = await fetch(
+        `${url}/report_achievement_gen?select=metric_code&target_id=eq.${targetId}&status=eq.active&limit=1`,
+        { headers },
+      );
       const rows = await resp.json().catch(() => []);
-      const status = Array.isArray(rows) && rows[0]?.status;
-      return status === 'active'
+      return Array.isArray(rows) && rows.length > 0
         ? { active: true, reason: '' }
-        : { active: false, reason: `目标 ${targetId} 已结束或不存在（status=${status ?? '无'}）` };
+        : { active: false, reason: `目标 ${targetId} 已结束或不可见（status=非 active 或不在视图范围）` };
     }
     // follow：与引擎取值同口径（今天落区间），service 侧探测（不涉敏感数据，有行即可）
     const today = new Date().toISOString().slice(0, 10);

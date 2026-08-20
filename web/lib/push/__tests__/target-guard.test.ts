@@ -45,10 +45,21 @@ describe('target-guard', () => {
     expect(call).toMatch(/end_date=gte\.\d{4}-\d{2}-\d{2}/);
   });
 
-  it('fixed：目标 status=active → active；closed → inactive', async () => {
+  it('fixed：视图有行（status=active）→ active', async () => {
     mockFetch.mockImplementation((url: string) => {
-      if (String(url).includes('targets?id=eq.823')) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 823, status: 'closed' }]) });
+      if (String(url).includes('report_achievement_gen') && String(url).includes('target_id=eq.823')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ metric_code: 'sale' }]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+    const { checkTargetActive } = await import('../target-guard');
+    expect(await checkTargetActive('fixed', 823)).toEqual({ active: true, reason: '' });
+  });
+
+  it('fixed：视图无行（closed/非 active）→ inactive（与引擎 fixed 取值同路径断言）', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (String(url).includes('report_achievement_gen') && String(url).includes('target_id=eq.823')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
       }
       return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
     });
@@ -56,6 +67,17 @@ describe('target-guard', () => {
     const r = await checkTargetActive('fixed', 823);
     expect(r.active).toBe(false);
     expect(r.reason).toContain('已结束');
+    // Critical-1：fixed 守卫必须走视图（targets 表被 RLS 拦死，anon 恒空集），与引擎 fixed 取值同路径
+    const call = String(mockFetch.mock.calls.find((c) => String(c[0]).includes('target_id=eq.823'))?.[0]);
+    expect(call).toContain('report_achievement_gen');
+    expect(call).toContain('status=eq.active');
+  });
+
+  it('fixed：缺 target_id → inactive 且 reason 含「缺」', async () => {
+    const { checkTargetActive } = await import('../target-guard');
+    const r = await checkTargetActive('fixed', undefined);
+    expect(r.active).toBe(false);
+    expect(r.reason).toContain('缺');
   });
 
   it('notifyOwnerOnce：24h 内已提醒过 → 不重发', async () => {
