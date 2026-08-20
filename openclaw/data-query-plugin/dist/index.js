@@ -69,6 +69,9 @@ async function gatewayHeadersAndBody(body) {
 
 // ★U1c 修复（2026-08-20）：模块级 userId 兜底——同一轮后续工具调用若 ctx.requesterSenderId 为空，复用首个捕获值
 let lastUserId = "";
+// ★机械防探索循环（2026-08-20）：同一 sessionKey 每轮最多 MAX_QUERY_CALLS 次查询，超出直接要求作答
+const MAX_QUERY_CALLS = 2;
+const queryCallCount = new Map();
 
 const TOOL_NAME = "query_retail_data";
 const TOOL_DESC =
@@ -155,8 +158,17 @@ async function pushNotify({ to, content, title }) {
   return resp.json().catch(() => ({}));
 }
 
-async function executeQuery({ sql }, userId, cronSessionKey) {
+async function executeQuery({ sql }, userId, cronSessionKey, sessionKey) {
   const agentApiKey = process.env.AGENT_API_KEY;
+  // 机械上限：同一会话每轮最多查 MAX_QUERY_CALLS 次（防模型探索循环）
+  if (sessionKey) {
+    const k = String(sessionKey);
+    const c = (queryCallCount.get(k) || 0) + 1;
+    queryCallCount.set(k, c);
+    if (c > MAX_QUERY_CALLS) {
+      return { error: "已连续查询 " + MAX_QUERY_CALLS + " 次并拿到数据，请基于已得结果直接回答，不要再调用查询工具。" };
+    }
+  }
 
   if (!agentApiKey) {
     return {
@@ -291,7 +303,7 @@ export default definePluginEntry({
               );
             }
             const cronSessionKey = ctx && ctx.sessionKey; // C4: cron turn 透传（userId 空时 agent-query 反查 run_as）
-            return executeQuery({ sql }, userId, userId ? null : cronSessionKey);
+            return executeQuery({ sql }, userId, userId ? null : cronSessionKey, ctx && ctx.sessionKey);
           },
         };
       },
