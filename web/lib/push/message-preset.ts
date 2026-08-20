@@ -8,6 +8,7 @@
 //      → bridge 400 missing content。
 //   2. 必须 triple-stash {{{X}}}：CompileTemplateUsecase 用原生 Handlebars，双花括号 {{X}} 会 HTML
 //      转义（" → &quot;）→ JSON.parse 失败 → bridge markdown 兜底 → 用户收到 JSON 裸文本而非卡片。
+import { BANNER_PLACEHOLDER_URL } from './banner';
 
 export interface MessagePreset {
   preset_id: string;
@@ -95,9 +96,18 @@ export function renderPresetContent(preset: MessagePreset, vars: Record<string, 
       //   bridge route 对该键原样下发（支持 card_image/card_action/vertical_content_list 全字段）
       const card = preset.card_json;
       if (card && typeof card === 'object' && !Array.isArray(card)) {
+        const interpolated = deepInterpolate(card, vars) as { card_image?: { url?: unknown } };
+        // 横幅占位图 → 签名横幅 URL（架构 §7.4 方案 C；vars.banner_url 由引擎 injectBanner 注入。
+        //   槽位缺失时引擎不注入 banner_url → 保留静态占位图优雅降级，不产生字面 {{banner_url}}）
+        if (
+          interpolated.card_image?.url === BANNER_PLACEHOLDER_URL &&
+          typeof vars.banner_url === 'string'
+        ) {
+          interpolated.card_image.url = vars.banner_url;
+        }
         return JSON.stringify({
           msgtype: 'template_card',
-          template_card: deepInterpolate(card, vars),
+          template_card: interpolated,
         });
       }
       // 简写：main_title + sub_title_text + url（text_notice 便捷）

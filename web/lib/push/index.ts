@@ -26,6 +26,7 @@ import { getPushVariables } from './push-variables';
 import { isPaused } from './guards';
 import { auditPushTrigger, auditPushPayload } from './audit';
 import { renderPresetContent, type MessagePreset } from './message-preset';
+import { injectBanner } from './banner';
 
 // 运行时配置
 function getConfig() {
@@ -434,6 +435,8 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   const preset = await loadWorkflowPreset(opts.workflowId, opts.presetId);
   if (preset) {
     for (const g of renderedGroups) {
+      // 横幅注入（架构 §7.4 方案 C）：template_card + card_image 占位 + 槽位值齐 → 组签名 URL 进 banner_url
+      injectBanner(preset, g.rendered, opts.targetId);
       g.rendered.message_content = renderPresetContent(preset, g.rendered);
     }
   }
