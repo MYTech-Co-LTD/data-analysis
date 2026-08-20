@@ -29,7 +29,7 @@ metadata:
 
 ## 选明细还是汇总（汇总优先）
 
-**优先命中汇总表**：问历史日的总额/排名/占比/趋势 → 用 `report_daily_sales_v` / `report_daily_category_v` / `report_weekly_trend`（类型干净、快、成本列自动脱敏）。只有下列情况才扫 `retail_detail` 明细：
+**优先命中汇总/生成视图**：战区/门店销售/配送/出库下钻 → `report_region_breakdown_gen`（含 sale_actual/sale_target/sale_rate/daily_sale）；品类出库 → `report_category_summary_gen`；品牌指标 → `report_brand_metric_gen`；批发 → `report_wholesale_daily_gen`/`report_wholesale_customer_gen`；周趋势 → `report_weekly_trend`（全部 scope_branch_keys 行级裁剪、成本列自动脱敏）。只有下列情况才扫 `retail_detail` 明细：
 - 问**今天/最近**（汇总表可能滞后约 1 天）。
 - 要**单笔订单、具体商品行**等明细。
 - 汇总表没有的维度。
