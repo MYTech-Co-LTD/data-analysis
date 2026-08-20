@@ -50,10 +50,42 @@ function decodeJwtPayload(token) {
 //    与 permission.groups 挂载天然匹配不上 → 排除——不管直挂从 Casdoor UI / API / 脚本写入都不生效。
 //    输入 owner = token owner claim（'shanhai'），roleCodes = 登录时 userinfo roles claim（裸名，index.js 2b 提取）。
 //    失败/非数组 → null（由 buildClaims 判 C2 → 503）；空集（有角色但权限 roles 全不命中）→ []（B1 deny 载体）。
-async function fetchRolePermissions(issuer, accessToken, owner, roleCodes) {
+// Casdoor 服务间 token（client_credentials，2026-08-20 修复：get-permissions 用用户 token 会被拒
+// ——普通用户（非 Casdoor 管理员）如王松整类 503，且 Casdoor 返非标形状致静默 null；
+// 服务 token 与配置/管理脚本同源，全量可读。模块级缓存，过期自动刷新）
+let svcToken = null; // { token, expiresAt }
+async function getServiceToken(issuer, clientId, clientSecret) {
+  if (svcToken && svcToken.expiresAt > Date.now()) return svcToken.token;
+  const res = await fetch(`${issuer}/api/login/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret,
+      scope: "openid",
+    }),
+  });
+  if (!res.ok) {
+    console.error("wecom-oidc-callback: service token http", res.status);
+    return null;
+  }
+  const data = await res.json().catch(() => null);
+  if (!data?.access_token) {
+    console.error("wecom-oidc-callback: service token body", JSON.stringify(data).slice(0, 200));
+    return null;
+  }
+  svcToken = { token: data.access_token, expiresAt: Date.now() + ((data.expires_in ?? 3600) * 1000) - 60_000 };
+  return svcToken.token;
+}
+
+async function fetchRolePermissions(issuer, accessToken, owner, roleCodes, serviceToken) {
   try {
+    // 优先服务 token（用户 token 对 get-permissions 无权——见 getServiceToken 注释）；
+    // 服务 token 获取失败时回退用户 token（保持可用性，行为同旧版）
+    const token = serviceToken || accessToken;
     const res = await fetch(`${issuer}/api/get-permissions?owner=${encodeURIComponent(owner)}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
       console.error("wecom-oidc-callback: get-permissions http", res.status,
@@ -267,7 +299,8 @@ module.exports = async function (req) {
     // ②' 角色链可达对象（2026-08-18 三层模型强制）：只认 permission.roles 命中用户角色码的资源。
     //    owner 取 token owner claim（构造双段 userId 的同源）；roleCodes = userinfo roles claim（2b 已提取）。
     const casdoorOwner = tokenPayload.owner || "shanhai";
-    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles);
+    const svcToken = await getServiceToken(issuer, clientId, clientSecret);
+    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles, svcToken);
 
     // ③ 门店范围展开（2026-08-18 范围资源唯一真相，fail-close）：
     //    门店范围只从 范围|X 资源读取（expandScopeResources）；无范围资源 → branch_nums: [] →

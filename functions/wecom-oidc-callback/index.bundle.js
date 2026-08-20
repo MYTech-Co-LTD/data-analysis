@@ -227,10 +227,36 @@ function decodeJwtPayload(token) {
     return null;
   }
 }
-async function fetchRolePermissions(issuer, accessToken, owner, roleCodes) {
+var svcToken = null;
+async function getServiceToken(issuer, clientId, clientSecret) {
+  if (svcToken && svcToken.expiresAt > Date.now()) return svcToken.token;
+  const res = await fetch(`${issuer}/api/login/oauth/access_token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret,
+      scope: "openid"
+    })
+  });
+  if (!res.ok) {
+    console.error("wecom-oidc-callback: service token http", res.status);
+    return null;
+  }
+  const data = await res.json().catch(() => null);
+  if (!data?.access_token) {
+    console.error("wecom-oidc-callback: service token body", JSON.stringify(data).slice(0, 200));
+    return null;
+  }
+  svcToken = { token: data.access_token, expiresAt: Date.now() + (data.expires_in ?? 3600) * 1e3 - 6e4 };
+  return svcToken.token;
+}
+async function fetchRolePermissions(issuer, accessToken, owner, roleCodes, serviceToken) {
   try {
+    const token = serviceToken || accessToken;
     const res = await fetch(`${issuer}/api/get-permissions?owner=${encodeURIComponent(owner)}`, {
-      headers: { Authorization: `Bearer ${accessToken}` }
+      headers: { Authorization: `Bearer ${token}` }
     });
     if (!res.ok) {
       console.error(
@@ -401,7 +427,8 @@ module.exports = async function(req) {
       return json({ error: "group_claim_missing_login_denied" }, 503);
     }
     const casdoorOwner = tokenPayload.owner || "shanhai";
-    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles);
+    const svcToken2 = await getServiceToken(issuer, clientId, clientSecret);
+    const reachable = await fetchRolePermissions(issuer, accessToken, casdoorOwner, casdoorRoles, svcToken2);
     const branchKeys = (reachable ?? []).map((k) => normalizeFriendlyPerm(k)).filter((k) => typeof k === "string" && k.startsWith("data-analysis:branch:")).map((k) => k.slice("data-analysis:branch:".length));
     const expandResult = branchKeys.length > 0 ? await expandScopeResources(branchKeys, pgrstUrl) : { branch_nums: [], ok: true };
     console.log(
