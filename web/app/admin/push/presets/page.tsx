@@ -6,12 +6,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import CardPreview, { type PreviewCard } from '@/components/admin/push/CardPreview';
 
+// 变量 UI 口径（migration 204）：只显 name（通俗中文名）+ description（口径说明），
+//   var_code/metric_code 是内部实现细节，不进入任何界面——插入的 {{var_code}} 是数据不是 UI。
 interface VarRow {
   var_code: string;
   name: string;
-  metric_code: string | null;
-  scope_dim: string;
-  unit: string | null;
+  description: string | null;
   enabled: boolean;
 }
 interface PresetRow {
@@ -36,8 +36,11 @@ export default function PushPresetsPage() {
   const [list, setList] = useState<PresetRow[]>([]);
   const [vars, setVars] = useState<VarRow[]>([]);
   const [editing, setEditing] = useState<{ preset_id?: string; name: string; card: PreviewCard } | null>(null);
-  const [msg, setMsg] = useState('');
+  // msg：{ text, ok }——ok=true 成功（text-primary）/ ok=false 失败（text-red-600，DESIGN.md 语义色）
+  const [msg, setMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
+  const okMsg = (text: string) => setMsg({ text, ok: true });
+  const errMsg = (text: string) => setMsg({ text, ok: false });
 
   const fetchAll = useCallback(async () => {
     const [p, v] = await Promise.all([
@@ -78,8 +81,10 @@ export default function PushPresetsPage() {
         body: JSON.stringify({ preset_id: editing.preset_id, name: editing.name, card_json: editing.card }),
       });
       const j = await r.json();
-      setMsg(j.ok ? '已保存' : `保存失败：${j.error || ''} ${JSON.stringify(j.detail || '')}`);
-      if (j.ok) { setEditing(null); load(); }
+      if (j.ok) { okMsg('已保存'); setEditing(null); load(); }
+      else errMsg(`保存失败：${j.error || ''} ${JSON.stringify(j.detail || '')}`);
+    } catch (e) {
+      errMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(false);
     }
@@ -95,7 +100,10 @@ export default function PushPresetsPage() {
         body: JSON.stringify({ presetId: editing.preset_id }),
       });
       const j = await r.json();
-      setMsg(j.ok ? `测试已发送到你的企微（txnId ${j.txnId}，${j.groups ?? 0} 组）` : `测试失败：${j.error || ''}`);
+      if (j.ok) okMsg(`测试已发送到你的企微（txnId ${j.txnId}，${j.groups ?? 0} 组）`);
+      else errMsg(`测试失败：${j.error || ''}`);
+    } catch (e) {
+      errMsg(`测试失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusy(false);
     }
@@ -103,10 +111,15 @@ export default function PushPresetsPage() {
 
   const remove = async (p: PresetRow) => {
     if (!confirm(`删除模板「${p.name || p.preset_id}」？`)) return;
-    const r = await fetch(`/api/admin/push-presets?preset_id=${encodeURIComponent(p.preset_id)}`, { method: 'DELETE' });
-    const j = await r.json();
-    setMsg(j.ok ? '已删除' : `删除失败：${j.error || ''}`);
-    load();
+    try {
+      const r = await fetch(`/api/admin/push-presets?preset_id=${encodeURIComponent(p.preset_id)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (j.ok) okMsg('已删除');
+      else errMsg(`删除失败：${j.error || ''}`);
+      load();
+    } catch (e) {
+      errMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   // 追加变量 token 到目标字段（main_title.title/desc 或第 vIdx 行 title/value）
@@ -130,7 +143,7 @@ export default function PushPresetsPage() {
     });
   };
 
-  // 变量点选按钮（title 提示通俗名 + 语义指标，禁 emoji）
+  // 变量点选按钮（口径：只显 name + description，var_code/metric_code 不出现在任何界面）
   const varChips = (onPick: (code: string) => void) =>
     vars.length === 0 ? (
       <span className="text-xs text-slate-400">（无启用变量）</span>
@@ -140,7 +153,7 @@ export default function PushPresetsPage() {
           <button
             key={v.var_code}
             type="button"
-            title={`${v.var_code}${v.metric_code ? ` · ${v.metric_code}` : ''}`}
+            title={v.description || v.name}
             onClick={() => onPick(v.var_code)}
             className="px-2 py-0.5 text-xs rounded border border-slate-300 hover:border-primary hover:text-primary"
           >
@@ -160,7 +173,7 @@ export default function PushPresetsPage() {
     <div className="p-4">
       <h1 className="text-xl font-bold mb-2">推送模板</h1>
       <p className="text-sm text-slate-500 mb-3">企微卡片模板库：配置区域与文案，点选指标变量，右侧实时预览。保存后可在「推送任务」里引用。</p>
-      {msg && <div className="mb-2 text-sm text-primary">{msg}</div>}
+      {msg && <div className={`mb-2 text-sm ${msg.ok ? 'text-primary' : 'text-red-600'}`}>{msg.text}</div>}
       <button onClick={() => setEditing({ name: '', card: emptyCard() })} className="bg-primary text-white px-4 py-1 text-sm rounded-md mb-4">新建模板</button>
 
       {!editing && (

@@ -189,10 +189,14 @@ const INSFORGE_API_KEY = () => process.env.INSFORGE_API_KEY || '';
 
 /**
  * 从 push_variables 表查可用变量。
+ * 口径（migration 204）：UI 只显 name（通俗中文名）+ description（口径说明），
+ *   var_code/metric_code 是内部实现细节，不进入任何前端界面——但接口透传（含 description）
+ *   供后端 /api/push list_variables 与 admin 变量点选器消费。
  */
 export async function listPushVariables(): Promise<Array<{
   var_code: string;
   name: string;
+  description: string | null;
   metric_code: string | null;
   scope_dim: string;
   unit: string | null;
@@ -201,7 +205,7 @@ export async function listPushVariables(): Promise<Array<{
   const base = INSFORGE_API_BASE();
   const key = INSFORGE_API_KEY();
 
-  const resp = await fetch(`${base}/rest/push_variables?select=var_code,name,metric_code,scope_dim,unit,enabled&order=var_code`, {
+  const resp = await fetch(`${base}/rest/push_variables?select=var_code,name,description,metric_code,scope_dim,unit,enabled&order=var_code`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
