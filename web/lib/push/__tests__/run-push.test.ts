@@ -371,4 +371,132 @@ describe('runPush', () => {
     expect(rendered.sale_amount).toBe('¥4,164,063');
     expect(rendered.sale_rate).toBe('60.6%');
   });
+
+  it('follow 模式取值 URL 带「今天落区间」过滤 + tie-break（回归：最新≠进行中）', async () => {
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+    ]));
+    const { resetCache } = await import('../push-variables');
+    resetCache();
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('require_push_owner')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+      }
+      if (url.includes('org_users')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'u1', wecom_id: 'wx1', is_active: true }]) });
+      }
+      if (url.includes('get_user_perms_strict')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }) });
+      }
+      if (url.includes('report_achievement_gen')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([
+          { actual_value: 4200000, achievement_rate: 0.61 },
+        ]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    const { runPush } = await import('../index');
+    await runPush({
+      workflowId: 'scheduled-report',
+      selector: { kind: 'person', ids: ['wx1'] },
+      operatorId: 'admin',
+      broadcastPerm: false,
+      targetMode: 'follow',
+    });
+
+    const genCalls = mockFetch.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('report_achievement_gen'));
+    expect(genCalls.length).toBeGreaterThan(0);
+    for (const url of genCalls) {
+      expect(url).toContain('status=eq.active');
+      expect(url).toMatch(/start_date=lte\.\d{4}-\d{2}-\d{2}/);
+      expect(url).toMatch(/end_date=gte\.\d{4}-\d{2}-\d{2}/);
+      expect(url).toContain('order=start_date.desc,end_date.asc');
+      expect(url).toContain('limit=1');
+    }
+  });
+
+  it('fixed 模式取值 URL 带 target_id 过滤', async () => {
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+    ]));
+    const { resetCache } = await import('../push-variables');
+    resetCache();
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('require_push_owner')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+      }
+      if (url.includes('org_users')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'u1', wecom_id: 'wx1', is_active: true }]) });
+      }
+      if (url.includes('get_user_perms_strict')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }) });
+      }
+      if (url.includes('report_achievement_gen')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ actual_value: 100, achievement_rate: 0.5 }]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    const { runPush } = await import('../index');
+    await runPush({
+      workflowId: 'scheduled-report',
+      selector: { kind: 'person', ids: ['wx1'] },
+      operatorId: 'admin',
+      broadcastPerm: false,
+      targetMode: 'fixed',
+      targetId: 823,
+    });
+
+    const genCalls = mockFetch.mock.calls.map((c) => String(c[0])).filter((u) => u.includes('report_achievement_gen'));
+    for (const url of genCalls) {
+      expect(url).toContain('target_id=eq.823');
+      expect(url).not.toContain('start_date=lte');
+    }
+  });
+
+  it('presetId 直取：preset 查询按 preset_id 而非 workflow_id', async () => {
+    vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+      { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+    ]));
+    const { resetCache } = await import('../push-variables');
+    resetCache();
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url.includes('require_push_owner')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+      }
+      if (url.includes('org_users')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'u1', wecom_id: 'wx1', is_active: true }]) });
+      }
+      if (url.includes('get_user_perms_strict')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }) });
+      }
+      if (url.includes('push_message_presets')) {
+        if (url.includes('preset_id=eq.preset-xyz')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([
+            { preset_id: 'preset-xyz', workflow_id: 'w', msgtype: 'template_card', card_json: { card_type: 'news_notice', main_title: { title: 'X {{sale_amount}}' } }, enabled: true },
+          ]) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      }
+      if (url.includes('report_achievement_gen')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([{ actual_value: 42, achievement_rate: 0.5 }]) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+    });
+
+    const { runPush } = await import('../index');
+    const result = await runPush({
+      workflowId: 'scheduled-report',
+      presetId: 'preset-xyz',
+      selector: { kind: 'person', ids: ['wx1'] },
+      operatorId: 'admin',
+      broadcastPerm: false,
+    });
+
+    expect(result.renderedGroups?.[0]?.rendered.message_content).toContain('X ¥42');
+  });
 });

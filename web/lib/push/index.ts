@@ -38,10 +38,17 @@ function getConfig() {
 
 export interface RunPushOpts {
   workflowId: string;
+  /** 按模板库直取 preset（优先于按 workflowId 查找） */
+  presetId?: string;
   selector: Selector;
   operatorId: string;
   broadcastPerm: boolean;
   deliver?: boolean; // false = shadow (默认)
+  /** 数值取值目标：follow=今天落区间（默认，向后兼容）；fixed=锁定 target_id */
+  targetMode?: 'follow' | 'fixed';
+  targetId?: number;
+  /** route 兼容字段（/api/push 透传，暂无消费方） */
+  variables?: Record<string, string>;
 }
 
 export interface RunPushResult {
@@ -105,11 +112,14 @@ async function getPermsStrict(wecomId: string): Promise<Perms | null> {
 }
 
 // 语义指标 → achievement 视图 metric_code 映射（§12.1 数值取值；扩展时在此追加）
+// outbound_amount：push_variables.metric_code 的 FK 真名（metric_registry，迁移 173/204）——
+//   生产 registry 无 outbound_amt 键，只有 outbound_amount；保留旧键兼容历史行。
 const METRIC_TO_VIEW: Record<string, string> = {
   sale_amount: 'sale',
   sale_rate: 'sale',
   delivery_amount: 'delivery',
   outbound_amt: 'outbound_amt',
+  outbound_amount: 'outbound_amt',
   outbound_profit: 'outbound_profit',
 };
 
@@ -123,23 +133,39 @@ const fmtCN = (n: number): string => new Intl.NumberFormat('zh-CN', { maximumFra
  *   比率直接用视图 achievement_rate（与报表页同口径），金额用 actual_value。
  *   查询失败或取不到 → null（该变量不渲染，避免占位符）。
  */
-async function resolveNumericValue(metricCode: string | undefined, jwt: string): Promise<string | null> {
+/** rate 类变量判定：var_code 以 _rate 结尾或为 achievement_rate（rate 按视图 achievement_rate 列取） */
+const isRateVar = (code: string) => /_rate$/.test(code) || code === 'achievement_rate';
+
+async function resolveNumericValue(
+  metricCode: string | undefined,
+  jwt: string,
+  target: { mode: 'follow' | 'fixed'; id?: number } = { mode: 'follow' },
+  varCode?: string,
+): Promise<string | null> {
   if (!metricCode) return null;
   const viewMetric = METRIC_TO_VIEW[metricCode];
   if (!viewMetric) return null;
   const { postgrestUrl } = getConfig();
   if (!postgrestUrl) return null;
   try {
+    // follow：今天落区间（周期结束自动取不到→变量跳过；提前建下月不误取）
+    //   tie-break：start_date.desc, end_date.asc = 取开始最晚结束最早的周期（粒度最细，8月优先于Q3）
+    // fixed：锁定 target_id（视图外层已输出 target_id 列，见 report_achievement_gen.sql）
+    const today = new Date().toISOString().slice(0, 10);
+    const targetFilter = target.mode === 'fixed' && target.id
+      ? `&target_id=eq.${target.id}`
+      : `&start_date=lte.${today}&end_date=gte.${today}`;
     const resp = await fetch(
       `${postgrestUrl}/report_achievement_gen?select=metric_code,actual_value,target_value,achievement_rate`
-      + `&metric_code=eq.${viewMetric}&status=eq.active&order=start_date.desc&limit=1`,
+      + `&metric_code=eq.${viewMetric}&status=eq.active${targetFilter}`
+      + `&order=start_date.desc,end_date.asc&limit=1`,
       { headers: { Authorization: `Bearer ${jwt}` } },
     );
     if (!resp.ok) return null;
     const rows = await resp.json() as Array<{ actual_value: number | null; achievement_rate: number | null }>;
     if (!Array.isArray(rows) || rows.length === 0) return null;
     const row = rows[0];
-    if (metricCode === 'sale_rate') {
+    if (isRateVar(varCode ?? '')) {
       const rate = Number(row.achievement_rate);
       return rate > 0 ? `${(rate * 100).toFixed(1)}%` : null;
     }
@@ -154,13 +180,15 @@ async function resolveNumericValue(metricCode: string | undefined, jwt: string):
  * 加载 workflow 的消息呈现 preset（push_message_presets；平台能力 2026-08-20）
  * 无 preset / 查询失败 → null（走默认 Novu content，向后兼容）
  */
-async function loadWorkflowPreset(workflowId: string): Promise<MessagePreset | null> {
+async function loadWorkflowPreset(workflowId: string, presetId?: string): Promise<MessagePreset | null> {
   const { postgrestUrl, postgrestKey } = getConfig();
   if (!postgrestUrl || !postgrestKey) return null;
   try {
-    const resp = await fetch(
-      `${postgrestUrl}/push_message_presets?workflow_id=eq.${encodeURIComponent(workflowId)}&enabled=eq.true`,
-      { headers: { Authorization: `Bearer ${postgrestKey}` } },
+    const where = presetId
+      ? `preset_id=eq.${encodeURIComponent(presetId)}`
+      : `workflow_id=eq.${encodeURIComponent(workflowId)}&enabled=eq.true`;
+    const resp = await fetch(`${postgrestUrl}/push_message_presets?${where}`, {
+      headers: { Authorization: `Bearer ${postgrestKey}` } },
     );
     if (!resp.ok) return null;
     const rows = await resp.json() as MessagePreset[];
@@ -386,7 +414,7 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
           }
           // 数值型 → 语义视图取真值（§12.1）；取不到 → null（该变量不渲染，M7 不拦）
           const v = enabledVars.find((x) => x.var_code === code);
-          return await resolveNumericValue(v?.metric_code, jwt);
+          return await resolveNumericValue(v?.metric_code, jwt, { mode: opts.targetMode ?? 'follow', id: opts.targetId }, code);
         },
         group.perms
       );
@@ -402,7 +430,7 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   //   workflow 配了 push_message_presets → 渲染 message_content（JSON 契约）进 payload，
   //   Novu content 固定 {{{message_content}}}（triple-stash：平铺上下文无 payload. 前缀 +
   //   双花括号会 HTML 转义破坏 JSON 契约，详见 message-preset.ts 头注释），
-  const preset = await loadWorkflowPreset(opts.workflowId);
+  const preset = await loadWorkflowPreset(opts.workflowId, opts.presetId);
   if (preset) {
     for (const g of renderedGroups) {
       g.rendered.message_content = renderPresetContent(preset, g.rendered);
