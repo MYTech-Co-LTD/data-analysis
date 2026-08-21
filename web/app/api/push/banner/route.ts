@@ -1,40 +1,42 @@
-// web/app/api/push/banner/route.ts
-// 横幅 GET 路由（架构 §7.4 横幅渲染）：验签 + d=北京今日 → 缓存命中返回 PNG，否则 sharp 现场渲染。
-// 企微无会话抓图，URL 带 HMAC 签名；B2：值已嵌入 URL，本路由纯渲染不查库。
+// 横幅 GET 路由（架构 §7.4 2026-08-21）：验签（k,e,sig 三参）+ 未过期 → S3 GetObject 读回 PNG。
+// 企微无会话抓图；值不落 URL（report_banner 已预渲染落对象存储）；私有桶经签名路由读回（防爬/防转发）。
+// 状态码：参数畸形/缺失 → 400；签名失败/过期 → 403；对象不存在 → 404；存储未配置/读失败 → 500。
+// 缓存头必须 private（RLS 数据防 CDN 缓存跨人复用；方案 C 的 public 已废弃）。
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyBanner, renderBannerPng, beijingToday, type BannerParams } from '@/lib/push/banner';
+import { verifyBannerObject } from '@/lib/push/banner-report-resolve';
+import { createBannerStorage, bannerKey } from '@/lib/push/banner-storage';
 
 export async function GET(req: NextRequest) {
-  // new URL(req.url) 与 req.nextUrl.searchParams 等价，但对普通 Request/NextRequest 都兼容（测试友好）
   const sp = new URL(req.url).searchParams;
-  const p: BannerParams = {
-    d: sp.get('d') ?? '',
-    t: sp.get('t') ?? '',
-    sale: sp.get('sale') ?? '',
-    rate: sp.get('rate') ?? '',
-  };
+  const k = sp.get('k') ?? '';
+  const eRaw = sp.get('e') ?? '';
   const sig = sp.get('sig') ?? '';
-  if (!verifyBanner(p, sig)) {
+  const e = Number(eRaw);
+  if (!k || !eRaw || !Number.isInteger(e)) {
+    return new NextResponse('bad request', { status: 400 });
+  }
+  if (!verifyBannerObject(k, e, sig)) {
     return new NextResponse('invalid signature', { status: 403 });
   }
-  // 只渲染今日横幅：签名已绑定 d，但防回放过期数据（昨日数值配今日卡片）
-  if (p.d !== beijingToday()) {
-    return new NextResponse('stale banner', { status: 404 });
+  if (Date.now() > e) {
+    return new NextResponse('expired', { status: 403 });
   }
-  if (!p.sale || !p.rate) {
-    return new NextResponse('missing data', { status: 400 });
+  const storage = createBannerStorage();
+  if (!storage) {
+    return new NextResponse('storage not configured', { status: 500 });
   }
   try {
-    const png = await renderBannerPng(p);
+    const png = await storage.get(bannerKey(k));
+    if (!png) return new NextResponse('not found', { status: 404 });
     return new NextResponse(new Uint8Array(png), {
       status: 200,
       headers: {
         'Content-Type': 'image/png',
-        'Cache-Control': 'public, max-age=3600',
+        'Cache-Control': 'private, max-age=3600',
       },
     });
-  } catch (e) {
-    console.error('[push/banner] 渲染失败:', (e as Error).message);
-    return new NextResponse('render failed', { status: 500 });
+  } catch (e2) {
+    console.error('[push/banner] 读对象失败:', (e2 as Error).message);
+    return new NextResponse('storage error', { status: 500 });
   }
 }
