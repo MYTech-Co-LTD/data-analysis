@@ -59,7 +59,9 @@ ENV HOSTNAME=0.0.0.0
 # 横幅 SVG 渲染（librsvg）需要系统 CJK 字体——alpine 基础镜像无任何字体，
 # 内嵌 @font-face data URI 不被 librsvg 加载，中文会渲染成方框/空白。
 # 装 fontconfig + Noto CJK 后字体回退可用（2026-08-21 生产验证：0%→6.1% 文字像素）。
-RUN apk add --no-cache fontconfig font-noto-cjk
+# 先用阿里云 mirror 换掉默认源（服务器到 dl-cdn.alpinelinux.org 极慢会超时 30m）。
+RUN sed -i 's#dl-cdn.alpinelinux.org#mirrors.aliyun.com#g' /etc/apk/repositories \
+  && apk add --no-cache fontconfig font-noto-cjk
 # CATALOG_V 随镜像固化（node 运行时侧读取兜底——API 路由 process.env.CATALOG_V；ARG 作用域每阶段独立需重声明）
 ARG CATALOG_V
 ENV CATALOG_V=$CATALOG_V
