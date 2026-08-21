@@ -14,37 +14,55 @@ const { sharpMock } = vi.hoisted(() => ({
 }));
 vi.mock('sharp', () => ({ default: sharpMock }));
 
-// mock 全局 fetch（PostgREST 3 视图 + 不真发 S3）
+// mock 全局 fetch（PostgREST 视图 + targets + freshness RPC + 不真发 S3）
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
 vi.stubGlobal('fetch', fetchMock);
 
-// 视图行数据（metric_code 为视图真码——report_achievement_gen 输出 mv.metric_code，join metric_definitions：
-//   sale/delivery/outbound_amt/outbound_profit；sale_amount/delivery_amount 是 push 注册码，非视图码——fix round 2）
+// 视图行数据（metric_code 为视图真码——report_achievement_gen 输出 mv.metric_code：
+//   sale/delivery/outbound_amt/outbound_profit；progress_rate/data_status 同视图列）
 const kpiRows = [
-  { target_id: 42, metric_code: 'sale', target_value: 100, actual_value: 4160000, achievement_rate: 0.606 },
-  { target_id: 42, metric_code: 'delivery', target_value: 100, actual_value: 1200000, achievement_rate: 0.88 },
-  { target_id: 42, metric_code: 'outbound_amt', target_value: 100, actual_value: 2100000, achievement_rate: 1.012 },
-  { target_id: 42, metric_code: 'outbound_profit', target_value: 100, actual_value: 320000, achievement_rate: 0.45 },
+  { target_id: 42, metric_code: 'sale', target_value: 6860000, actual_value: 4160000, achievement_rate: 0.606, progress_rate: 0.68, data_status: 'partial' },
+  { target_id: 42, metric_code: 'delivery', target_value: 1360000, actual_value: 1200000, achievement_rate: 0.88, progress_rate: 0.68, data_status: 'complete' },
+  { target_id: 42, metric_code: 'outbound_amt', target_value: 2080000, actual_value: 2100000, achievement_rate: 1.012, progress_rate: 0.68, data_status: 'complete' },
+  { target_id: 42, metric_code: 'outbound_profit', target_value: 710000, actual_value: 320000, achievement_rate: 0.45, progress_rate: 0.68, data_status: 'missing' },
 ];
 const brandRows = [
-  { system_book_code: '3120', brand_name: '熊喵鲜生', sale_amount: 3100000, sale_rate: 0.62 },
-  { system_book_code: '64188', brand_name: '品品甜', sale_amount: 1060000, sale_rate: 0.55 },
-  { system_book_code: '合计', brand_name: '合计', sale_amount: 4160000, sale_rate: 0.606 },
+  { system_book_code: '3120', brand_name: '熊喵鲜生', sale_target: 5000000, sale_amount: 3100000, sale_rate: 0.62, delivery_amount: 900000, delivery_profit: 120000, delivery_margin: 0.133 },
+  { system_book_code: '64188', brand_name: '品品甜', sale_target: 1860000, sale_amount: 1060000, sale_rate: 0.57, delivery_amount: 300000, delivery_profit: 30000, delivery_margin: 0.1 },
+  { system_book_code: '合计', brand_name: '合计', sale_target: 6860000, sale_amount: 4160000, sale_rate: 0.606, delivery_amount: 1200000, delivery_profit: 150000, delivery_margin: 0.125 },
 ];
 const regionRows = [
-  { region_name: '东', sale_actual: 1400000, sale_rate: 0.72 },
-  { region_name: '南', sale_actual: 1100000, sale_rate: 0.65 },
-  { region_name: '西', sale_actual: 980000, sale_rate: 0.58 },
-  { region_name: '中', sale_actual: 680000, sale_rate: 0.5 },
+  { region_name: '东部战区', sale_target: 2000000, sale_actual: 1440000, sale_rate: 0.72, delivery_target: 600000, delivery_actual: 300000, delivery_rate: 0.5, daily_sale: 48000, daily_delivery: 10000, remaining_daily_sale_target: 20000, remaining_daily_delivery_target: 10000 },
+  { region_name: '南部战区', sale_target: 1700000, sale_actual: 1100000, sale_rate: 0.65, delivery_target: 500000, delivery_actual: 200000, delivery_rate: 0.4, daily_sale: 37000, daily_delivery: 7000, remaining_daily_sale_target: 20000, remaining_daily_delivery_target: 10000 },
+  { region_name: '西部战区', sale_target: 1600000, sale_actual: 980000, sale_rate: 0.61, delivery_target: 500000, delivery_actual: 200000, delivery_rate: 0.4, daily_sale: 33000, daily_delivery: 7000, remaining_daily_sale_target: 21000, remaining_daily_delivery_target: 10000 },
+  { region_name: '中部战区', sale_target: 1500000, sale_actual: 640000, sale_rate: 0.427, delivery_target: 500000, delivery_actual: 100000, delivery_rate: 0.2, daily_sale: 21000, daily_delivery: 3000, remaining_daily_sale_target: 29000, remaining_daily_delivery_target: 16000 },
 ];
+const targetRow = { id: 42, name: '6月经营目标', status: 'active', start_date: '2026-06-01', end_date: '2026-06-30' };
+const freshnessRow = { data_updated_at: '2026-08-21T01:30:00+00:00', last_query_at: '2026-08-21T01:00:00+00:00' };
 
-function mockViews(rows: { kpi?: typeof kpiRows; brand?: typeof brandRows; region?: typeof regionRows }) {
+function mockViews(opts: {
+  kpi?: typeof kpiRows; brand?: Array<Record<string, unknown>>; region?: typeof regionRows;
+  target?: typeof targetRow | null; freshness?: typeof freshnessRow | null;
+  noTargetId?: boolean;
+} = {}) {
   fetchMock.mockReset();
-  fetchMock.mockImplementation(async (input: string | URL | Request) => {
+  fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
     const u = String(input);
-    if (u.includes('/report_achievement_gen')) return jsonResp(rows.kpi ?? kpiRows);
-    if (u.includes('/report_brand_metric_gen')) return jsonResp(rows.brand ?? brandRows);
-    if (u.includes('/report_region_breakdown_gen')) return jsonResp(rows.region ?? regionRows);
+    const body = init?.body ? String(init.body) : '';
+    if (u.includes('/report_achievement_gen')) {
+      const rows = opts.kpi ?? kpiRows;
+      return jsonResp(opts.noTargetId ? rows.map((r) => {
+        const { target_id, ...rest } = r; void target_id; return rest;
+      }) : rows);
+    }
+    if (u.includes('/report_brand_metric_gen')) return jsonResp(opts.brand ?? brandRows);
+    if (u.includes('/report_region_breakdown_gen')) return jsonResp(opts.region ?? regionRows);
+    if (u.includes('/targets?')) {
+      return jsonResp(opts.target === null ? [] : [opts.target ?? targetRow]);
+    }
+    if (u.includes('/rpc/get_data_freshness')) {
+      return jsonResp(opts.freshness === null ? [] : [opts.freshness ?? freshnessRow]);
+    }
     return jsonResp([]);
   });
 }
@@ -85,40 +103,100 @@ describe('signBannerObject/verifyBannerObject', () => {
 describe('resolveReportBannerData', () => {
   beforeEach(() => mockViews({}));
 
-  it('follow 模式：查 3 视图 → KPI 4 卡/品牌 3 行/战区 4 行，格式化正确', async () => {
+  it('follow 模式：查 3 视图 + targets + freshness → KPI 6 卡（4 金额 + 2 比率）/品牌 8 列/战区 13 列/头部', async () => {
     const data = await resolveReportBannerData({ jwt: 'jwt-1', targetMode: 'follow' });
     expect(data).not.toBeNull();
-    expect(data!.kpis).toHaveLength(4);
-    expect(data!.kpis[0].label).toBe('销售额');
-    expect(data!.kpis[0].value).toBe('¥4,160,000');
-    expect(data!.kpis[0].rate).toBe('60.6%');
-    expect(data!.kpis[0].rateColor).toBe('amber');
-    expect(data!.kpis[2].rateColor).toBe('green');   // 101.2%
-    expect(data!.kpis[3].rateColor).toBe('red');     // 45%
-    expect(data!.brands.map((b) => b.sbc)).toEqual(['3120', '64188', '合计']);
-    expect(data!.brands[0].name).toBe('熊喵鲜生');
-    expect(data!.regions.map((r) => r.name)).toEqual(['东', '南', '西', '中']);
+    const d = data!;
+    // 头部
+    expect(d.target.name).toBe('6月经营目标');
+    expect(d.target.status).toBe('active');
+    expect(d.target.startDate).toBe('2026-06-01');
+    expect(d.target.endDate).toBe('2026-06-30');
+    expect(d.target.dataUpdatedAt).toBe('2026-08-21 09:30'); // UTC → Asia/Shanghai 格式化
+    expect(d.target.lastQueryAt).toBe('2026-08-21 09:00');
+    // KPI 6 卡：4 金额 + 2 比率
+    expect(d.kpis).toHaveLength(6);
+    expect(d.kpis.map((k) => k.metricCode)).toEqual([
+      'sale', 'delivery', 'outbound_amt', 'outbound_profit', 'delivery_sale_ratio', 'outbound_margin',
+    ]);
+    // 金额卡：达成率 + 相对进度三色 + 副行（fmtWan 实际/目标 · 进度）+ 状态徽章
+    const sale = d.kpis[0];
+    expect(sale.label).toBe('销售额');
+    expect(sale.rate).toBe('60.6%');
+    expect(sale.subline).toBe('416.0万/686.0万 · 进度 68%'); // fmtWan：≥1万 → (v/10000).toFixed(1)万
+    expect(sale.rateColor).toBe('amber'); // 0.606/0.68 = 0.89 ≥ 0.8
+    expect(sale.status).toBe('partial');
+    const outbound = d.kpis[2];
+    expect(outbound.rateColor).toBe('green'); // 1.012/0.68 = 1.49 ≥ 1
+    expect(outbound.status).toBe('complete');
+    // 比率卡：总配销比（中性）+ 毛利率（绝对三色）
+    const ratio = d.kpis[4];
+    expect(ratio.label).toBe('总配销比');
+    expect(ratio.rate).toBe('29%'); // 1200000/4160000 → formatRatio 0 位小数
+    expect(ratio.rateColor).toBe('slate');
+    expect(ratio.subline).toContain('120.0万');
+    const margin = d.kpis[5];
+    expect(margin.label).toBe('毛利率');
+    expect(margin.rate).toBe('15.2%'); // 320000/2100000
+    expect(margin.rateColor).toBe('green'); // 0.152/0.12 = 1.27 ≥ 1
+    expect(margin.subline).toContain('目标 12%');
+    expect(ratio.status).toBeNull();
+    expect(margin.status).toBeNull();
+    // 品牌 8 列
+    expect(d.brands.map((b) => b.sbc)).toEqual(['3120', '64188', '合计']);
+    const b0 = d.brands[0];
+    expect(b0.name).toBe('熊喵鲜生');
+    expect(b0.saleTarget).toBe('¥500.0万');
+    expect(b0.saleAmount).toBe('¥310.0万');
+    expect(b0.saleRate).toBe('62.0%');
+    expect(b0.deliveryAmount).toBe('¥90.0万');
+    expect(b0.deliveryRatio).toBe('29%'); // 900000/3100000 → formatRatio 0 位小数
+    expect(b0.deliveryProfit).toBe('¥12.0万');
+    expect(b0.deliveryMargin).toBe('13.3%');
+    expect(b0.marginColor).toBe('green'); // 0.133/0.12
+    // 战区 13 列
+    expect(d.regions.map((r) => r.name)).toEqual(['东部战区', '南部战区', '西部战区', '中部战区']);
+    const r0 = d.regions[0];
+    expect(r0.saleTarget).toBe('¥200.0万');
+    expect(r0.saleRate).toBe('72.0%');
+    expect(r0.saleRateColor).toBe('green'); // 0.72/0.68 = 1.06 ≥ 1
+    expect(r0.deliveryTarget).toBe('¥60.0万');
+    expect(r0.deliveryRate).toBe('50.0%');
+    expect(r0.dailySale).toBe('¥4.8万');
+    expect(r0.remainingDailySaleTarget).toBe('¥2.0万');
+    expect(r0.ratioTarget).toBe('30%'); // 600000/2000000 → formatRatio 0 位小数
+    expect(r0.ratio).toBe('21%'); // 300000/1440000 → 0.2083
   });
 
-  it('follow 查询：KPI 含 status=active + 日期窗（PR #64），brand/region 用 KPI 派生 target_id', async () => {
+  it('follow 查询：KPI 含 status=active + 日期窗 + progress_rate/data_status；brand/region 扩展 select；targets + freshness RPC', async () => {
     await resolveReportBannerData({ jwt: 'jwt-1', targetMode: 'follow' });
-    const kpiCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_achievement_gen'));
-    const kpiUrl = String(kpiCall![0]);
+    const findCall = (path: string) => fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes(path));
+    const kpiUrl = String(findCall('report_achievement_gen')![0]);
     expect(kpiUrl).toContain('status=eq.active');
     expect(kpiUrl).toContain('start_date=lte.');
     expect(kpiUrl).toContain('end_date=gte.');
-    expect(kpiUrl).not.toContain('limit='); // fix round 1：去 limit 保 4 指标
-    expect(kpiUrl).not.toContain('metric_code='); // banner 一次取全 4 指标，不做单指标过滤（区别 resolveNumericValue）
-    const brandCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'));
-    const regionCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_region_breakdown_gen'));
-    expect(String(brandCall![0])).toContain('target_id=eq.42'); // follow 下从 KPI 行派生，非 target_id=eq.0
-    expect(String(regionCall![0])).toContain('target_id=eq.42');
+    expect(kpiUrl).not.toContain('limit=');
+    expect(kpiUrl).toContain('progress_rate');
+    expect(kpiUrl).toContain('data_status');
+    const brandUrl = String(findCall('report_brand_metric_gen')![0]);
+    expect(brandUrl).toContain('target_id=eq.42');
+    for (const col of ['sale_target', 'sale_amount', 'sale_rate', 'delivery_amount', 'delivery_profit', 'delivery_margin']) {
+      expect(brandUrl).toContain(col);
+    }
+    const regionUrl = String(findCall('report_region_breakdown_gen')![0]);
+    for (const col of ['sale_target', 'sale_actual', 'sale_rate', 'delivery_target', 'delivery_actual', 'delivery_rate', 'daily_sale', 'daily_delivery', 'remaining_daily_sale_target', 'remaining_daily_delivery_target']) {
+      expect(regionUrl).toContain(col);
+    }
+    const targetUrl = String(findCall('/targets?')![0]);
+    expect(targetUrl).toContain('id=eq.42');
+    const freshnessCall = findCall('/rpc/get_data_freshness');
+    expect(freshnessCall).toBeTruthy();
   });
 
-  it('fixed 模式：URL 带 target_id=eq', async () => {
+  it('fixed 模式：URL 带 target_id=eq；targets 按该 id 查', async () => {
     await resolveReportBannerData({ jwt: 'jwt-1', targetMode: 'fixed', targetId: 42 });
-    const brandCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'));
-    expect(String(brandCall![0])).toContain('target_id=eq.42');
+    const targetCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('/targets?'));
+    expect(String(targetCall![0])).toContain('id=eq.42');
   });
 
   it('KPI 查询失败 → null（整图不渲染）', async () => {
@@ -137,30 +215,37 @@ describe('resolveReportBannerData', () => {
     expect(data!.regions).toHaveLength(0);
   });
 
-  it('KPI 行无 target_id → 不发 brand/region 死查询，两板块空数组（fix round 1 裁定 1）', async () => {
-    // KPI 行不带 target_id（派生不到）→ 绝不发 target_id=eq.0，brand/region 保持空
-    fetchMock.mockReset();
-    fetchMock.mockImplementation(async (input: string | URL | Request) => {
-      const u = String(input);
-      if (u.includes('/report_achievement_gen')) {
-        // 剥掉 target_id（派生不到 target_id 的场景）
-        return jsonResp(kpiRows.map((r) => ({
-          metric_code: r.metric_code, target_value: r.target_value,
-          actual_value: r.actual_value, achievement_rate: r.achievement_rate,
-        })));
-      }
-      return jsonResp([]);
+  it('cost 不可见（delivery_profit/delivery_margin NULL）→ 「—」灰（can_cost_visible false 语义）', async () => {
+    mockViews({
+      brand: brandRows.map((r) => ({ ...r, delivery_profit: null, delivery_margin: null })),
     });
     const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
     expect(data).not.toBeNull();
-    expect(data!.kpis).toHaveLength(4); // KPI 主板块仍完整
+    for (const b of data!.brands) {
+      expect(b.deliveryProfit).toBe('—');
+      expect(b.deliveryMargin).toBe('—');
+      expect(b.marginColor).toBe('gray');
+    }
+  });
+
+  it('target 查不到 / freshness RPC 失败 → 头部降级（默认名/空时间），不整图失败', async () => {
+    mockViews({ target: null, freshness: null });
+    const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
+    expect(data).not.toBeNull();
+    expect(data!.target.name).toBe('报表');
+    expect(data!.target.dataUpdatedAt).toBeNull();
+    expect(data!.target.lastQueryAt).toBeNull();
+  });
+
+  it('KPI 行无 target_id → 不发 brand/region/targets 死查询，面板空数组 + 头部降级', async () => {
+    mockViews({ noTargetId: true });
+    const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
+    expect(data).not.toBeNull();
+    expect(data!.kpis).toHaveLength(6); // 4 金额 + 2 比率卡主板块仍完整（比率卡是派生值，不依赖 target_id）
     expect(data!.brands).toHaveLength(0);
     expect(data!.regions).toHaveLength(0);
-    const brandCalls = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'));
-    const regionCalls = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('report_region_breakdown_gen'));
-    expect(brandCalls).toHaveLength(0);
-    expect(regionCalls).toHaveLength(0);
-    // 全链路不出现死值 target_id=eq.0
+    expect(data!.target.name).toBe('报表');
+    expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'))).toBe(false);
     expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes('target_id=eq.0'))).toBe(false);
   });
 });
@@ -178,7 +263,7 @@ describe('buildReportBannerUrl', () => {
     expect(Buffer.isBuffer(body)).toBe(true);
     expect(url).toMatch(/^https:\/\/data\.shanhaiyiguo\.com\/api\/push\/banner\?k=[0-9a-f-]{36}&e=\d+&sig=/);
     // URL 不含任何值
-    expect(url).not.toContain('4,160');
+    expect(url).not.toContain('416万');
     expect(url).not.toContain('熊喵');
   });
 

@@ -612,7 +612,10 @@ describe('runPush', () => {
       resetCache();
 
       const { resolveReportBannerData, buildReportBannerUrl } = await import('../banner-report-resolve');
-      vi.mocked(resolveReportBannerData).mockResolvedValue({ date: '2026-08-21', kpis: [], brands: [], regions: [] });
+      vi.mocked(resolveReportBannerData).mockResolvedValue({
+        target: { name: '6月经营目标', status: 'active', startDate: '2026-06-01', endDate: '2026-06-30', dataUpdatedAt: null, lastQueryAt: null },
+        kpis: [], brands: [], regions: [],
+      });
       vi.mocked(buildReportBannerUrl).mockResolvedValue('https://data.shanhaiyiguo.com/api/push/banner?k=abc&e=99&sig=xyz');
 
       mockFetch.mockImplementation((url: string) => {
