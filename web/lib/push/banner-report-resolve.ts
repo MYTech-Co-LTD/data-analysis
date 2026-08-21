@@ -52,13 +52,16 @@ export function bannerExpiresAt(now: number): number {
 
 const fmtCN = (n: number): string => new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Math.round(n));
 
+// 视图真码（fix round 2）：report_achievement_gen 输出 mv.metric_code，join metric_definitions——
+//   046/057 种子只有 sale/purchase/outbound_amt/outbound_profit/delivery；sale_amount/delivery_amount 是 push
+//   注册码（index.ts METRIC_TO_VIEW 才映射），不是视图码，用作键永不命中 → 2 卡静默缺失。
 const KPI_LABELS: Record<string, string> = {
-  sale_amount: '销售额',
-  delivery_amount: '配送额',
+  sale: '销售额',
+  delivery: '配送额',
   outbound_amt: '出库额',
   outbound_profit: '出库毛利',
 };
-const KPI_ORDER = ['sale_amount', 'delivery_amount', 'outbound_amt', 'outbound_profit'];
+const KPI_ORDER = ['sale', 'delivery', 'outbound_amt', 'outbound_profit'];
 
 const fmtRate = (r: number | null | undefined): string =>
   r === null || r === undefined || Number.isNaN(Number(r)) || Number(r) <= 0 ? '--' : `${(Number(r) * 100).toFixed(1)}%`;

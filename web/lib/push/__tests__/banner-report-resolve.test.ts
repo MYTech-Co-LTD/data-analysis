@@ -18,10 +18,11 @@ vi.mock('sharp', () => ({ default: sharpMock }));
 const { fetchMock } = vi.hoisted(() => ({ fetchMock: vi.fn() }));
 vi.stubGlobal('fetch', fetchMock);
 
-// 视图行数据
+// 视图行数据（metric_code 为视图真码——report_achievement_gen 输出 mv.metric_code，join metric_definitions：
+//   sale/delivery/outbound_amt/outbound_profit；sale_amount/delivery_amount 是 push 注册码，非视图码——fix round 2）
 const kpiRows = [
-  { target_id: 42, metric_code: 'sale_amount', target_value: 100, actual_value: 4160000, achievement_rate: 0.606 },
-  { target_id: 42, metric_code: 'delivery_amount', target_value: 100, actual_value: 1200000, achievement_rate: 0.88 },
+  { target_id: 42, metric_code: 'sale', target_value: 100, actual_value: 4160000, achievement_rate: 0.606 },
+  { target_id: 42, metric_code: 'delivery', target_value: 100, actual_value: 1200000, achievement_rate: 0.88 },
   { target_id: 42, metric_code: 'outbound_amt', target_value: 100, actual_value: 2100000, achievement_rate: 1.012 },
   { target_id: 42, metric_code: 'outbound_profit', target_value: 100, actual_value: 320000, achievement_rate: 0.45 },
 ];
@@ -107,6 +108,7 @@ describe('resolveReportBannerData', () => {
     expect(kpiUrl).toContain('start_date=lte.');
     expect(kpiUrl).toContain('end_date=gte.');
     expect(kpiUrl).not.toContain('limit='); // fix round 1：去 limit 保 4 指标
+    expect(kpiUrl).not.toContain('metric_code='); // banner 一次取全 4 指标，不做单指标过滤（区别 resolveNumericValue）
     const brandCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'));
     const regionCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_region_breakdown_gen'));
     expect(String(brandCall![0])).toContain('target_id=eq.42'); // follow 下从 KPI 行派生，非 target_id=eq.0
