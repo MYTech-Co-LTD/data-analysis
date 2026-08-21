@@ -105,6 +105,11 @@ export function renderPresetContent(preset: MessagePreset, vars: Record<string, 
         ) {
           interpolated.card_image.url = vars.banner_url;
         }
+        // report_banner 变量未解析（模板引用但引擎解析失败/S3 挂/storage null）→ 回退静态占位图，
+        //   不得残留 {{report_banner}} 字面量（M7 fail-closed 会拒投整条消息——降级不拒投，Global Constraint 7）
+        if (interpolated.card_image?.url === '{{report_banner}}') {
+          interpolated.card_image.url = BANNER_PLACEHOLDER_URL;
+        }
         return JSON.stringify({
           msgtype: 'template_card',
           template_card: interpolated,

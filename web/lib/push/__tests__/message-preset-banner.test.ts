@@ -48,3 +48,28 @@ describe('renderPresetContent 横幅占位替换', () => {
     expect(json.template_card.card_image.url).toBe('https://x/y'); // deepInterpolate 自然解析 token
   });
 });
+
+// 报表数据横幅（Task 5，2026-08-21）：card_image.url = {{report_banner}}（未解析字面量）
+//   → 回退 BANNER_PLACEHOLDER_URL（降级不拒投，Global Constraint 7；M7 fail-closed 会拒投整条消息）
+const reportBannerPreset: MessagePreset = {
+  preset_id: 'scheduled-report-card',
+  workflow_id: 'scheduled-report',
+  msgtype: 'template_card',
+  enabled: true,
+  card_json: {
+    card_type: 'news_notice',
+    card_image: { url: '{{report_banner}}', aspect_ratio: 2.25 },
+  },
+};
+
+describe('report_banner 未解析回退', () => {
+  it('vars 无 report_banner → card_image.url 回退静态占位图（不残留 {{report_banner}} 字面量）', () => {
+    const out = JSON.parse(renderPresetContent(reportBannerPreset, { sale_amount: '¥1' }));
+    expect(out.template_card.card_image.url).toBe(BANNER_PLACEHOLDER_URL);
+    expect(JSON.stringify(out)).not.toContain('{{report_banner}}');
+  });
+  it('vars 有 report_banner → 用签名 URL（deepInterpolate 替换）', () => {
+    const out = JSON.parse(renderPresetContent(reportBannerPreset, { report_banner: 'https://x/api/push/banner?k=1&sig=2' }));
+    expect(out.template_card.card_image.url).toBe('https://x/api/push/banner?k=1&sig=2');
+  });
+});

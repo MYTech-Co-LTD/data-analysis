@@ -33,6 +33,28 @@ vi.mock('../guards', () => ({
   isPaused: vi.fn().mockResolvedValue(false),
 }));
 
+// report_banner 引擎接线（Task 5，2026-08-21）：mock S3 客户端（不真连 OOS）+ 固定解析/URL；
+//   templateRefersReportBanner/REPORT_BANNER_VAR 保持真实（引擎「模板引用才预渲染」判定必须真实走）
+vi.mock('../banner-storage', () => ({
+  createBannerStorage: vi.fn(() => ({
+    put: vi.fn().mockResolvedValue(undefined),
+    get: vi.fn().mockResolvedValue(null),
+    list: vi.fn().mockResolvedValue([]),
+    del: vi.fn().mockResolvedValue(undefined),
+  })),
+  BANNER_PREFIX: 'push-assets/banner/',
+  bannerKey: (uuid: string) => `push-assets/banner/${uuid}.png`,
+  uuidFromKey: () => null,
+}));
+vi.mock('../banner-report-resolve', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../banner-report-resolve')>();
+  return {
+    ...actual,
+    resolveReportBannerData: vi.fn(),
+    buildReportBannerUrl: vi.fn(),
+  };
+});
+
 // mock global fetch
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
@@ -579,5 +601,116 @@ describe('runPush', () => {
     });
     expect(result.mode).toBe('shadow');
     expect(result.error).toBeUndefined();
+  });
+
+  describe('report_banner 引擎接线', () => {
+    it('模板引用 {{report_banner}} → 每组渲染出 report_banner URL 且 message_content 无残余 token', async () => {
+      vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+        { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+      ]));
+      const { resetCache } = await import('../push-variables');
+      resetCache();
+
+      const { resolveReportBannerData, buildReportBannerUrl } = await import('../banner-report-resolve');
+      vi.mocked(resolveReportBannerData).mockResolvedValue({ date: '2026-08-21', kpis: [], brands: [], regions: [] });
+      vi.mocked(buildReportBannerUrl).mockResolvedValue('https://data.shanhaiyiguo.com/api/push/banner?k=abc&e=99&sig=xyz');
+
+      mockFetch.mockImplementation((url: string) => {
+        if (url.includes('require_push_owner')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+        }
+        if (url.includes('org_users')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'u1', wecom_id: 'wx1', is_active: true }]) });
+        }
+        if (url.includes('get_user_perms_strict')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }) });
+        }
+        if (url.includes('push_message_presets')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([
+            { preset_id: 'preset-banner', workflow_id: 'w', msgtype: 'template_card', card_json: { card_type: 'news_notice', card_image: { url: '{{report_banner}}', aspect_ratio: 2.25 } }, enabled: true },
+          ]) });
+        }
+        if (url.includes('report_achievement_gen')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([{ actual_value: 42, achievement_rate: 0.5 }]) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      });
+
+      const { runPush } = await import('../index');
+      const result = await runPush({
+        workflowId: 'scheduled-report',
+        presetId: 'preset-banner',
+        selector: { kind: 'person', ids: ['wx1'] },
+        operatorId: 'admin',
+        broadcastPerm: false,
+        deliver: false,
+      });
+
+      const rendered = result.renderedGroups?.[0]?.rendered ?? {};
+      // 签名 URL 注入 report_banner 变量（每组）
+      expect(rendered.report_banner).toBe('https://data.shanhaiyiguo.com/api/push/banner?k=abc&e=99&sig=xyz');
+      // 组代签 JWT 预渲染：resolve 恰调一次，targetMode 默认 follow，jwt 非空
+      expect(vi.mocked(resolveReportBannerData)).toHaveBeenCalledTimes(1);
+      const opts = vi.mocked(resolveReportBannerData).mock.calls[0][0];
+      expect(opts.targetMode).toBe('follow');
+      expect(opts.jwt).toBeTruthy();
+      // build 拿到 data + storage
+      expect(vi.mocked(buildReportBannerUrl)).toHaveBeenCalledTimes(1);
+      // message_content JSON 中 card_image.url === rendered.report_banner（无残余 token）
+      const mc = JSON.parse(rendered.message_content);
+      expect(mc.template_card.card_image.url).toBe('https://data.shanhaiyiguo.com/api/push/banner?k=abc&e=99&sig=xyz');
+      expect(rendered.message_content).not.toContain('{{report_banner}}');
+    });
+
+    it('模板未引用 {{report_banner}} → 不预渲染（resolve/build 零调用）', async () => {
+      vi.stubEnv('PUSH_VARIABLES_JSON', JSON.stringify([
+        { var_code: 'sale_amount', name: '销售额', metric_code: 'sale_amount', scope_dim: 'total', unit: '元', enabled: true },
+      ]));
+      const { resetCache } = await import('../push-variables');
+      resetCache();
+
+      const { resolveReportBannerData, buildReportBannerUrl } = await import('../banner-report-resolve');
+
+      mockFetch.mockImplementation((url: string) => {
+        if (url.includes('require_push_owner')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([{ paused: false }]) });
+        }
+        if (url.includes('org_users')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([{ id: 'u1', wecom_id: 'wx1', is_active: true }]) });
+        }
+        if (url.includes('get_user_perms_strict')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve({ brands: ['*'], branch_nums: ['*'], categories: [], can_see_cost: true }) });
+        }
+        // 普通 template_card preset：无 {{report_banner}} token
+        if (url.includes('push_message_presets')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([
+            { preset_id: 'preset-plain', workflow_id: 'w', msgtype: 'template_card', card_json: { card_type: 'news_notice', main_title: { title: 'X {{sale_amount}}' } }, enabled: true },
+          ]) });
+        }
+        if (url.includes('report_achievement_gen')) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve([{ actual_value: 42, achievement_rate: 0.5 }]) });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve([]) });
+      });
+
+      const { runPush } = await import('../index');
+      const result = await runPush({
+        workflowId: 'scheduled-report',
+        presetId: 'preset-plain',
+        selector: { kind: 'person', ids: ['wx1'] },
+        operatorId: 'admin',
+        broadcastPerm: false,
+        deliver: false,
+      });
+
+      // 零预渲染：resolve/build 均未被调用（模板未引用 token）
+      expect(vi.mocked(resolveReportBannerData)).not.toHaveBeenCalled();
+      expect(vi.mocked(buildReportBannerUrl)).not.toHaveBeenCalled();
+      const rendered = result.renderedGroups?.[0]?.rendered ?? {};
+      expect(rendered.report_banner).toBeUndefined();
+      // message_content 正常渲染（既有路径不受影响）
+      const mc = JSON.parse(rendered.message_content);
+      expect(mc.template_card.main_title.title).toBe('X ¥42');
+    });
   });
 });

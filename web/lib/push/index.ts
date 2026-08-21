@@ -19,7 +19,7 @@
 import { randomUUID } from 'crypto';
 import { type Selector, resolveRecipients, type ResolverDeps } from './selectors';
 import { type Perms, groupRecipients } from './engine';
-import { renderVariables } from './render';
+import { generateScopedJwt, renderVariables } from './render';
 import { triggerBulk, upsertSubscriber, newBridgeToken } from './novu-client';
 import { fallbackSend, type FallbackGroup } from './fallback';
 import { getPushVariables } from './push-variables';
@@ -27,6 +27,8 @@ import { isPaused } from './guards';
 import { auditPushTrigger, auditPushPayload } from './audit';
 import { renderPresetContent, type MessagePreset } from './message-preset';
 import { injectBanner } from './banner';
+import { REPORT_BANNER_VAR, templateRefersReportBanner, resolveReportBannerData, buildReportBannerUrl } from './banner-report-resolve';
+import { createBannerStorage } from './banner-storage';
 
 // 运行时配置
 function getConfig() {
@@ -395,6 +397,11 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   const { groups, skipped } = await groupRecipients(recipients, getPermsStrict);
 
   // ─── 渲染 ───
+  //   preset 先于 renderVariables 加载（index.ts:435 上移）：getVariableValue 闭包与 preset 循环共享同一份
+  //   （workflow 配了 push_message_presets → 渲染 message_content（JSON 契约）进 payload，
+  //   Novu content 固定 {{{message_content}}}（triple-stash：平铺上下文无 payload. 前缀 +
+  //   双花括号会 HTML 转义破坏 JSON 契约，详见 message-preset.ts 头注释））
+  const preset = await loadWorkflowPreset(opts.workflowId, opts.presetId);
 
   const enabledVars = (await getPushVariables()).filter((v) => v.enabled);
   const varCodes = enabledVars.map((v) => v.var_code);
@@ -429,14 +436,29 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   );
 
   // ─── 消息呈现 preset（平台能力 2026-08-20）───
-  //   workflow 配了 push_message_presets → 渲染 message_content（JSON 契约）进 payload，
-  //   Novu content 固定 {{{message_content}}}（triple-stash：平铺上下文无 payload. 前缀 +
-  //   双花括号会 HTML 转义破坏 JSON 契约，详见 message-preset.ts 头注释），
-  const preset = await loadWorkflowPreset(opts.workflowId, opts.presetId);
+  const storage = preset ? createBannerStorage() : null; // 惰性；无 S3 env → null（跳过预渲染）
   if (preset) {
     for (const g of renderedGroups) {
       // 横幅注入（架构 §7.4 方案 C）：template_card + card_image 占位 + 槽位值齐 → 组签名 URL 进 banner_url
       injectBanner(preset, g.rendered, opts.targetId);
+      // 报表数据横幅（2026-08-21）：模板引用 {{report_banner}} → 组代签 JWT 预渲染 + S3 写 + 签名短 URL。
+      //   storage null（无 S3 env）/ 解析失败 / build 失败 → 不设 report_banner → message-preset 回退占位图（降级不拒投）
+      if (
+        storage &&
+        preset.msgtype === 'template_card' &&
+        templateRefersReportBanner(preset.card_json)
+      ) {
+        const jwt = await generateScopedJwt(g.perms);
+        const data = await resolveReportBannerData({
+          jwt,
+          targetMode: opts.targetMode ?? 'follow',
+          targetId: opts.targetId,
+        });
+        if (data) {
+          const url = await buildReportBannerUrl(data, storage);
+          if (url) g.rendered[REPORT_BANNER_VAR] = url;
+        }
+      }
       g.rendered.message_content = renderPresetContent(preset, g.rendered);
     }
   }
