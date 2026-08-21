@@ -96,6 +96,23 @@ WHERE order_detail_bizday='20260820' GROUP BY 1 ORDER BY 2 DESC;
 -- 明细 join 维表必须复合键：ON rd.system_book_code=db.system_book_code AND rd.branch_num=db.branch_num
 ```
 
+**⑩ 出库明细（outbound_detail，配送∪批发合并表，跨品牌/区域统一查）**：
+- **业务模型**：熊喵自营配送在 delivery（transfer_detail）；品品甜经熊喵供应链拿货在 wholesale（wholesale_detail，client_name→64188门店映射）。合并表=两表 UNION，品牌/区域/门店一张表查。
+- **列**：biz_type（delivery/wholesale）、sbc（3120=熊喵/64188=品品甜）、branch_num（门店号）、biz_date（YYYY-MM-DD）、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name、category。已按权限行级裁剪。
+- **适用**：配送/批发/出库明细分析、跨品牌对比、归因分析（哪家店哪天差、哪个商品多、为什么）：
+```sql
+-- 某店 8月 每日出库（配送+批发合并）
+SELECT biz_date, biz_type, CAST(SUM(amount) AS DOUBLE) amt
+FROM outbound_detail WHERE branch_num='1' AND biz_date>='2026-08-01' GROUP BY 1,2 ORDER BY 1;
+-- 品品甜门店批发按日
+SELECT biz_date, CAST(SUM(amount) AS DOUBLE) amt FROM outbound_detail
+WHERE sbc='64188' AND biz_type='wholesale' GROUP BY 1 ORDER BY 1 DESC LIMIT 7;
+-- 8/20 出库商品 Top
+SELECT item_name, CAST(SUM(amount) AS DOUBLE) amt FROM outbound_detail
+WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+```
+- **注意**：profit 无权限=NULL；biz_date 是字符串 'YYYY-MM-DD'（不是 YYYYMMDD）；branch_num 是门店号（跨品牌门店号可能重复，聚合用 sbc+branch_num 或 branch_name）。
+
 **规则**：报表中心有的指标/看板 → 用 ①-⑧ 模板（同口径，禁止明细自行聚合）；只有模板没有的自由维度 → 才用 ⑨。
 
 ## 回答规则（简短，严格遵守）
