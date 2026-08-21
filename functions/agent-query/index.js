@@ -289,7 +289,8 @@ async function runDuckdb(userSelect, perms, reg) {
     "CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, item_category AS category " +
     "FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet', filename=true) " +
     "UNION ALL " +
-    "SELECT 'wholesale' AS biz_type, COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, " +
+    "SELECT CASE WHEN db.branch_num IS NULL THEN 'wholesale_ext' ELSE 'wholesale' END AS biz_type, " +
+    "COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, " +
     "COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, " +
     "CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, " +
     "d.pos_item_name AS item_name, d.pos_item_category_name AS category " +

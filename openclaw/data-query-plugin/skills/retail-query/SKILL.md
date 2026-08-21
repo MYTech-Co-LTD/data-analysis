@@ -98,7 +98,8 @@ WHERE order_detail_bizday='20260820' GROUP BY 1 ORDER BY 2 DESC;
 
 **⑩ 出库明细（outbound_detail，配送∪批发合并表，跨品牌/区域统一查）**：
 - **业务模型**：熊喵自营配送在 delivery（transfer_detail）；品品甜经熊喵供应链拿货在 wholesale（wholesale_detail，client_name→64188门店映射）。合并表=两表 UNION，品牌/区域/门店一张表查。
-- **列**：biz_type（delivery/wholesale）、sbc（3120=熊喵/64188=品品甜）、branch_num（门店号）、biz_date（YYYY-MM-DD）、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name、category。已按权限行级裁剪。
+- **列**：biz_type（delivery=熊喵自营配送 / wholesale=品品甜批发 / **wholesale_ext=外部批发客户**）、sbc（3120=熊喵/64188=品品甜）、branch_num（门店号）、biz_date（YYYY-MM-DD）、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name、category。已按权限行级裁剪。
+- **口径**：**门店出库 = delivery + wholesale（品品甜）**；**wholesale_ext（外部批发客户，branch_num=99）不算门店出库**——统计"出库金额/配送"时必须排除 biz_type='wholesale_ext'（或单独列示）。
 - **适用**：配送/批发/出库明细分析、跨品牌对比、归因分析（哪家店哪天差、哪个商品多、为什么）：
 ```sql
 -- 某店 8月 每日出库（配送+批发合并）
