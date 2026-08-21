@@ -1,10 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { bannerKey, uuidFromKey, createBannerStorage, BANNER_PREFIX } from '../banner-storage';
 
-const { s3Instances } = vi.hoisted(() => ({ s3Instances: [] as Array<Record<string, unknown>> }));
+const { s3Instances, s3Clients } = vi.hoisted(() => ({
+  s3Instances: [] as Array<Record<string, unknown>>,
+  s3Clients: [] as Array<{ send: ReturnType<typeof vi.fn> }>,
+}));
 vi.mock('@aws-sdk/client-s3', () => {
   class S3Client {
-    constructor(cfg: Record<string, unknown>) { s3Instances.push(cfg); }
+    constructor(cfg: Record<string, unknown>) { s3Instances.push(cfg); s3Clients.push(this as never); }
     send = vi.fn();
   }
   const ok = { $metadata: {} };
@@ -47,5 +50,20 @@ describe('createBannerStorage', () => {
     expect(cfg.endpoint).toBe('http://xinan-1.zos.ctyun.cn');
     expect(cfg.region).toBe('xinan-1');
     expect(cfg.forcePathStyle).toBe(true);
+  });
+});
+
+describe('get 对象不存在', () => {
+  // 生产实测（2026-08-21）：天翼云 OOS 对不存在对象 GetObjectCommand 抛 NoSuchKey（$metadata.httpStatusCode=404），
+  // 契约 get(): Promise<Buffer | null> —— null 表示对象不存在（路由据此返 404），不得 reject。
+  it('NoSuchKey → resolve null（不 reject）', async () => {
+    const s = createBannerStorage({
+      S3_ENDPOINT: 'http://xinan-1.zos.ctyun.cn',
+      OOS_ACCESS_KEY: 'ak', OOS_SECRET_KEY: 'sk', OOS_BUCKET: 'b',
+    });
+    expect(s).not.toBeNull();
+    const client = s3Clients[s3Clients.length - 1];
+    client.send.mockRejectedValueOnce({ name: 'NoSuchKey', $metadata: { httpStatusCode: 404 } });
+    await expect(s!.get('push-assets/banner/abc-1234.png')).resolves.toBeNull();
   });
 });

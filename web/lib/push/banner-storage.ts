@@ -44,10 +44,17 @@ export function createBannerStorage(env?: Partial<Record<string, string>>): Bann
       await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
     },
     async get(key) {
-      const r = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-      if (!r.Body) return null;
-      const bytes = await r.Body.transformToByteArray();
-      return Buffer.from(bytes);
+      // 契约：对象不存在返回 null（路由据此 404），不 reject。
+      // 天翼云 OOS 对不存在对象 GetObjectCommand 抛 NoSuchKey（$metadata.httpStatusCode=404）——生产实测确认。
+      try {
+        const r = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        if (!r.Body) return null;
+        const bytes = await r.Body.transformToByteArray();
+        return Buffer.from(bytes);
+      } catch (e) {
+        if ((e as { name?: string; $metadata?: { httpStatusCode?: number } }).name === 'NoSuchKey') return null;
+        throw e;
+      }
     },
     async list(prefix) {
       const r = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
