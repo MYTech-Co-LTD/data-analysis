@@ -92,34 +92,29 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
   const base = opts.postgrestUrl ?? process.env.POSTGREST_URL ?? '';
   if (!base) return null;
   const today = beijingToday();
-  // PR #64：KPI 只取 active 当前周期单行。fixed → target_id 定点；follow → 日期窗包住今天。
+  // PR #64：KPI 只取 active 当前周期。fixed → target_id 定点；follow → 日期窗包住今天。
+  // 不设 limit：report_achievement_gen 每指标一行，limit=1 会把 4 张卡截成 1 张（fix round 1 裁定 2）。
   const targetFilter = opts.targetMode === 'fixed' && opts.targetId
     ? `&target_id=eq.${opts.targetId}`
     : `&start_date=lte.${today}&end_date=gte.${today}`;
-  // 品牌/战区视图以 target_id 为键（follow 无定点 id 时用 0 占位——Task 5 接线确认真实用法）
-  const brandTargetId = opts.targetId ?? 0;
 
-  const [kpiRows, brandRows, regionRows] = await Promise.all([
-    queryRows(
-      `${base}/report_achievement_gen?select=metric_code,target_value,actual_value,achievement_rate`
-      + `&target_level=eq.total&status=eq.active${targetFilter}&order=start_date.desc,end_date.asc&limit=1`,
-      opts.jwt,
-    ),
-    queryRows(
-      `${base}/report_brand_metric_gen?select=system_book_code,brand_name,sale_amount,sale_rate`
-      + `&target_id=eq.${brandTargetId}&order=system_book_code.asc`,
-      opts.jwt,
-    ),
-    queryRows(
-      `${base}/report_region_breakdown_gen?select=region_name,sale_actual,sale_rate`
-      + `&target_id=eq.${brandTargetId}&level=eq.region&order=sale_rate.desc`,
-      opts.jwt,
-    ),
-  ]);
-
+  // KPI 是主查询，先完成——品牌/战区视图只认 target_id 键且无日期输出列，
+  // target_id 须从 KPI 当前周期行派生（follow 日期窗锁定的行自带；fixed 行同样携带 targetId）。
+  const kpiRows = await queryRows(
+    `${base}/report_achievement_gen?select=target_id,metric_code,target_value,actual_value,achievement_rate`
+    + `&target_level=eq.total&status=eq.active${targetFilter}&order=start_date.desc,end_date.asc`,
+    opts.jwt,
+  );
   // KPI：查询失败 → 整图失败（主板块）；空 → 空卡（占位由渲染层兜底）
   if (kpiRows === null) return null;
-  const kpiByCode = new Map((kpiRows as Array<Record<string, unknown>>).map((r) => [r.metric_code, r]));
+
+  // 首现去重：order=start_date.desc 新目标在前，跨重叠 active 目标时保留新目标行——
+  // Map.set 覆盖会让旧目标行覆盖新目标行（语义反了），故 only-first-wins（fix round 1 裁定 3）。
+  const kpiByCode = new Map<string, Record<string, unknown>>();
+  for (const r of kpiRows as Array<Record<string, unknown>>) {
+    const code = String(r.metric_code);
+    if (!kpiByCode.has(code)) kpiByCode.set(code, r);
+  }
   const kpis: BannerKpiCard[] = KPI_ORDER
     .filter((code) => kpiByCode.has(code))
     .map((code) => {
@@ -134,39 +129,59 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
       };
     });
 
-  // 品牌：固定序 3120 → 64188 → 合计（合计 = 视图自带合计行）；局部空 → 空数组
-  const brands: BannerBrandRow[] = (brandRows ?? [])
-    .map((r) => r as Record<string, unknown>)
-    .filter((r) => r.system_book_code !== undefined)
-    .sort((a, b) => {
-      const order = (s: unknown): number =>
-        String(s) === '3120' ? 0 : String(s) === '64188' ? 1 : 2;
-      return order(a.system_book_code) - order(b.system_book_code);
-    })
-    .map((r) => {
-      const rateNum = Number(r.sale_rate ?? 0);
-      return {
-        sbc: String(r.system_book_code),
-        name: String(r.brand_name ?? r.system_book_code),
-        sale: fmtMoney(r.sale_amount as number | null | undefined),
-        rate: fmtRate(r.sale_rate as number | null | undefined),
-        rateColor: rateColor(rateNum > 0 ? rateNum : null),
-      };
-    });
+  // 品牌/战区：target_id 从 KPI 首行派生；派生不到 → 空数组（绝不发 target_id=eq.0 死查询，fix round 1 裁定 1）
+  const rawTargetId = (kpiRows as Array<Record<string, unknown>>)[0]?.target_id;
+  const panelTargetId = rawTargetId === undefined || rawTargetId === null ? null : Number(rawTargetId);
+  let brands: BannerBrandRow[] = [];
+  let regions: BannerRegionRow[] = [];
+  if (panelTargetId !== null && !Number.isNaN(panelTargetId)) {
+    const [brandRows, regionRows] = await Promise.all([
+      queryRows(
+        `${base}/report_brand_metric_gen?select=system_book_code,brand_name,sale_amount,sale_rate`
+        + `&target_id=eq.${panelTargetId}&order=system_book_code.asc`,
+        opts.jwt,
+      ),
+      queryRows(
+        `${base}/report_region_breakdown_gen?select=region_name,sale_actual,sale_rate`
+        + `&target_id=eq.${panelTargetId}&level=eq.region&order=sale_rate.desc`,
+        opts.jwt,
+      ),
+    ]);
 
-  // 战区：只取 level=region 行（后端已按 sale_rate desc 排序）；局部空 → 空数组
-  const regions: BannerRegionRow[] = (regionRows ?? [])
-    .map((r) => r as Record<string, unknown>)
-    .filter((r) => r.region_name !== undefined)
-    .map((r) => {
-      const rateNum = Number(r.sale_rate ?? 0);
-      return {
-        name: String(r.region_name),
-        sale: fmtMoney(r.sale_actual as number | null | undefined),
-        rate: fmtRate(r.sale_rate as number | null | undefined),
-        rateColor: rateColor(rateNum > 0 ? rateNum : null),
-      };
-    });
+    // 品牌：固定序 3120 → 64188 → 合计（合计 = 视图自带合计行）；局部空 → 空数组
+    brands = (brandRows ?? [])
+      .map((r) => r as Record<string, unknown>)
+      .filter((r) => r.system_book_code !== undefined)
+      .sort((a, b) => {
+        const order = (s: unknown): number =>
+          String(s) === '3120' ? 0 : String(s) === '64188' ? 1 : 2;
+        return order(a.system_book_code) - order(b.system_book_code);
+      })
+      .map((r) => {
+        const rateNum = Number(r.sale_rate ?? 0);
+        return {
+          sbc: String(r.system_book_code),
+          name: String(r.brand_name ?? r.system_book_code),
+          sale: fmtMoney(r.sale_amount as number | null | undefined),
+          rate: fmtRate(r.sale_rate as number | null | undefined),
+          rateColor: rateColor(rateNum > 0 ? rateNum : null),
+        };
+      });
+
+    // 战区：只取 level=region 行（后端已按 sale_rate desc 排序）；局部空 → 空数组
+    regions = (regionRows ?? [])
+      .map((r) => r as Record<string, unknown>)
+      .filter((r) => r.region_name !== undefined)
+      .map((r) => {
+        const rateNum = Number(r.sale_rate ?? 0);
+        return {
+          name: String(r.region_name),
+          sale: fmtMoney(r.sale_actual as number | null | undefined),
+          rate: fmtRate(r.sale_rate as number | null | undefined),
+          rateColor: rateColor(rateNum > 0 ? rateNum : null),
+        };
+      });
+  }
 
   return { date: today, kpis, brands, regions };
 }

@@ -20,10 +20,10 @@ vi.stubGlobal('fetch', fetchMock);
 
 // 视图行数据
 const kpiRows = [
-  { metric_code: 'sale_amount', target_value: 100, actual_value: 4160000, achievement_rate: 0.606 },
-  { metric_code: 'delivery_amount', target_value: 100, actual_value: 1200000, achievement_rate: 0.88 },
-  { metric_code: 'outbound_amt', target_value: 100, actual_value: 2100000, achievement_rate: 1.012 },
-  { metric_code: 'outbound_profit', target_value: 100, actual_value: 320000, achievement_rate: 0.45 },
+  { target_id: 42, metric_code: 'sale_amount', target_value: 100, actual_value: 4160000, achievement_rate: 0.606 },
+  { target_id: 42, metric_code: 'delivery_amount', target_value: 100, actual_value: 1200000, achievement_rate: 0.88 },
+  { target_id: 42, metric_code: 'outbound_amt', target_value: 100, actual_value: 2100000, achievement_rate: 1.012 },
+  { target_id: 42, metric_code: 'outbound_profit', target_value: 100, actual_value: 320000, achievement_rate: 0.45 },
 ];
 const brandRows = [
   { system_book_code: '3120', brand_name: '熊喵鲜生', sale_amount: 3100000, sale_rate: 0.62 },
@@ -99,14 +99,18 @@ describe('resolveReportBannerData', () => {
     expect(data!.regions.map((r) => r.name)).toEqual(['东', '南', '西', '中']);
   });
 
-  it('follow 查询 URL 含 status=active + 日期窗 + limit 单行（PR #64）', async () => {
+  it('follow 查询：KPI 含 status=active + 日期窗（PR #64），brand/region 用 KPI 派生 target_id', async () => {
     await resolveReportBannerData({ jwt: 'jwt-1', targetMode: 'follow' });
     const kpiCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_achievement_gen'));
-    const url = String(kpiCall![0]);
-    expect(url).toContain('status=eq.active');
-    expect(url).toContain('start_date=lte.');
-    expect(url).toContain('end_date=gte.');
-    expect(url).toContain('limit=1');
+    const kpiUrl = String(kpiCall![0]);
+    expect(kpiUrl).toContain('status=eq.active');
+    expect(kpiUrl).toContain('start_date=lte.');
+    expect(kpiUrl).toContain('end_date=gte.');
+    expect(kpiUrl).not.toContain('limit='); // fix round 1：去 limit 保 4 指标
+    const brandCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'));
+    const regionCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_region_breakdown_gen'));
+    expect(String(brandCall![0])).toContain('target_id=eq.42'); // follow 下从 KPI 行派生，非 target_id=eq.0
+    expect(String(regionCall![0])).toContain('target_id=eq.42');
   });
 
   it('fixed 模式：URL 带 target_id=eq', async () => {
@@ -129,6 +133,33 @@ describe('resolveReportBannerData', () => {
     const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
     expect(data).not.toBeNull();
     expect(data!.regions).toHaveLength(0);
+  });
+
+  it('KPI 行无 target_id → 不发 brand/region 死查询，两板块空数组（fix round 1 裁定 1）', async () => {
+    // KPI 行不带 target_id（派生不到）→ 绝不发 target_id=eq.0，brand/region 保持空
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async (input: string | URL | Request) => {
+      const u = String(input);
+      if (u.includes('/report_achievement_gen')) {
+        // 剥掉 target_id（派生不到 target_id 的场景）
+        return jsonResp(kpiRows.map((r) => ({
+          metric_code: r.metric_code, target_value: r.target_value,
+          actual_value: r.actual_value, achievement_rate: r.achievement_rate,
+        })));
+      }
+      return jsonResp([]);
+    });
+    const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
+    expect(data).not.toBeNull();
+    expect(data!.kpis).toHaveLength(4); // KPI 主板块仍完整
+    expect(data!.brands).toHaveLength(0);
+    expect(data!.regions).toHaveLength(0);
+    const brandCalls = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'));
+    const regionCalls = fetchMock.mock.calls.filter((c: unknown[]) => String(c[0]).includes('report_region_breakdown_gen'));
+    expect(brandCalls).toHaveLength(0);
+    expect(regionCalls).toHaveLength(0);
+    // 全链路不出现死值 target_id=eq.0
+    expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes('target_id=eq.0'))).toBe(false);
   });
 });
 
