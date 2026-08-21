@@ -22,6 +22,7 @@ import { driftReportManifest } from './thin-sync/drift-manifest';
 import { permShadowManifest } from './perm-shadow/manifest';
 import { pushContractManifest } from './push-contract/manifest';
 import { pushTtlCleanupManifest } from './push-ttl-cleanup/manifest';
+import { pushBannerCleanupManifest } from './push-banner-cleanup/manifest';
 
 export { collectManifest };
 
@@ -39,6 +40,7 @@ export const JOBS: JobManifest[] = [
   permShadowManifest,
   pushContractManifest,
   pushTtlCleanupManifest,
+  pushBannerCleanupManifest,
   reconcileGroupsManifest,
   reconcileCatalogManifest,
   reconcileScopeResourcesManifest,
