@@ -273,6 +273,29 @@ async function runDuckdb(userSelect, perms, reg) {
     "FROM (SELECT * REPLACE (" + replaceList + ") " +
     "FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t) rd " +
     "LEFT JOIN dim_branch db ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num;";
+  // outbound_detail 合并视图（2026-08-20）：出库明细 = 配送(delivery) ∪ 批发(wholesale)，
+  //   业务模型：熊喵自营配送在 transfer_detail(3120)；品品甜经熊喵供应链的批发在 wholesale_detail，
+  //   client_name→64188门店映射（066 同款）。权限沙箱 = (sbc+branch_num) normKey 归一套用户键，
+  //   profit 毛利按 can_see_cost 脱敏；外部客户(99)不在任何门店权限内自然被滤。
+  const outboundFilter = allBranches
+    ? ""
+    : authKeys.length === 0
+      ? "WHERE 1=0"
+      : "WHERE regexp_replace(sbc || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2') IN (" + authKeys.map(sqlLit).join(", ") + ")";
+  const outboundProfit = `CASE WHEN ${canSee} THEN t.profit ELSE NULL END AS profit`;
+  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT biz_type, sbc, branch_num, biz_date, amount, " + outboundProfit + ", item_name, category FROM (" +
+    "SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, " +
+    "response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, CAST(out_money AS DOUBLE) AS amount, " +
+    "CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, item_category AS category " +
+    "FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet', filename=true) " +
+    "UNION ALL " +
+    "SELECT 'wholesale' AS biz_type, COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, " +
+    "COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, " +
+    "CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, " +
+    "d.pos_item_name AS item_name, d.pos_item_category_name AS category " +
+    "FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet', filename=true) d " +
+    "LEFT JOIN dim_branch db ON db.system_book_code='64188' AND db.branch_name = d.client_name " +
+    ") t " + outboundFilter + ";";
   // 一次提交：建视图 + 用户 SELECT（同连接，临时视图隔离，已实测）
   const combined = viewSql + "\n" + userSelect;
   const res = await fetch(DUCKDB_URL + "/query", {
@@ -499,7 +522,7 @@ module.exports = async function (req) {
   // ③ SQL 白名单（表引用正向白名单：引擎路由前先给全量合法表集——DuckDB 权限视图
   // + carry 维表视图 + PG 路由表，均为权限强制面；CTE 由 validateSql 自行识别）
   const regPre = await loadRegistry();
-  const allowedTables = ["retail_detail", ...regPre.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
+  const allowedTables = ["retail_detail", "outbound_detail", ...regPre.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
   let finalSql;
   try {
     finalSql = validateSql(sql, allowedTables);
