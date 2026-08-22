@@ -452,9 +452,11 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   // ─── 消息呈现 preset（平台能力 2026-08-20）───
   const storage = preset ? createBannerStorage() : null; // 惰性；无 S3 env → null（跳过预渲染）
   if (preset) {
-    // 目标名注入：卡片 main_title.title = {{target_name}}（与横幅目标名同源，取当前 active 周期 name）。
-    // 供 preset 动态标题用（如「8 月经营指标」）；查不到 → 不注入（title 保留字面量，M7 兜底）。
+    // 目标名 + 时间进度注入：卡片 source.desc = {{target_name}}（目标标题）、摘要第一行「时间进度」。
+    // 与横幅目标名同源，取当前 active 周期；progress_rate = 时间进度（0-1，如 0.7097→71.0%）。
+    // 查不到 → 不注入（{{target_name}} 回退「山海数据平台」；{{time_progress}} 回退「—」）。
     let targetNameVal: string | null = null;
+    let timeProgressVal: string | null = null;
     try {
       const { postgrestUrl, postgrestKey } = getConfig();
       const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
@@ -462,15 +464,19 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
         ? `&target_id=eq.${opts.targetId}`
         : `&start_date=lte.${today}&end_date=gte.${today}`;
       const resp = await fetch(
-        `${postgrestUrl}/report_achievement_gen?select=name&target_level=eq.total&status=eq.active${targetFilter}&order=start_date.desc,end_date.asc&limit=1`,
+        `${postgrestUrl}/report_achievement_gen?select=name,progress_rate&target_level=eq.total&status=eq.active${targetFilter}&order=start_date.desc,end_date.asc&limit=1`,
         { headers: { Authorization: `Bearer ${postgrestKey}` }, signal: AbortSignal.timeout(5000) },
       ).catch(() => null);
       if (resp?.ok) {
         const rows = await resp.json() as unknown;
-        targetNameVal = (Array.isArray(rows) ? rows : [])[0]?.name ?? null;
+        const row = (Array.isArray(rows) ? rows : [])[0] as { name?: string; progress_rate?: number | null } | undefined;
+        targetNameVal = row?.name ?? null;
+        const p = Number(row?.progress_rate ?? 0);
+        timeProgressVal = p > 0 ? `${(p * 100).toFixed(1)}%` : null;
       }
     } catch {
       targetNameVal = null;
+      timeProgressVal = null;
     }
     for (const g of renderedGroups) {
       // 横幅注入（架构 §7.4 方案 C）：template_card + card_image 占位 + 槽位值齐 → 组签名 URL 进 banner_url
@@ -493,8 +499,9 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
           if (url) g.rendered[REPORT_BANNER_VAR] = url;
         }
       }
-      // 注入目标名（main_title.title = {{target_name}}）；查不到不注入（title 保留字面量）
+      // 注入目标名 + 时间进度（source.desc / 摘要首行）；查不到不注入（回退兜底）
       if (targetNameVal) g.rendered.target_name = targetNameVal;
+      if (timeProgressVal) g.rendered.time_progress = timeProgressVal;
       g.rendered.message_content = renderPresetContent(preset, g.rendered);
     }
   }
