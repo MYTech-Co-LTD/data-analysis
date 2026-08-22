@@ -438,6 +438,26 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
   // ─── 消息呈现 preset（平台能力 2026-08-20）───
   const storage = preset ? createBannerStorage() : null; // 惰性；无 S3 env → null（跳过预渲染）
   if (preset) {
+    // 目标名注入：卡片 main_title.title = {{target_name}}（与横幅目标名同源，取当前 active 周期 name）。
+    // 供 preset 动态标题用（如「8 月经营指标」）；查不到 → 不注入（title 保留字面量，M7 兜底）。
+    let targetNameVal: string | null = null;
+    try {
+      const { postgrestUrl, postgrestKey } = getConfig();
+      const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+      const targetFilter = opts.targetMode === 'fixed' && opts.targetId
+        ? `&target_id=eq.${opts.targetId}`
+        : `&start_date=lte.${today}&end_date=gte.${today}`;
+      const resp = await fetch(
+        `${postgrestUrl}/report_achievement_gen?select=name&target_level=eq.total&status=eq.active${targetFilter}&order=start_date.desc,end_date.asc&limit=1`,
+        { headers: { Authorization: `Bearer ${postgrestKey}` }, signal: AbortSignal.timeout(5000) },
+      ).catch(() => null);
+      if (resp?.ok) {
+        const rows = await resp.json() as unknown;
+        targetNameVal = (Array.isArray(rows) ? rows : [])[0]?.name ?? null;
+      }
+    } catch {
+      targetNameVal = null;
+    }
     for (const g of renderedGroups) {
       // 横幅注入（架构 §7.4 方案 C）：template_card + card_image 占位 + 槽位值齐 → 组签名 URL 进 banner_url
       injectBanner(preset, g.rendered, opts.targetId);
@@ -459,6 +479,8 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
           if (url) g.rendered[REPORT_BANNER_VAR] = url;
         }
       }
+      // 注入目标名（main_title.title = {{target_name}}）；查不到不注入（title 保留字面量）
+      if (targetNameVal) g.rendered.target_name = targetNameVal;
       g.rendered.message_content = renderPresetContent(preset, g.rendered);
     }
   }
