@@ -20,11 +20,12 @@ vi.stubGlobal('fetch', fetchMock);
 
 // 视图行数据（metric_code 为视图真码——report_achievement_gen 输出 mv.metric_code：
 //   sale/delivery/outbound_amt/outbound_profit；progress_rate/data_status 同视图列）
+// 视图还含 name/status/start_date/end_date（total 级 RLS 放行）——resolve 从 KPI 首行派生头部 target 信息。
 const kpiRows = [
-  { target_id: 42, metric_code: 'sale', target_value: 6860000, actual_value: 4160000, achievement_rate: 0.606, progress_rate: 0.68, data_status: 'partial' },
-  { target_id: 42, metric_code: 'delivery', target_value: 1360000, actual_value: 1200000, achievement_rate: 0.88, progress_rate: 0.68, data_status: 'complete' },
-  { target_id: 42, metric_code: 'outbound_amt', target_value: 2080000, actual_value: 2100000, achievement_rate: 1.012, progress_rate: 0.68, data_status: 'complete' },
-  { target_id: 42, metric_code: 'outbound_profit', target_value: 710000, actual_value: 320000, achievement_rate: 0.45, progress_rate: 0.68, data_status: 'missing' },
+  { target_id: 42, name: '6月经营目标', status: 'active', start_date: '2026-06-01', end_date: '2026-06-30', metric_code: 'sale', target_value: 6860000, actual_value: 4160000, achievement_rate: 0.606, progress_rate: 0.68, data_status: 'partial' },
+  { target_id: 42, name: '6月经营目标', status: 'active', start_date: '2026-06-01', end_date: '2026-06-30', metric_code: 'delivery', target_value: 1360000, actual_value: 1200000, achievement_rate: 0.88, progress_rate: 0.68, data_status: 'complete' },
+  { target_id: 42, name: '6月经营目标', status: 'active', start_date: '2026-06-01', end_date: '2026-06-30', metric_code: 'outbound_amt', target_value: 2080000, actual_value: 2100000, achievement_rate: 1.012, progress_rate: 0.68, data_status: 'complete' },
+  { target_id: 42, name: '6月经营目标', status: 'active', start_date: '2026-06-01', end_date: '2026-06-30', metric_code: 'outbound_profit', target_value: 710000, actual_value: 320000, achievement_rate: 0.45, progress_rate: 0.68, data_status: 'missing' },
 ];
 const brandRows = [
   { system_book_code: '3120', brand_name: '熊喵鲜生', sale_target: 5000000, sale_amount: 3100000, sale_rate: 0.62, delivery_amount: 900000, delivery_profit: 120000, delivery_margin: 0.133 },
@@ -187,16 +188,21 @@ describe('resolveReportBannerData', () => {
     for (const col of ['sale_target', 'sale_actual', 'sale_rate', 'delivery_target', 'delivery_actual', 'delivery_rate', 'daily_sale', 'daily_delivery', 'remaining_daily_sale_target', 'remaining_daily_delivery_target']) {
       expect(regionUrl).toContain(col);
     }
-    const targetUrl = String(findCall('/targets?')![0]);
-    expect(targetUrl).toContain('id=eq.42');
+    // 头部 target 信息从 KPI 视图行派生（视图含 name/status/start_date/end_date，total 级 RLS 放行）
+    expect(kpiUrl).toContain('name');
+    expect(kpiUrl).toContain('status');
+    expect(kpiUrl).toContain('start_date');
+    expect(kpiUrl).toContain('end_date');
+    // freshness 仍经 RPC 取（SECURITY DEFINER，代签 JWT 可执行）
     const freshnessCall = findCall('/rpc/get_data_freshness');
     expect(freshnessCall).toBeTruthy();
   });
 
-  it('fixed 模式：URL 带 target_id=eq；targets 按该 id 查', async () => {
-    await resolveReportBannerData({ jwt: 'jwt-1', targetMode: 'fixed', targetId: 42 });
-    const targetCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('/targets?'));
-    expect(String(targetCall![0])).toContain('id=eq.42');
+  it('fixed 模式：URL 带 target_id=eq；头部从 KPI 行取 target 信息', async () => {
+    const d = await resolveReportBannerData({ jwt: 'jwt-1', targetMode: 'fixed', targetId: 42 });
+    const kpiCall = fetchMock.mock.calls.find((c: unknown[]) => String(c[0]).includes('report_achievement_gen'));
+    expect(String(kpiCall![0])).toContain('target_id=eq.42');
+    expect(d?.target.name).toBe('6月经营目标');
   });
 
   it('KPI 查询失败 → null（整图不渲染）', async () => {
@@ -228,23 +234,24 @@ describe('resolveReportBannerData', () => {
     }
   });
 
-  it('target 查不到 / freshness RPC 失败 → 头部降级（默认名/空时间），不整图失败', async () => {
-    mockViews({ target: null, freshness: null });
+  it('freshness RPC 失败 → 头部时间降级空（标题仍取 KPI 行 name），不整图失败', async () => {
+    mockViews({ freshness: null });
     const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
     expect(data).not.toBeNull();
-    expect(data!.target.name).toBe('报表');
+    // 标题来自 KPI 视图行（total 级 RLS 放行，稳定可得）；时间降级空
+    expect(data!.target.name).toBe('6月经营目标');
     expect(data!.target.dataUpdatedAt).toBeNull();
     expect(data!.target.lastQueryAt).toBeNull();
   });
 
-  it('KPI 行无 target_id → 不发 brand/region/targets 死查询，面板空数组 + 头部降级', async () => {
+  it('KPI 行无 target_id → 不发 brand/region/targets 死查询，面板空数组 + 头部仍取 name', async () => {
     mockViews({ noTargetId: true });
     const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
     expect(data).not.toBeNull();
     expect(data!.kpis).toHaveLength(6); // 4 金额 + 2 比率卡主板块仍完整（比率卡是派生值，不依赖 target_id）
     expect(data!.brands).toHaveLength(0);
     expect(data!.regions).toHaveLength(0);
-    expect(data!.target.name).toBe('报表');
+    expect(data!.target.name).toBe('6月经营目标');
     expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes('report_brand_metric_gen'))).toBe(false);
     expect(fetchMock.mock.calls.some((c: unknown[]) => String(c[0]).includes('target_id=eq.0'))).toBe(false);
   });

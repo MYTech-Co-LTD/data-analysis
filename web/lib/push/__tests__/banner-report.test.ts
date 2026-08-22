@@ -105,25 +105,27 @@ describe('renderReportBannerSvg', () => {
     expect(svg).not.toContain('linearGradient');
     expect(svg).toContain('fill="#FFFFFF"');
   });
-  it('头部：数据截止：yyyy-mm-dd hh:mm（dataUpdatedAt 优先，退化 startDate）', () => {
+  it('头部：目标标题 + 数据截止：yyyy-mm-dd hh:mm（dataUpdatedAt 优先，退化 startDate）', () => {
     const svg = renderReportBannerSvg(data);
+    expect(svg).toContain('6月经营目标');   // 标题 = 目标名
     expect(svg).toContain('数据截止：2026-08-21 09:30');
-    // 不再渲染目标名/状态徽章/日期区间
-    expect(svg).not.toContain('6月经营目标');
+    // 不再渲染状态徽章（进行中/已结束）
     expect(svg).not.toContain('进行中');
   });
   it('dataUpdatedAt 缺失 → 数据截止退化 startDate', () => {
     const svg = renderReportBannerSvg({ ...data, target: { ...data.target, dataUpdatedAt: null, lastQueryAt: null } });
     expect(svg).toContain('数据截止：2026-06-01');
   });
-  it('KPI 卡：4 金额卡标签 + 2 比率卡标签 + 达成率大字 + 小字副行（截断不超卡宽；无右上角状态徽章）', () => {
+  it('KPI 卡：4 金额卡标签 + 2 比率卡标签 + 达成率大字 + 小字副行（上下排版完整显示；无右上角状态徽章）', () => {
     const svg = renderReportBannerSvg(data);
     for (const k of data.kpis) {
       expect(svg).toContain(k.label);
       expect(svg).toContain(k.rate);       // 达成率/比率大字
     }
-    // 副行截断到 ≤maxLen（避免超卡宽出框）
-    expect(svg).toContain('…');
+    // 副行完整显示（按「 · 」拆两行，不截断）
+    expect(svg).toContain('416万/686万');
+    expect(svg).toContain('进度 68%');
+    expect(svg).not.toContain('…');
     // 右上角状态徽章（部分/已完成/缺失）不再渲染
     expect(svg).not.toContain('已完成');
     expect(svg).not.toContain('缺失');

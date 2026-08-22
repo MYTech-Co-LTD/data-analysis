@@ -148,7 +148,7 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
   // KPI 是主查询，先完成——品牌/战区视图只认 target_id 键且无日期输出列，
   // target_id 须从 KPI 当前周期行派生（follow 日期窗锁定的行自带；fixed 行同样携带 targetId）。
   const kpiRows = await queryRows(
-    `${base}/report_achievement_gen?select=target_id,metric_code,target_value,actual_value,achievement_rate,progress_rate,data_status`
+    `${base}/report_achievement_gen?select=target_id,name,status,start_date,end_date,metric_code,target_value,actual_value,achievement_rate,progress_rate,data_status`
     + `&target_level=eq.total&status=eq.active${targetFilter}&order=start_date.desc,end_date.asc`,
     opts.jwt,
   );
@@ -303,26 +303,23 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
       });
   }
 
-  // 头部：target 信息（name/status/日期区间）+ get_data_freshness RPC（数据更新/最近查询）。
+  // 头部：target 信息从 KPI 首行派生（report_achievement_gen 已放行 total 级 RLS，
+  //   直接查 targets 表会被 targets_rls_branch_nums 拦截导致空——分支 scope 不匹配 total 的 branch_num='ALL'）。
+  // freshness 用 get_data_freshness RPC（SECURITY DEFINER，代签 JWT 可执行）。
   // target 查不到 / RPC 失败 → 降级（默认名/空时间），不整图失败。
   let target: BannerTargetInfo = { name: '报表', status: 'active', startDate: '', endDate: '', dataUpdatedAt: null, lastQueryAt: null };
-  if (panelTargetId !== null && !Number.isNaN(panelTargetId)) {
-    const [tRows, frRows] = await Promise.all([
-      queryRows(`${base}/targets?id=eq.${panelTargetId}&select=name,status,start_date,end_date`, opts.jwt),
-      queryRows(`${base}/rpc/get_data_freshness`, opts.jwt),
-    ]);
-    const t = (tRows ?? [])[0] as Record<string, unknown> | undefined;
+  const kpiHead = (kpiRows as Array<Record<string, unknown>>)[0];
+  if (kpiHead) {
+    const frRows = await queryRows(`${base}/rpc/get_data_freshness`, opts.jwt);
     const fr = (frRows ?? [])[0] as Record<string, unknown> | undefined;
-    if (t) {
-      target = {
-        name: String(t.name ?? '报表'),
-        status: String(t.status) === 'active' ? 'active' : 'closed',
-        startDate: String(t.start_date ?? ''),
-        endDate: String(t.end_date ?? ''),
-        dataUpdatedAt: fmtDateTime(fr?.data_updated_at as string | null | undefined),
-        lastQueryAt: fmtDateTime(fr?.last_query_at as string | null | undefined),
-      };
-    }
+    target = {
+      name: String(kpiHead.name ?? '报表'),
+      status: String(kpiHead.status) === 'active' ? 'active' : 'closed',
+      startDate: String(kpiHead.start_date ?? ''),
+      endDate: String(kpiHead.end_date ?? ''),
+      dataUpdatedAt: fmtDateTime(fr?.data_updated_at as string | null | undefined),
+      lastQueryAt: fmtDateTime(fr?.last_query_at as string | null | undefined),
+    };
   }
 
   return { target, kpis, brands, regions };

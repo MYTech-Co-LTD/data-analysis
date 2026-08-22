@@ -153,13 +153,20 @@ function kpiCards(kpis: BannerKpiCard[]): string {
   if (kpis.length === 0) return `<text x="${MX}" y="${KPI_TOP + 40}" font-family='NotoSansSC' font-size="20" fill="#94A3B8">暂无数据</text>`;
   return kpis.map((k, i) => {
     const x = MX + i * (KPI_W + KPI_GAP);
-    // subline 短化（避免超卡宽出框）；比率卡副行保留目标带，其它截断
-    const slim = suffixEllipsis(k.subline, 11);
+    // 副行上下排版：按「 · 」拆成最多两行（实际/目标 与 进度 各一行），完整显示不截断；
+    // 拆出的每行再缩字号+行高保证不超卡宽（比率卡副行可能较长，用更小字号）。
+    const parts = k.subline.split(' · ').filter(Boolean);
+    const line1 = parts[0] ?? '';
+    const line2 = parts.slice(1).join(' ');
+    const isRatio = !k.status && (k.metricCode === 'delivery_sale_ratio' || k.metricCode === 'outbound_margin');
+    const l1Size = isRatio ? 10 : 11;
+    const l2Size = 10;
     return `
   <rect x="${x}" y="${KPI_TOP}" width="${KPI_W}" height="${KPI_H}" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
-  <text x="${x + 12}" y="${KPI_TOP + 26}" font-family='NotoSansSC' font-size="12" fill="#64748B">${esc(k.label)}</text>
-  <text x="${x + 12}" y="${KPI_TOP + 72}" font-family='NotoSansSC' font-size="26" font-weight="600" fill="${rateColorHex(k.rateColor)}">${esc(k.rate)}</text>
-  <text x="${x + 12}" y="${KPI_TOP + 104}" font-family='NotoSansSC' font-size="11" fill="#94A3B8">${esc(slim)}</text>`;
+  <text x="${x + 12}" y="${KPI_TOP + 24}" font-family='NotoSansSC' font-size="12" fill="#64748B">${esc(k.label)}</text>
+  <text x="${x + 12}" y="${KPI_TOP + 64}" font-family='NotoSansSC' font-size="25" font-weight="600" fill="${rateColorHex(k.rateColor)}">${esc(k.rate)}</text>
+  <text x="${x + 12}" y="${KPI_TOP + 92}" font-family='NotoSansSC' font-size="${l1Size}" fill="#94A3B8">${esc(line1)}</text>
+  ${line2 ? `<text x="${x + 12}" y="${KPI_TOP + 112}" font-family='NotoSansSC' font-size="${l2Size}" fill="#94A3B8">${esc(line2)}</text>` : ''}`;
   }).join('');
 }
 
@@ -276,10 +283,9 @@ function regionTable(regions: BannerRegionRow[]): { svg: string; height: number 
 
 export function renderReportBannerSvg(data: ReportBannerData): string {
   const target = data.target;
-  // 头部只保留「数据截止」一行（去掉目标名/状态徽章行）。
-  // 数据截止 = dataUpdatedAt；取不到退化日期区间，避免时间空显示。
+  // 头部两行：① 目标标题（target.name） ② 数据截止：xxxx（dataUpdatedAt 优先，退化 startDate）
   const cutoff = target.dataUpdatedAt ?? target.lastQueryAt ?? target.startDate ?? '—';
-  const metaParts = `数据截止：${cutoff}`;
+  const title = target.name || '报表';
 
   // 高度按内容：头部 → KPI → 品牌表 → 战区表 → 底部边距；品牌/战区块 0 基准渲染后平移。
   const brand = brandTable(data.brands);
@@ -290,7 +296,8 @@ export function renderReportBannerSvg(data: ReportBannerData): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
   <defs>${fontFace()}</defs>
   <rect width="${W}" height="${H}" fill="#FFFFFF"/>
-  <text x="${MX}" y="${HEAD_TITLE_Y}" font-family='NotoSansSC' font-size="20" font-weight="600" fill="#0F172A">${esc(metaParts)}</text>
+  <text x="${MX}" y="${HEAD_TITLE_Y}" font-family='NotoSansSC' font-size="24" font-weight="600" fill="#0F172A">${esc(title)}</text>
+  <text x="${MX}" y="${HEAD_META_Y}" font-family='NotoSansSC' font-size="14" fill="#64748B">${esc(`数据截止：${cutoff}`)}</text>
   <line x1="${MX}" y1="${HEAD_DIV_Y}" x2="${W - MX}" y2="${HEAD_DIV_Y}" stroke="#E2E8F0" stroke-width="1"/>
   ${kpiCards(data.kpis)}
   <g transform="translate(0,${BRAND_TOP})">${brand.svg}</g>
