@@ -146,9 +146,18 @@ describe('POST 校验', () => {
     const res = await postInvalid({ cron_spec: { kind: 'monthly', time: '08:30', day: 32 } });
     expect(res.status).toBe(400);
   });
-  it('selector.kind 非 dept/person → 400', async () => {
-    const res = await postInvalid({ selector: { kind: 'role', ids: ['r1'] } });
-    expect(res.status).toBe(400);
+  it('selector.kind 非法（manual）→ 400；role 已开放（U2）→ 通过校验并写入', async () => {
+    // role 2026-08-22 启用（U2）：合法 kind，不再 400；走正常写入（fetch 成功 mock）
+    requireAdminMock.mockResolvedValueOnce(null);
+    checkPushPermMock.mockResolvedValueOnce(true);
+    fetchMock.mockResolvedValueOnce({ ok: true, status: 201, json: async () => [{ config_id: 'c-role' }] });
+    const roleRes = await POST(mkPostReq(ADMIN_COOKIE, { ...validSpec(), selector: { kind: 'role', ids: ['1', '2'] } }));
+    expect(roleRes.status).toBe(200);
+    const [, roleInit] = fetchMock.mock.calls[0];
+    expect(JSON.parse(roleInit.body).selector_json).toEqual({ kind: 'role', ids: ['1', '2'] });
+    // 非法 kind 仍拒（manual 不在合法集合）
+    const manualRes = await postInvalid({ selector: { kind: 'manual', ids: ['a'] } });
+    expect(manualRes.status).toBe(400);
   });
   it('selector.ids 为空 → 400', async () => {
     const res = await postInvalid({ selector: { kind: 'dept', ids: [] } });
