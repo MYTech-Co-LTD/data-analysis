@@ -117,6 +117,11 @@ export interface ReportBannerData {
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// 文案截短：超 maxLen 字符加省略号（避免 KPI 卡 subline / 表头超宽出框）
+function suffixEllipsis(s: string, maxLen: number): string {
+  return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;
+}
+
 // ─── 布局常量（1080 宽，高度按内容） ───
 const W = 1080;
 const MX = 40;            // 左右边距 → 内容区 40..1040
@@ -142,27 +147,19 @@ function fontFace(): string {
   return `<style>@font-face{font-family:'NotoSansSC';src:url(data:application/font-otf;charset=utf-8;base64,${BANNER_FONT_BASE64}) format('opentype');}</style>`;
 }
 
-function badge(status: string | null, cx: number, y: number): string {
-  if (!status) return '';
-  const { bg, text } = statusBadgeColor(status);
-  const label = statusToZh(status);
-  // 徽章：圆角矩形 + 居中文字；宽度按 3 字（未就绪）估 54
-  const w = 54, h = 22;
-  return `
-  <rect x="${cx - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="6" fill="${bg}"/>
-  <text x="${cx}" y="${y + 4}" text-anchor="middle" font-family='NotoSansSC' font-size="12" fill="${text}">${esc(label)}</text>`;
-}
+
 
 function kpiCards(kpis: BannerKpiCard[]): string {
   if (kpis.length === 0) return `<text x="${MX}" y="${KPI_TOP + 40}" font-family='NotoSansSC' font-size="20" fill="#94A3B8">暂无数据</text>`;
   return kpis.map((k, i) => {
     const x = MX + i * (KPI_W + KPI_GAP);
+    // subline 短化（避免超卡宽出框）；比率卡副行保留目标带，其它截断
+    const slim = suffixEllipsis(k.subline, 11);
     return `
   <rect x="${x}" y="${KPI_TOP}" width="${KPI_W}" height="${KPI_H}" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1"/>
-  <text x="${x + 14}" y="${KPI_TOP + 26}" font-family='NotoSansSC' font-size="13" fill="#64748B">${esc(k.label)}</text>
-  ${badge(k.status, x + KPI_W - 12, KPI_TOP + 20)}
-  <text x="${x + 14}" y="${KPI_TOP + 74}" font-family='NotoSansSC' font-size="27" font-weight="600" fill="${rateColorHex(k.rateColor)}">${esc(k.rate)}</text>
-  <text x="${x + 14}" y="${KPI_TOP + 108}" font-family='NotoSansSC' font-size="12" fill="#94A3B8">${esc(k.subline)}</text>`;
+  <text x="${x + 12}" y="${KPI_TOP + 26}" font-family='NotoSansSC' font-size="12" fill="#64748B">${esc(k.label)}</text>
+  <text x="${x + 12}" y="${KPI_TOP + 72}" font-family='NotoSansSC' font-size="26" font-weight="600" fill="${rateColorHex(k.rateColor)}">${esc(k.rate)}</text>
+  <text x="${x + 12}" y="${KPI_TOP + 104}" font-family='NotoSansSC' font-size="11" fill="#94A3B8">${esc(slim)}</text>`;
   }).join('');
 }
 
@@ -197,14 +194,24 @@ function renderTable<R>(
     }
     return anchors;
   })();
+  const tableW = W - 2 * MX;
+  const tableX = x0;
+  const tableX2 = x0 + tableW;
+  // 列间垂直分隔线 x（列左缘）
+  const colSepX = (() => { const xs: number[] = []; let acc = x0; for (const c of cols) { acc += c.w; xs.push(acc); } return xs.slice(0, -1); })();
+  const bodyBottom = opts.titleH + opts.headH + opts.rowH * Math.max(rows.length, 0);
+  const vLines = colSepX.map((vx) => `<line x1="${vx}" y1="${opts.titleH}" x2="${vx}" y2="${bodyBottom}" stroke="#E2E8F0" stroke-width="0.5"/>`).join('');
+
   // 表头（bg-slate-50 #F8FAFC，文字 slate-500 #64748B）
   let out = `
   <text x="${x0}" y="${22}" font-family='NotoSansSC' font-size="16" font-weight="600" fill="#334155">${esc(title)}</text>
-  <rect x="${x0}" y="${opts.titleH}" width="${W - 2 * MX}" height="${opts.headH}" rx="6" fill="#F8FAFC"/>
+  <rect x="${tableX}" y="${opts.titleH}" width="${tableW}" height="${opts.headH}" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="1"/>
   ${cols.map((c, i) => {
     const { ax, an } = colAnchors[i];
-    return `<text x="${ax}" y="${headY - 8}" text-anchor="${an}" font-family='NotoSansSC' font-size="12" fill="#64748B">${esc(c.label)}</text>`;
-  }).join('')}`;
+    return `<text x="${ax}" y="${headY - 8}" text-anchor="${an}" font-family='NotoSansSC' font-size="11" fill="#64748B">${esc(suffixEllipsis(c.label, 11))}</text>`;
+  }).join('')}
+  <line x1="${tableX}" y1="${headY}" x2="${tableX2}" y2="${headY}" stroke="#E2E8F0" stroke-width="1"/>
+  ${vLines}`;
   y = headY;
   if (rows.length === 0) {
     out += `<text x="${x0 + 8}" y="${y + EMPTY_H / 2}" font-family='NotoSansSC' font-size="16" fill="#94A3B8">暂无数据</text>`;
@@ -212,13 +219,16 @@ function renderTable<R>(
   }
   for (const r of rows) {
     const bg = opts.rowBg ? opts.rowBg(r) : null;
-    if (bg) out += `<rect x="${x0}" y="${y}" width="${W - 2 * MX}" height="${opts.rowH}" fill="${bg}"/>`;
+    if (bg) out += `<rect x="${tableX}" y="${y}" width="${tableW}" height="${opts.rowH}" fill="${bg}"/>`;
     for (let i = 0; i < cols.length; i++) {
       const c = cols[i];
       const { ax, an } = colAnchors[i];
       const fill = c.color ? c.color(r) : '#334155';
-      out += `<text x="${ax}" y="${y + opts.rowH - 10}" text-anchor="${an}" font-family='NotoSansSC' font-size="13" fill="${fill}">${esc(c.value(r))}</text>`;
+      out += `<text x="${ax}" y="${y + opts.rowH - 10}" text-anchor="${an}" font-family='NotoSansSC' font-size="12" fill="${fill}">${esc(suffixEllipsis(c.value(r), 14))}</text>`;
     }
+    // 行分隔线
+    out += `<line x1="${tableX}" y1="${y + opts.rowH}" x2="${tableX2}" y2="${y + opts.rowH}" stroke="#E2E8F0" stroke-width="0.5"/>\
+`;
     y += opts.rowH;
   }
   return { svg: out, height: y };
@@ -264,24 +274,12 @@ function regionTable(regions: BannerRegionRow[]): { svg: string; height: number 
   });
 }
 
-// 头部状态徽章（进行中=蓝底蓝字 / 已结束=灰底灰字），锚在目标名右侧
-function headerBadge(status: 'active' | 'closed', x: number, y: number): string {
-  const isActive = status === 'active';
-  const { bg, text } = isActive ? { bg: '#EFF6FF', text: '#1D4ED8' } : { bg: '#F1F5F9', text: '#64748B' };
-  const label = isActive ? '进行中' : '已结束';
-  const w = 62, h = 26;
-  return `
-  <rect x="${x}" y="${y - h / 2}" width="${w}" height="${h}" rx="8" fill="${bg}"/>
-  <text x="${x + w / 2}" y="${y + 4}" text-anchor="middle" font-family='NotoSansSC' font-size="13" fill="${text}">${esc(label)}</text>`;
-}
-
 export function renderReportBannerSvg(data: ReportBannerData): string {
   const target = data.target;
-  const metaParts = [
-    `${target.startDate} ~ ${target.endDate}`,
-    `数据更新 ${target.dataUpdatedAt ?? '—'}`,
-    `最近查询 ${target.lastQueryAt ?? '—'}`,
-  ].join(' · ');
+  // 头部只保留「数据截止」一行（去掉目标名/状态徽章行）。
+  // 数据截止 = dataUpdatedAt；取不到退化日期区间，避免时间空显示。
+  const cutoff = target.dataUpdatedAt ?? target.lastQueryAt ?? target.startDate ?? '—';
+  const metaParts = `数据截止：${cutoff}`;
 
   // 高度按内容：头部 → KPI → 品牌表 → 战区表 → 底部边距；品牌/战区块 0 基准渲染后平移。
   const brand = brandTable(data.brands);
@@ -289,16 +287,10 @@ export function renderReportBannerSvg(data: ReportBannerData): string {
   const regionTop = BRAND_TOP + brand.height + 18;
   const H = Math.max(MIN_H, regionTop + region.height + 24);
 
-  // 徽章锚点：目标名宽度估算法（CJK ≈ 字号 px）+ 间距
-  const nameW = [...target.name].length * 28;
-  const badgeX = MX + nameW + 16;
-
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
   <defs>${fontFace()}</defs>
   <rect width="${W}" height="${H}" fill="#FFFFFF"/>
-  <text x="${MX}" y="${HEAD_TITLE_Y}" font-family='NotoSansSC' font-size="28" font-weight="600" fill="#0F172A">${esc(target.name)}</text>
-  ${headerBadge(target.status, badgeX, HEAD_TITLE_Y - 8)}
-  <text x="${MX}" y="${HEAD_META_Y}" font-family='NotoSansSC' font-size="14" fill="#64748B">${esc(metaParts)}</text>
+  <text x="${MX}" y="${HEAD_TITLE_Y}" font-family='NotoSansSC' font-size="20" font-weight="600" fill="#0F172A">${esc(metaParts)}</text>
   <line x1="${MX}" y1="${HEAD_DIV_Y}" x2="${W - MX}" y2="${HEAD_DIV_Y}" stroke="#E2E8F0" stroke-width="1"/>
   ${kpiCards(data.kpis)}
   <g transform="translate(0,${BRAND_TOP})">${brand.svg}</g>

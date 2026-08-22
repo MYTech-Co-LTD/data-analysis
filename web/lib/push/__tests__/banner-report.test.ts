@@ -105,30 +105,28 @@ describe('renderReportBannerSvg', () => {
     expect(svg).not.toContain('linearGradient');
     expect(svg).toContain('fill="#FFFFFF"');
   });
-  it('头部：目标名 + 状态徽章（进行中）+ 日期区间 + 数据更新 + 最近查询', () => {
+  it('头部：数据截止：yyyy-mm-dd hh:mm（dataUpdatedAt 优先，退化 startDate）', () => {
     const svg = renderReportBannerSvg(data);
-    expect(svg).toContain('6月经营目标');
-    expect(svg).toContain('进行中');
-    expect(svg).toContain('2026-06-01 ~ 2026-06-30');
-    expect(svg).toContain('数据更新 2026-08-21 09:30');
-    expect(svg).toContain('最近查询 2026-08-21 09:00');
-  });
-  it('closed 状态徽章 → 已结束（灰底灰字）', () => {
-    const svg = renderReportBannerSvg({ ...data, target: { ...data.target, status: 'closed' } });
-    expect(svg).toContain('已结束');
+    expect(svg).toContain('数据截止：2026-08-21 09:30');
+    // 不再渲染目标名/状态徽章/日期区间
+    expect(svg).not.toContain('6月经营目标');
     expect(svg).not.toContain('进行中');
   });
-  it('KPI 6 卡：4 金额卡标签 + 2 比率卡标签 + 达成率大字 + 实际/目标/进度副行 + 状态徽章', () => {
+  it('dataUpdatedAt 缺失 → 数据截止退化 startDate', () => {
+    const svg = renderReportBannerSvg({ ...data, target: { ...data.target, dataUpdatedAt: null, lastQueryAt: null } });
+    expect(svg).toContain('数据截止：2026-06-01');
+  });
+  it('KPI 卡：4 金额卡标签 + 2 比率卡标签 + 达成率大字 + 小字副行（截断不超卡宽；无右上角状态徽章）', () => {
     const svg = renderReportBannerSvg(data);
     for (const k of data.kpis) {
       expect(svg).toContain(k.label);
       expect(svg).toContain(k.rate);       // 达成率/比率大字
-      expect(svg).toContain(k.subline);    // 实际/目标 · 进度 副行
     }
-    // 状态徽章（金额卡）：部分/已完成/缺失
-    expect(svg).toContain('部分');
-    expect(svg).toContain('已完成');
-    expect(svg).toContain('缺失');
+    // 副行截断到 ≤maxLen（避免超卡宽出框）
+    expect(svg).toContain('…');
+    // 右上角状态徽章（部分/已完成/缺失）不再渲染
+    expect(svg).not.toContain('已完成');
+    expect(svg).not.toContain('缺失');
   });
   it('KPI 三色：相对进度绿 + 毛利率绝对三色 + 中性深色（总配销比）', () => {
     const svg = renderReportBannerSvg(data);
@@ -179,12 +177,10 @@ describe('renderReportBannerSvg', () => {
   it('文本转义（& < > "）', () => {
     const svg = renderReportBannerSvg({
       ...data,
-      target: { ...data.target, name: 'A&B<C>"D"' },
-      brands: [{ ...data.brands[0], name: 'X&Y<Z>' }],
+      brands: [{ ...data.brands[0], name: 'X&Y<Z>"W' }],
     });
-    expect(svg).not.toContain('A&B<C>');
-    expect(svg).toContain('A&amp;B&lt;C&gt;');
-    expect(svg).toContain('X&amp;Y&lt;Z&gt;');
+    expect(svg).not.toContain('X&Y<Z>');
+    expect(svg).toContain('X&amp;Y&lt;Z&gt;&quot;W');
   });
 });
 

@@ -116,7 +116,17 @@ export interface BannerResolveOpts {
 
 async function queryRows(url: string, jwt: string): Promise<unknown[] | null> {
   try {
-    const resp = await fetch(url, { headers: { Authorization: `Bearer ${jwt}` } });
+    // PostgREST 惯例：RPC 用 POST + {} 空 body（GET 调 POST RPC 可能失败）；非 RPC 用 GET。
+    // 加 apikey 头（双通道：授权 JWT + PostgREST 角色 key，提升 RPC/targets 成功率）。
+    const isRpc = url.includes('/rpc/');
+    const apikey = process.env.INSFORGE_API_KEY || '';
+    const resp = isRpc
+      ? await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}`, apikey },
+          body: '{}',
+        })
+      : await fetch(url, { headers: { Authorization: `Bearer ${jwt}` } });
     if (!resp.ok) return null;
     const rows = (await resp.json()) as unknown;
     return Array.isArray(rows) ? rows : null;
