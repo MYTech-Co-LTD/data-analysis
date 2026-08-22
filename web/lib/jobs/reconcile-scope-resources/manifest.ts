@@ -12,14 +12,13 @@
 //   M3 fail-close（异种 review #4 修复）：逐人 branch 键经 maps/dim 校验，未知/歧义 → 整单 [] + red，
 //     未知键永不进投影（消解 JS/SQL 键序分歧 #5）。
 //   M16 教训：job 必须进 JOBS registry（registry.ts）才会被注册。
-import { casdoorFetch, getUserRoles } from '../../sync/casdoor-client';
+import { getUserRoles } from '../../sync/casdoor-client';
+import { fetchCasdoorPermissions } from '../../reconcile-catalog';
 import { matchRolePermissions, normalizeFriendlyPerm } from '../../sync/role-scope';
 import type { JobManifest, JobResult } from '../../contracts';
 import { notifyWecom } from '../../notify';
-import { POSTGREST_URL, INSFORGE_API_KEY } from '../env';
+import { POSTGREST_URL } from '../env';
 
-const ORG = process.env.CASDOOR_ORG || 'shanhai';
-const CASDOOR_API = process.env.CASDOOR_API_URL || 'https://sso.shanhaiyiguo.com';
 
 const PG_H = (): Record<string, string> => {
   const KEY = process.env.INSFORGE_API_KEY!;
@@ -100,9 +99,9 @@ export const reconcileScopeResourcesManifest: JobManifest = {
   dependsOn: ['reconcile-groups'],
   async run(): Promise<JobResult> {
     // ① org-wide get-permissions（角色链匹配输入）
-    const permsResp = await casdoorFetch(`${CASDOOR_API}/api/get-permissions?owner=${encodeURIComponent(ORG)}`, {});
-    if (permsResp.ok === false) throw new Error(`get-permissions failed: ${permsResp.error}`);
-    const perms = (permsResp.data as Array<{ roles?: string[]; resources?: string[] }>) ?? [];
+    // 2026-08-22 修复：改用 fetchCasdoorPermissions() 封装——casdoorFetch 返回整个 Casdoor body
+    //   （{status, data:[...]}），直接取 .data 是对象非数组 → !isArray → abort（对账从未跑成的真根因）。
+    const perms = await fetchCasdoorPermissions();
 
     // M9 护栏①：org-wide 空结果 → abort 不清库
     if (!Array.isArray(perms) || perms.length === 0) {
@@ -139,7 +138,12 @@ export const reconcileScopeResourcesManifest: JobManifest = {
         lookupMiss++;
         continue;
       }
-      const scopeResources = scopeKeys(matchRolePermissions(perms, casdoorRoles.roles ?? []));
+      // fetchCasdoorPermissions 返回 reconcile-catalog.CasdoorPermission（roles: unknown），
+      // matchRolePermissions 期望 role-scope.CasdoorPermission（roles: readonly unknown[]）——结构兼容，类型断言。
+      const scopeResources = scopeKeys(matchRolePermissions(
+        perms as Array<import('../../sync/role-scope').CasdoorPermission>,
+        casdoorRoles.roles ?? [],
+      ));
       // M3 fail-close：branch 键校验——未知/歧义 → 整单 [] + red
       const branchKeys = scopeResources
         .filter((k) => k.startsWith('data-analysis:branch:'))
