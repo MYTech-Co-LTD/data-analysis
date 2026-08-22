@@ -147,17 +147,20 @@ describe('push API 越权三连拒', () => {
     expect(runPushMock).not.toHaveBeenCalled();
   });
 
-  it('③b role kind 暂未开放 → 400 invalid_selector', async () => {
+  it('③b role kind 已开放（U2）→ 通过校验进入 runPush', async () => {
     const res = await POST(mkPushReq({
       workflowId: 'wf-1',
-      selector: { kind: 'role', ids: ['admin'] },
+      selector: { kind: 'role', ids: ['1', '2'] },
       userId: 'ZhangDuo',
+      // preset 路径不走首触发门（与实际调度任务一致），role selector 原样透传
+      presetId: 'scheduled-report-card',
     }));
 
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.error).toBe('invalid_selector');
-    expect(body.detail).toContain('role not yet enabled');
+    // 校验通过（非 400 invalid_selector）；后续结果取决于 runPush mock（默认 ok）
+    expect(res.status).not.toBe(400);
+    expect(runPushMock).toHaveBeenCalledWith(
+      expect.objectContaining({ selector: { kind: 'role', ids: ['1', '2'] } })
+    );
   });
 });
 

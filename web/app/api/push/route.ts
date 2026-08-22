@@ -54,9 +54,16 @@ function validateSelector(selector: unknown): { ok: true; value: Selector } | { 
   if (typeof s.kind !== 'string' || !VALID_SELECTOR_KINDS.has(s.kind)) {
     return { ok: false, error: `selector.kind must be one of: ${[...VALID_SELECTOR_KINDS].join(', ')}` };
   }
-  // role kind 随 U2 开放，首期拒绝
+  // role kind 2026-08-22 启用（U2）：按 roles.id 解析收件人（org_users.role_id / role_codes 回退）。
+  //   业务用例：报表日报推给「总经理 boss + 战区总 zone_manager」角色。
   if (s.kind === 'role') {
-    return { ok: false, error: 'selector.kind=role not yet enabled (pending U2)' };
+    if (!Array.isArray(s.ids) || s.ids.length === 0) {
+      return { ok: false, error: 'selector.kind=role requires non-empty ids array' };
+    }
+    if (!s.ids.every((id: unknown) => typeof id === 'string')) {
+      return { ok: false, error: 'selector.ids must be string array' };
+    }
+    return { ok: true, value: { kind: 'role' as Selector['kind'], ids: s.ids as string[] } };
   }
   // ids 校验：person/dept 需要 ids 数组；all 不需要
   if (s.kind !== 'all') {

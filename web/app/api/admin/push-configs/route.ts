@@ -21,8 +21,9 @@ function validateSpec(b: Record<string, unknown>): string | null {
   if (cs.kind === 'weekly' && !(Number(cs.weekday) >= 1 && Number(cs.weekday) <= 7)) return 'weekly 须带 weekday 1-7';
   if (cs.kind === 'monthly' && !(Number(cs.day) >= 1 && Number(cs.day) <= 31)) return 'monthly 须带 day 1-31';
   const sel = b.selector as Record<string, unknown> | undefined;
-  if (!sel || !['dept', 'person'].includes(String(sel.kind)) || !Array.isArray(sel.ids) || sel.ids.length === 0) {
-    return 'selector 须为 dept/person + 非空 ids';
+  // role 2026-08-22 启用（U2）：收件人按 roles.id（总经理 boss / 战区总 zone_manager）
+  if (!sel || !['dept', 'person', 'role'].includes(String(sel.kind)) || !Array.isArray(sel.ids) || sel.ids.length === 0) {
+    return 'selector 须为 dept/person/role + 非空 ids';
   }
   if (b.target_mode === 'fixed' && !b.target_id) return 'fixed 模式 target_id required';
   if (!b.preset_id) return 'preset_id required';

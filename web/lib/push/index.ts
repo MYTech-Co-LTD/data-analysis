@@ -353,10 +353,20 @@ export async function runPush(opts: RunPushOpts): Promise<RunPushResult> {
       return resp.json();
     },
     getUsersByRole: async (roleId) => {
-      // 2026-08-18：role_id 过渡列已冻结（refresh_role_assignments 移除，§6.2 sunset），
-      // 收件人改按 role_codes（casdoor 镜像，登录/drift 写穿）解析：roles.id → code → org_users.role_codes 数组包含。
+      // 2026-08-22：role 选择器启用（U2）。org_users.role_codes（casdoor 镜像）多数为空——
+      // 业务角色归属实际落在 org_users.role_id（如 boss=1 总经理、zone_manager=2 战区总）。
+      // 优先按 role_id 列解析；无结果回退 role_codes（roles.id→code→数组包含）兼容未来同步。
       const { postgrestUrl, postgrestKey } = getConfig();
       if (!postgrestUrl || !postgrestKey) return [];
+      const byRoleId = await fetch(
+        `${postgrestUrl}/org_users?role_id=eq.${roleId}&is_active=eq.true&select=id,wecom_id,is_active`,
+        { headers: { Authorization: `Bearer ${postgrestKey}` } }
+      );
+      if (byRoleId.ok) {
+        const rows = (await byRoleId.json()) as Array<{ id: string; wecom_id: string; is_active: boolean }>;
+        if (Array.isArray(rows) && rows.length > 0) return rows;
+      }
+      // 回退：role_codes（casdoor 镜像，登录/drift 写穿）：roles.id → code → org_users.role_codes 数组包含
       const roleResp = await fetch(
         `${postgrestUrl}/roles?id=eq.${roleId}&select=code`,
         { headers: { Authorization: `Bearer ${postgrestKey}` } }
