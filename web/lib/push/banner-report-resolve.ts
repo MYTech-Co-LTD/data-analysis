@@ -224,7 +224,7 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
   let brands: BannerBrandRow[] = [];
   let regions: BannerRegionRow[] = [];
   if (panelTargetId !== null && !Number.isNaN(panelTargetId)) {
-    const [brandRows, regionRows] = await Promise.all([
+    const [brandRows, regionRows, wholesaleRows] = await Promise.all([
       queryRows(
         `${base}/report_brand_metric_gen?select=system_book_code,brand_name,sale_target,sale_amount,sale_rate,delivery_amount,delivery_profit,delivery_margin`
         + `&target_id=eq.${panelTargetId}&order=system_book_code.asc`,
@@ -235,9 +235,35 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
         + `&target_id=eq.${panelTargetId}&level=eq.region&order=sale_rate.desc`,
         opts.jwt,
       ),
+      queryRows(
+        `${base}/report_wholesale_customer_gen?select=target_id,wholesale_amount,wholesale_profit&target_id=eq.${panelTargetId}`,
+        opts.jwt,
+      ),
     ]);
 
-    // 品牌：固定序 3120 → 64188 → 合计（合计 = 视图自带合计行）；局部空 → 空数组
+    // 外部批发合计：SUM 各客户行（出库金额=wholesale_amount、出库毛利=wholesale_profit、毛利率=毛利/金额）；
+    // 销售类字段不填值（「—」）；cost 不可见 → 毛利/毛利率「—」。
+    const wsRows = (wholesaleRows ?? []).map((r) => r as Record<string, unknown>);
+    const wsAmount = wsRows.reduce((acc, r) => acc + (Number(r.wholesale_amount) || 0), 0);
+    const wsProfit = wsRows.reduce((acc, r) => acc + (Number(r.wholesale_profit) || 0), 0);
+    const wsMargin = wsAmount > 0 ? wsProfit / wsAmount : null;
+    const costVisible = wsRows.some((r) => r.wholesale_profit !== null && r.wholesale_profit !== undefined) || wsProfit > 0;
+    const externalWholesale: BannerBrandRow = {
+      sbc: '外部批发',
+      name: '外部批发',
+      saleTarget: '—',
+      saleAmount: '—',
+      saleRate: '—',
+      saleRateColor: 'gray',
+      deliveryAmount: fmtCurrency(wsAmount > 0 ? wsAmount : null),
+      deliveryRatio: '—',
+      deliveryProfit: costVisible ? fmtCurrency(wsProfit > 0 ? wsProfit : null) : '—',
+      deliveryMargin: costVisible && wsMargin ? fmtRate(wsMargin) : '—',
+      marginColor: wsMargin ? marginColor(wsMargin) : 'gray',
+      isTotal: false,
+    };
+
+    // 品牌：固定序 3120 → 64188 → 合计 → 外部批发；合计 = 视图自带合计行；局部空 → 空数组
     brands = (brandRows ?? [])
       .map((r) => r as Record<string, unknown>)
       .filter((r) => r.system_book_code !== undefined)
@@ -268,6 +294,8 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
           isTotal,
         };
       });
+    // 外部批发行（合计行下方）：销售类字段「—」，出库金额/毛利/毛利率用批发客户数值
+    brands.push(externalWholesale);
 
     // 战区：只取 level=region 行（后端已按 sale_rate desc 排序）；局部空 → 空数组
     regions = (regionRows ?? [])

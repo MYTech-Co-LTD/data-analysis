@@ -38,12 +38,18 @@ const regionRows = [
   { region_name: '西部战区', sale_target: 1600000, sale_actual: 980000, sale_rate: 0.61, delivery_target: 500000, delivery_actual: 200000, delivery_rate: 0.4, daily_sale: 33000, daily_delivery: 7000, remaining_daily_sale_target: 21000, remaining_daily_delivery_target: 10000 },
   { region_name: '中部战区', sale_target: 1500000, sale_actual: 640000, sale_rate: 0.427, delivery_target: 500000, delivery_actual: 100000, delivery_rate: 0.2, daily_sale: 21000, daily_delivery: 3000, remaining_daily_sale_target: 29000, remaining_daily_delivery_target: 16000 },
 ];
+// 外部批发客户（report_wholesale_customer_gen 行）——出库金额/毛利用其聚合值填充
+const wholesaleRows = [
+  { target_id: 42, client_code: 'c1', wholesale_amount: 300000, wholesale_profit: 36000 },
+  { target_id: 42, client_code: 'c2', wholesale_amount: 150000, wholesale_profit: 18000 },
+];
 const targetRow = { id: 42, name: '6月经营目标', status: 'active', start_date: '2026-06-01', end_date: '2026-06-30' };
 const freshnessRow = { data_updated_at: '2026-08-21T01:30:00+00:00', last_query_at: '2026-08-21T01:00:00+00:00' };
 
 function mockViews(opts: {
   kpi?: typeof kpiRows; brand?: Array<Record<string, unknown>>; region?: typeof regionRows;
   target?: typeof targetRow | null; freshness?: typeof freshnessRow | null;
+  wholesale?: Array<Record<string, unknown>> | null;
   noTargetId?: boolean;
 } = {}) {
   fetchMock.mockReset();
@@ -58,6 +64,7 @@ function mockViews(opts: {
     }
     if (u.includes('/report_brand_metric_gen')) return jsonResp(opts.brand ?? brandRows);
     if (u.includes('/report_region_breakdown_gen')) return jsonResp(opts.region ?? regionRows);
+    if (u.includes('/report_wholesale_customer_gen')) return jsonResp(opts.wholesale ?? wholesaleRows);
     if (u.includes('/targets?')) {
       return jsonResp(opts.target === null ? [] : [opts.target ?? targetRow]);
     }
@@ -143,8 +150,8 @@ describe('resolveReportBannerData', () => {
     expect(margin.subline).toContain('目标 12%');
     expect(ratio.status).toBeNull();
     expect(margin.status).toBeNull();
-    // 品牌 8 列
-    expect(d.brands.map((b) => b.sbc)).toEqual(['3120', '64188', '合计']);
+    // 品牌 8 列（3120/64188/合计/外部批发——外部批发销售类「—」，出库金额/毛利/毛利率用批发客户数值）
+    expect(d.brands.map((b) => b.sbc)).toEqual(['3120', '64188', '合计', '外部批发']);
     const b0 = d.brands[0];
     expect(b0.name).toBe('熊喵鲜生');
     expect(b0.saleTarget).toBe('¥500.0万');
@@ -155,6 +162,17 @@ describe('resolveReportBannerData', () => {
     expect(b0.deliveryProfit).toBe('¥12.0万');
     expect(b0.deliveryMargin).toBe('13.3%');
     expect(b0.marginColor).toBe('green'); // 0.133/0.12
+    // 外部批发行：销售类「—」，出库金额/毛利/毛利率 = 批发客户聚合
+    const ws = d.brands[3];
+    expect(ws.name).toBe('外部批发');
+    expect(ws.saleTarget).toBe('—');
+    expect(ws.saleAmount).toBe('—');
+    expect(ws.saleRate).toBe('—');
+    expect(ws.deliveryRatio).toBe('—');
+    expect(ws.deliveryAmount).toBe('¥45.0万');   // 300000+150000 = 450000
+    expect(ws.deliveryProfit).toBe('¥5.4万');    // 36000+18000 = 54000
+    expect(ws.deliveryMargin).toBe('12.0%');     // 54000/450000 = 0.12
+    expect(ws.marginColor).toBe('green');        // 0.12/0.12 = 1 ≥ 1
     // 战区 13 列
     expect(d.regions.map((r) => r.name)).toEqual(['东部战区', '南部战区', '西部战区', '中部战区']);
     const r0 = d.regions[0];
@@ -224,6 +242,8 @@ describe('resolveReportBannerData', () => {
   it('cost 不可见（delivery_profit/delivery_margin NULL）→ 「—」灰（can_cost_visible false 语义）', async () => {
     mockViews({
       brand: brandRows.map((r) => ({ ...r, delivery_profit: null, delivery_margin: null })),
+      // 批发 profit 也 null（cost 不可见语义：wholesale_profit 视图 CASE WHEN can_cost_visible() → NULL）
+      wholesale: wholesaleRows.map((r) => ({ ...r, wholesale_profit: null })),
     });
     const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
     expect(data).not.toBeNull();

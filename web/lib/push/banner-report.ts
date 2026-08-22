@@ -276,7 +276,7 @@ function regionTable(regions: BannerRegionRow[]): { svg: string; height: number 
     { label: '配销比目标', w: 62, align: 'right', value: (r) => r.ratioTarget, color: () => '#94A3B8' },
     { label: '配销比', w: 62, align: 'right', value: (r) => r.ratio, color: (r) => rateColorHex(r.ratioColor) },
   ];
-  return renderTable('门店战区', MX, cols, regions, {
+  return renderTable('战区销售/配送', MX, cols, regions, {
     titleH: 34, headH: 28, rowH: REGION_ROW_H,
   });
 }
