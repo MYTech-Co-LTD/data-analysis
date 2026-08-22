@@ -84,9 +84,10 @@ async function callRunPush(opts: RunPushOpts): Promise<RunPushResult> {
 
 export const scheduledReportsManifest: JobManifest = {
   id: '__scheduled_reports',
-  // 每小时整点检查（具体推送时间由 scheduled_reports.cron_expression 控制，
-  // 此 job 负责扫描到期的报表并触发推送）
-  schedule: '0 * * * *',
+  // 每半小时扫描（0 分 + 30 分）——具体推送时间由 push_configs.cron_spec.time 控制，
+  //   此 job 负责扫描到期的报表并触发推送。2026-08-22 改为 0,30：否则「每天 21:30」任务
+  //   要到 22:00 整点才触发（旧 schedule='0 * * * *'），用户实际晚 30 分钟收到。
+  schedule: '0,30 * * * *',
   run: async (): Promise<JobResult> => {
     const JOB_KEY = '__scheduled_reports';
     if (!tryAcquireLock(runningTasks, JOB_KEY, '定时报表推送', { logSkip: true })) {
