@@ -184,13 +184,25 @@ function renderTable<R>(
 ): { svg: string; height: number } {
   let y = opts.titleH;
   const headY = y + opts.headH;
+  // 列 x 锚点：从左到右累加列宽（左对齐列锚左缘+8；右对齐列锚右缘-8）
+  const colAnchors = (() => {
+    const anchors: { ax: number; an: string }[] = [];
+    let acc = x0;
+    for (const c of cols) {
+      acc += c.w;
+      anchors.push({
+        ax: c.align === 'left' ? acc - c.w + 8 : acc - 8,
+        an: c.align === 'left' ? 'start' : 'end',
+      });
+    }
+    return anchors;
+  })();
   // 表头（bg-slate-50 #F8FAFC，文字 slate-500 #64748B）
   let out = `
   <text x="${x0}" y="${22}" font-family='NotoSansSC' font-size="16" font-weight="600" fill="#334155">${esc(title)}</text>
   <rect x="${x0}" y="${opts.titleH}" width="${W - 2 * MX}" height="${opts.headH}" rx="6" fill="#F8FAFC"/>
-  ${cols.map((c) => {
-    const ax = c.align === 'left' ? x0 + 8 : x0 + c.w - 8;
-    const an = c.align === 'left' ? 'start' : 'end';
+  ${cols.map((c, i) => {
+    const { ax, an } = colAnchors[i];
     return `<text x="${ax}" y="${headY - 8}" text-anchor="${an}" font-family='NotoSansSC' font-size="12" fill="#64748B">${esc(c.label)}</text>`;
   }).join('')}`;
   y = headY;
@@ -201,9 +213,9 @@ function renderTable<R>(
   for (const r of rows) {
     const bg = opts.rowBg ? opts.rowBg(r) : null;
     if (bg) out += `<rect x="${x0}" y="${y}" width="${W - 2 * MX}" height="${opts.rowH}" fill="${bg}"/>`;
-    for (const c of cols) {
-      const ax = c.align === 'left' ? x0 + 8 : x0 + c.w - 8;
-      const an = c.align === 'left' ? 'start' : 'end';
+    for (let i = 0; i < cols.length; i++) {
+      const c = cols[i];
+      const { ax, an } = colAnchors[i];
       const fill = c.color ? c.color(r) : '#334155';
       out += `<text x="${ax}" y="${y + opts.rowH - 10}" text-anchor="${an}" font-family='NotoSansSC' font-size="13" fill="${fill}">${esc(c.value(r))}</text>`;
     }
