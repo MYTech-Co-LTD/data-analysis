@@ -12,7 +12,9 @@
 BEGIN;
 
 INSERT INTO push_variables (var_code, name, metric_code, scope_dim, extra_filter, unit, enabled) VALUES
-  ('outbound_amt_rate', '供应链出库目标完成率', 'outbound_amt', 'total', NULL, '%', true),
+  -- metric_code 用 metric_registry 真键（outbound_amount/outbound_profit，非视图码 outbound_amt）——
+  -- 与既有 outbound_amt 变量同键；引擎 METRIC_TO_VIEW 把它们映射到视图码取 achievement_rate。
+  ('outbound_amt_rate', '供应链出库目标完成率', 'outbound_amount', 'total', NULL, '%', true),
   ('outbound_profit_rate', '供应链出库毛利完成率', 'outbound_profit', 'total', NULL, '%', true),
   ('outbound_margin', '供应链毛利率', 'outbound_profit', 'total', NULL, '%', true)
 ON CONFLICT (var_code) DO NOTHING;
