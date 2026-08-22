@@ -110,6 +110,35 @@ export function renderPresetContent(preset: MessagePreset, vars: Record<string, 
         if (interpolated.card_image?.url === '{{report_banner}}') {
           interpolated.card_image.url = BANNER_PLACEHOLDER_URL;
         }
+        // 摘要变量未解析回退（2026-08-22）：率变量（outbound_*_rate/outbound_margin 等）在门店用户
+        //   （branch_scope_limited）下 achievement_rate=null → 变量不渲染 → 字面量残留会命中 M7 拒投。
+        //   降级不拒投：source.desc 回退「山海数据平台」；horizontal/vertical 列表 value 回退「—」；
+        //   main_title.desc 里未解析 token 剔除（留其余已解析部分）。
+        const asRecord = interpolated as Record<string, unknown>;
+        if (asRecord.source && typeof asRecord.source === 'object') {
+          const src = asRecord.source as { desc?: unknown };
+          if (typeof src.desc === 'string' && /\{\{\w+\}\}/.test(src.desc)) src.desc = '山海数据平台';
+        }
+        for (const listKey of ['horizontal_content_list', 'vertical_content_list'] as const) {
+          const list = asRecord[listKey];
+          if (Array.isArray(list)) {
+            for (const item of list) {
+              if (item && typeof item === 'object') {
+                const obj = item as Record<string, unknown>;
+                for (const vk of ['value', 'desc']) {
+                  if (typeof obj[vk] === 'string' && /\{\{\w+\}\}/.test(obj[vk] as string)) obj[vk] = '—';
+                }
+              }
+            }
+          }
+        }
+        if (asRecord.main_title && typeof asRecord.main_title === 'object') {
+          const mt = asRecord.main_title as { desc?: unknown };
+          if (typeof mt.desc === 'string' && /\{\{\w+\}\}/.test(mt.desc)) {
+            // 剔除未解析 token（如「销售 ¥X · 达成率 {{achievement_rate}}」→「销售 ¥X ·」→ 修剪尾部分隔符）
+            mt.desc = (mt.desc as string).replace(/\s*[·,]\s*[^·,]*\{\{\w+\}\}[^·,]*/g, '').replace(/\s*[·,]\s*$/, '').trim();
+          }
+        }
         return JSON.stringify({
           msgtype: 'template_card',
           template_card: interpolated,

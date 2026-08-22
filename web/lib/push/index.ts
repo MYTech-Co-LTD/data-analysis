@@ -159,6 +159,20 @@ async function resolveNumericValue(
     const targetFilter = target.mode === 'fixed' && target.id
       ? `&target_id=eq.${target.id}`
       : `&start_date=lte.${today}&end_date=gte.${today}`;
+    // 摘要率变量（2026-08-22）：outbound_margin = outbound_profit.actual / outbound_amt.actual（派生，
+    //   同报表中心 KPI 比率卡 ratio-of-sums）；取不到 → null（该行不渲染，M7 不拦）。
+    if (varCode === 'outbound_margin') {
+      const mr = await fetch(
+        `${postgrestUrl}/report_achievement_gen?select=metric_code,actual_value&metric_code=in.(outbound_amt,outbound_profit)&status=eq.active${targetFilter}`
+        + `&order=start_date.desc,end_date.asc&limit=2`,
+        { headers: { Authorization: `Bearer ${jwt}` } },
+      );
+      if (!mr.ok) return null;
+      const mrows = await mr.json() as Array<{ metric_code: string; actual_value: number | null }>;
+      const amt = Number(mrows.find((r) => r.metric_code === 'outbound_amt')?.actual_value ?? 0);
+      const profit = Number(mrows.find((r) => r.metric_code === 'outbound_profit')?.actual_value ?? 0);
+      return amt > 0 ? `${((profit / amt) * 100).toFixed(1)}%` : null;
+    }
     const resp = await fetch(
       `${postgrestUrl}/report_achievement_gen?select=metric_code,actual_value,target_value,achievement_rate`
       + `&metric_code=eq.${viewMetric}&status=eq.active${targetFilter}`
