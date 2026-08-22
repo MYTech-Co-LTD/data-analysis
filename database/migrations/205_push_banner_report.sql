@@ -4,7 +4,8 @@
 --   2) scheduled-report-card preset 的 card_image.url 从静态占位图升级为 {{report_banner}} 变量
 --      （引擎模板引用才预渲染；未引用/解析失败 → message-preset 回退占位图，见 Task 5）
 --   3) card_action.url 改 {{report_banner}}——点击卡片/图片打开横幅大图外链（全屏查看）
---      （迁移 203 的 ON CONFLICT DO UPDATE 每次部署重置 card_json，此处幂等 jsonb_set 保持 banner 配置）
+--   4) 摘要 vertical_content_list 扩展为完整 KPI 4 项（销售/配送/出库金额/出库毛利）+ main_title.desc
+--      （迁移 203 的 ON CONFLICT DO UPDATE 每次部署重置 card_json，此处幂等 jsonb_set 保持 banner/摘要配置）
 -- 幂等：INSERT ON CONFLICT DO NOTHING / UPDATE jsonb_set 重复跑无害。
 BEGIN;
 
@@ -14,8 +15,21 @@ ON CONFLICT (var_code) DO NOTHING;
 
 UPDATE push_message_presets
 SET card_json = jsonb_set(
-    jsonb_set(card_json, '{card_image,url}', '"{{report_banner}}"'::jsonb, true),
-    '{card_action,url}', '"{{report_banner}}"'::jsonb, true
+    jsonb_set(
+      jsonb_set(
+        jsonb_set(card_json, '{card_image,url}', '"{{report_banner}}"'::jsonb, true),
+        '{card_action,url}', '"{{report_banner}}"'::jsonb, true
+      ),
+      '{main_title,desc}', '"销售 {{sale_amount}} · 达成率 {{achievement_rate}}"'::jsonb, true
+    ),
+    '{vertical_content_list}',
+    jsonb_build_array(
+      jsonb_build_object('title', '销售额', 'value', '{{sale_amount}}'),
+      jsonb_build_object('title', '配送额', 'value', '{{delivery_amount}}'),
+      jsonb_build_object('title', '出库金额', 'value', '{{outbound_amt}}'),
+      jsonb_build_object('title', '出库毛利', 'value', '{{outbound_profit}}')
+    )::jsonb,
+    true
   ),
     updated_at = now()
 WHERE preset_id = 'scheduled-report-card';
