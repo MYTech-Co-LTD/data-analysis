@@ -1,14 +1,18 @@
 // web/lib/jobs/reconcile-scope-resources/manifest.ts
 // 薄同步 + 对账 job（方案 A M5/spec-forge）：每日把 Casdoor 角色链范围资源投影到 org_users.scope_resources。
-//   薄同步 = 逐人 matchRolePermissions(get-permissions, role_codes) → normalizeFriendlyPerm → 范围键过滤 → upsert；
+//   薄同步 = 逐人 matchRolePermissions(get-permissions, Casdoor 权威角色) → normalizeFriendlyPerm → 范围键过滤 → upsert；
 //   对账   = 在原始资源键层面对比（Casdoor→归一→过滤 → vs 投影），写 history + red 告警。
+//   2026-08-22 修复（推送收件人权限缺失根因）：匹配输入改 Casdoor 权威角色（getUserRoles）——
+//     登录回调镜像 role_codes 有 .eq("casdoor_writer","auto") 条件，多数用户 manual → role_codes 恒空
+//     → 旧逻辑对账一旦跑会清空所有用户 scope_resources。修复：①权威源 = Casdoor 实际绑定角色；
+//     ②只补不清（Casdoor 查不到 / 现有有权限但权威空 → 保留现状）；③熔断只针对「清空现有权限」>50%。
 //   M9 护栏（异种 review #1 修复：两遍式——先算 diff 后写，防一次清全量）：
 //     ① org-wide 空结果 abort 不清库（仿 claims.js !isArray(reachable)→整体失败）
-//     ② changed>50% 在写之前判定，超限直接 abort（投影未被污染）
+//     ② 清空现有权限 >50% 在写之前判定，超限直接 abort（投影未被污染）
 //   M3 fail-close（异种 review #4 修复）：逐人 branch 键经 maps/dim 校验，未知/歧义 → 整单 [] + red，
 //     未知键永不进投影（消解 JS/SQL 键序分歧 #5）。
 //   M16 教训：job 必须进 JOBS registry（registry.ts）才会被注册。
-import { casdoorFetch } from '../../sync/casdoor-client';
+import { casdoorFetch, getUserRoles } from '../../sync/casdoor-client';
 import { matchRolePermissions, normalizeFriendlyPerm } from '../../sync/role-scope';
 import type { JobManifest, JobResult } from '../../contracts';
 import { notifyWecom } from '../../notify';
@@ -119,10 +123,23 @@ export const reconcileScopeResourcesManifest: JobManifest = {
     ]);
 
     // ③ 第一遍：只算 diff，不写（M9 两遍式 #1）
+    // 2026-08-22 修复：匹配输入从 org_users.role_codes 改为 Casdoor 权威角色（getUserRoles）。
+    //   根因：登录回调镜像 role_codes 有 .eq("casdoor_writer","auto") 条件，多数用户为 manual → role_codes 恒空
+    //   → matchRolePermissions(perms, []) 恒空 → 对账一旦成功跑会把所有用户 scope_resources 清空（含已配权限）。
+    //   修复三原则：
+    //   ① 权威源 = Casdoor 用户实际绑定角色（getUserRoles），不再依赖可能不全的本地 role_codes 镜像；
+    //   ② 只补不清——Casdoor 查不到的用户 / 现有有权限但权威为空 → 保留现状（防误伤既有手工/历史授权）；
+    //   ③ 熔断只针对「清空现有权限」>50%（新增/补权限不熔断，M9 语义收紧为防清全量）。
     const diffs: Array<{ wecom_id: string; old: string[]; new: string[] }> = [];
-    let emptyKeys = 0, red = 0;
+    let emptyKeys = 0, red = 0, lookupMiss = 0, preserved = 0;
     for (const u of users) {
-      const scopeResources = scopeKeys(matchRolePermissions(perms, u.role_codes ?? []));
+      // ① Casdoor 权威角色（getUserRoles 内部做 owner 前缀/object 归一；查不到 → ok=false → 保留现状）
+      const casdoorRoles = await getUserRoles(u.wecom_id);
+      if (!casdoorRoles.ok) {
+        lookupMiss++;
+        continue;
+      }
+      const scopeResources = scopeKeys(matchRolePermissions(perms, casdoorRoles.roles ?? []));
       // M3 fail-close：branch 键校验——未知/歧义 → 整单 [] + red
       const branchKeys = scopeResources
         .filter((k) => k.startsWith('data-analysis:branch:'))
@@ -133,15 +150,21 @@ export const reconcileScopeResourcesManifest: JobManifest = {
         if (!resolved.ok) { keys = []; red++; }
       }
       if (keys.length === 0) emptyKeys++;
-      const cur = JSON.stringify(u.scope_resources ?? []);
+      // ② 只补不清：现有有权限但权威投影为空 → 保留现状（不因 role_codes/授权缺失误清既有授权）
+      const cur = u.scope_resources ?? [];
+      if (cur.length > 0 && keys.length === 0) {
+        preserved++;
+        continue;
+      }
       const nxt = JSON.stringify(keys);
-      if (cur !== nxt) diffs.push({ wecom_id: u.wecom_id, old: u.scope_resources ?? [], new: keys });
+      if (JSON.stringify(cur) !== nxt) diffs.push({ wecom_id: u.wecom_id, old: cur, new: keys });
     }
 
-    // M9 护栏②：changed > 50% → 写之前 abort（投影未被污染）
-    const ratio = users.length ? diffs.length / users.length : 0;
+    // M9 护栏②：清空现有权限 > 50% → 写之前 abort（投影未被污染；仅补权限不熔断）
+    const clearingDiffs = diffs.filter((d) => (d.new ?? []).length === 0 && (d.old ?? []).length > 0);
+    const ratio = users.length ? clearingDiffs.length / users.length : 0;
     if (ratio > 0.5) {
-      const msg = `[reconcile-scope-resources] changed ${diffs.length}/${users.length} (${(ratio * 100).toFixed(1)}%) > 50% — abort before write`;
+      const msg = `[reconcile-scope-resources] clearing ${clearingDiffs.length}/${users.length} (${(ratio * 100).toFixed(1)}%) > 50% — abort before write`;
       console.error(msg);
       await notifyWecom('scope_resources 对账熔断', msg);
       return { status: 'error', message: msg };
@@ -166,7 +189,7 @@ export const reconcileScopeResourcesManifest: JobManifest = {
       await notifyWecom('scope_resources 对账红区', `red=${red} writeFail=${writeFail}，date=${date}`);
     }
 
-    console.log(`[reconcile-scope-resources] changed=${diffs.length} unchanged=${users.length - diffs.length} empty_keys=${emptyKeys} red=${red + writeFail}`);
-    return { status: 'ok', message: `changed=${diffs.length} unchanged=${users.length - diffs.length} empty=${emptyKeys} red=${red + writeFail}`, detail: { changed: diffs.length, unchanged: users.length - diffs.length, empty_keys: emptyKeys, red_count: red + writeFail } };
+    console.log(`[reconcile-scope-resources] changed=${diffs.length} unchanged=${users.length - diffs.length} empty_keys=${emptyKeys} red=${red + writeFail} lookup_miss=${lookupMiss} preserved=${preserved}`);
+    return { status: 'ok', message: `changed=${diffs.length} unchanged=${users.length - diffs.length} empty=${emptyKeys} red=${red + writeFail} lookup_miss=${lookupMiss} preserved=${preserved}`, detail: { changed: diffs.length, unchanged: users.length - diffs.length, empty_keys: emptyKeys, red_count: red + writeFail, lookup_miss: lookupMiss, preserved } };
   },
 };
