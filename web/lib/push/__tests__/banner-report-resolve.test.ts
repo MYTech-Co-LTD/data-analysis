@@ -38,10 +38,10 @@ const regionRows = [
   { region_name: '西部战区', sale_target: 1600000, sale_actual: 980000, sale_rate: 0.61, delivery_target: 500000, delivery_actual: 200000, delivery_rate: 0.4, daily_sale: 33000, daily_delivery: 7000, remaining_daily_sale_target: 21000, remaining_daily_delivery_target: 10000 },
   { region_name: '中部战区', sale_target: 1500000, sale_actual: 640000, sale_rate: 0.427, delivery_target: 500000, delivery_actual: 100000, delivery_rate: 0.2, daily_sale: 21000, daily_delivery: 3000, remaining_daily_sale_target: 29000, remaining_daily_delivery_target: 16000 },
 ];
-// 外部批发客户（report_wholesale_customer_gen 行）——出库金额/毛利用其聚合值填充
+// 外部批发客户（report_wholesale_daily_customer_gen 行）——3120 品牌 = 真外部批发；出库金额/毛利用其聚合值填充
 const wholesaleRows = [
-  { target_id: 42, client_code: 'c1', wholesale_amount: 300000, wholesale_profit: 36000 },
-  { target_id: 42, client_code: 'c2', wholesale_amount: 150000, wholesale_profit: 18000 },
+  { target_id: 42, client_code: 'c1', wholesale_ext_customer_amount: 300000, wholesale_ext_customer_profit: 36000 },
+  { target_id: 42, client_code: 'c2', wholesale_ext_customer_amount: 150000, wholesale_ext_customer_profit: 18000 },
 ];
 const targetRow = { id: 42, name: '6月经营目标', status: 'active', start_date: '2026-06-01', end_date: '2026-06-30' };
 const freshnessRow = { data_updated_at: '2026-08-21T01:30:00+00:00', last_query_at: '2026-08-21T01:00:00+00:00' };
@@ -64,7 +64,7 @@ function mockViews(opts: {
     }
     if (u.includes('/report_brand_metric_gen')) return jsonResp(opts.brand ?? brandRows);
     if (u.includes('/report_region_breakdown_gen')) return jsonResp(opts.region ?? regionRows);
-    if (u.includes('/report_wholesale_customer_gen')) return jsonResp(opts.wholesale ?? wholesaleRows);
+    if (u.includes('/report_wholesale_daily_customer_gen')) return jsonResp(opts.wholesale ?? wholesaleRows);
     if (u.includes('/targets?')) {
       return jsonResp(opts.target === null ? [] : [opts.target ?? targetRow]);
     }
@@ -242,8 +242,8 @@ describe('resolveReportBannerData', () => {
   it('cost 不可见（delivery_profit/delivery_margin NULL）→ 「—」灰（can_cost_visible false 语义）', async () => {
     mockViews({
       brand: brandRows.map((r) => ({ ...r, delivery_profit: null, delivery_margin: null })),
-      // 批发 profit 也 null（cost 不可见语义：wholesale_profit 视图 CASE WHEN can_cost_visible() → NULL）
-      wholesale: wholesaleRows.map((r) => ({ ...r, wholesale_profit: null })),
+      // 批发 profit 也 null（cost 不可见语义：wholesale_ext_customer_profit 视图 CASE WHEN can_cost_visible() → NULL）
+      wholesale: wholesaleRows.map((r) => ({ ...r, wholesale_ext_customer_profit: null })),
     });
     const data = await resolveReportBannerData({ jwt: 'j', targetMode: 'follow' });
     expect(data).not.toBeNull();

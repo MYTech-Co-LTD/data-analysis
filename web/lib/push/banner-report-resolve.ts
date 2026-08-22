@@ -236,18 +236,19 @@ export async function resolveReportBannerData(opts: BannerResolveOpts): Promise<
         opts.jwt,
       ),
       queryRows(
-        `${base}/report_wholesale_customer_gen?select=target_id,wholesale_amount,wholesale_profit&target_id=eq.${panelTargetId}`,
+        `${base}/report_wholesale_daily_customer_gen?select=target_id,wholesale_ext_customer_amount,wholesale_ext_customer_profit&target_id=eq.${panelTargetId}`,
         opts.jwt,
       ),
     ]);
 
-    // 外部批发合计：SUM 各客户行（出库金额=wholesale_amount、出库毛利=wholesale_profit、毛利率=毛利/金额）；
+    // 外部批发合计：SUM 各客户行（出库金额=wholesale_ext_customer_amount、出库毛利=wholesale_ext_customer_profit、毛利率=毛利/金额）；
+    // 口径：report_wholesale_daily_customer_gen 只取 3120 品牌（外部批发客户），排除 64188 品品甜门店（内部流转）。
     // 销售类字段不填值（「—」）；cost 不可见 → 毛利/毛利率「—」。
     const wsRows = (wholesaleRows ?? []).map((r) => r as Record<string, unknown>);
-    const wsAmount = wsRows.reduce((acc, r) => acc + (Number(r.wholesale_amount) || 0), 0);
-    const wsProfit = wsRows.reduce((acc, r) => acc + (Number(r.wholesale_profit) || 0), 0);
+    const wsAmount = wsRows.reduce((acc, r) => acc + (Number(r.wholesale_ext_customer_amount) || 0), 0);
+    const wsProfit = wsRows.reduce((acc, r) => acc + (Number(r.wholesale_ext_customer_profit) || 0), 0);
     const wsMargin = wsAmount > 0 ? wsProfit / wsAmount : null;
-    const costVisible = wsRows.some((r) => r.wholesale_profit !== null && r.wholesale_profit !== undefined) || wsProfit > 0;
+    const costVisible = wsRows.some((r) => r.wholesale_ext_customer_profit !== null && r.wholesale_ext_customer_profit !== undefined) || wsProfit > 0;
     const externalWholesale: BannerBrandRow = {
       sbc: '外部批发',
       name: '外部批发',
