@@ -218,13 +218,13 @@ export async function getUserRoles(wecomId: string): Promise<{
   roles?: string[];
   error?: string;
 }> {
-  const result = await casdoorFetch(
-    `/api/get-user?id=${CASDOOR_ORG}/${encodeURIComponent(wecomId)}`,
-  );
-  if (!result.ok || !result.data) {
-    return { ok: false, error: result.error ?? 'user_not_found' };
+  // 2026-08-22 修复：用 getUserObj 正确解包 get-user 外壳（{status,data}→data 字段）——
+  //   原实现取 result.data（整个 body {status,data,...}）当 user，user.roles 恒 undefined → roles 恒空
+  //   → reconcile 对账用 Casdoor 权威角色投影永远为空（all empty）。
+  const user = await getUserObj(wecomId);
+  if (user === null || user === 'fetch_error') {
+    return { ok: false, error: user === 'fetch_error' ? 'user_fetch_error' : 'user_not_found' };
   }
-  const user = result.data as Record<string, unknown>;
   const rolesArr = Array.isArray(user.roles) ? user.roles : [];
   const roles: string[] = rolesArr.map((r: unknown) =>
     typeof r === 'object' && r !== null ? String((r as Record<string, unknown>).name ?? '') : String(r),
