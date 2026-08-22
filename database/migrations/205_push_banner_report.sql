@@ -24,10 +24,10 @@ SET card_json = jsonb_set(
     ),
     '{vertical_content_list}',
     jsonb_build_array(
-      jsonb_build_object('title', '销售额', 'value', '{{sale_amount}}'),
-      jsonb_build_object('title', '配送额', 'value', '{{delivery_amount}}'),
-      jsonb_build_object('title', '出库金额', 'value', '{{outbound_amt}}'),
-      jsonb_build_object('title', '出库毛利', 'value', '{{outbound_profit}}')
+      jsonb_build_object('title', '销售额', 'desc', '{{sale_amount}}'),
+      jsonb_build_object('title', '配送额', 'desc', '{{delivery_amount}}'),
+      jsonb_build_object('title', '出库金额', 'desc', '{{outbound_amt}}'),
+      jsonb_build_object('title', '出库毛利', 'desc', '{{outbound_profit}}')
     )::jsonb,
     true
   ),
