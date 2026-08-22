@@ -17,12 +17,16 @@ INSERT INTO push_variables (var_code, name, metric_code, scope_dim, extra_filter
 ON CONFLICT (var_code) DO NOTHING;
 
 UPDATE push_message_presets
--- 先剔除 vertical_content_list（见注释 5）
+-- 先剔除 vertical_content_list（见注释 5），再逐层 jsonb_set 覆盖配置
 SET card_json = jsonb_set(
+  jsonb_set(
     jsonb_set(
       jsonb_set(
         jsonb_set(
-          jsonb_set((card_json - 'vertical_content_list'), '{card_image,url}', '"{{report_banner}}"'::jsonb, true),
+          jsonb_set(
+            (card_json - 'vertical_content_list'),
+            '{card_image,url}', '"{{report_banner}}"'::jsonb, true
+          ),
           '{card_action,url}', '"{{report_banner}}"'::jsonb, true
         ),
         '{source,desc}', '"{{target_name}}"'::jsonb, true
