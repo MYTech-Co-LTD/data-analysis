@@ -16,6 +16,9 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+      # 2026-08-23：调度 job（scheduled-reports cron-match）按容器本地时区解释 cron_spec.time，
+      # 缺 TZ → UTC（21:30 被当 UTC 21:30 = 北京次日 05:30 凌晨推送）；设 Asia/Shanghai 对齐业务时区。
+      - TZ=Asia/Shanghai
       # InsForge SDK（服务端 API Routes 使用）
       - INSFORGE_API_BASE=http://insforge:7130
       - INSFORGE_API_KEY=${ANON_KEY}
