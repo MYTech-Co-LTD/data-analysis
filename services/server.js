@@ -391,11 +391,12 @@ app.post("/merge", async (req, res) => {
 
     // 4. 合并：两侧列取并集，缺失列填 NULL（全 VARCHAR）；保证列名对齐鲁棒
     let combinedCount = totalRecords;
+    let allCols = newCols;
     if (hasExisting) {
       await runQuery(`CREATE OR REPLACE TEMP TABLE old_data AS SELECT * FROM read_parquet('${allS3Path}')`);
       const desc = await runQuery("DESCRIBE old_data");
       existingCols = desc.map(c => c.column_name).filter(Boolean);
-      const allCols = Array.from(new Set([...existingCols, ...newCols])).sort();
+      allCols = Array.from(new Set([...existingCols, ...newCols])).sort();
       const selectList = (avail) => allCols
         .map(c => avail.includes(c) ? `"${c}"` : `CAST(NULL AS VARCHAR) AS "${c}"`)
         .join(', ');
@@ -415,8 +416,17 @@ app.post("/merge", async (req, res) => {
         await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM combined");
       }
     } else if (dedupe_key.length > 0) {
-      const keyCols = dedupe_key.join(', ');
-      await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT ON (${keyCols}) * FROM combined ORDER BY ${keyCols}`);
+      // 2026-08-24 防御：源端字段消失（如 transfer 停返回 lotNumber）会使新批次缺列，
+      // 去重键引用不存在列 → Binder Error、当天分区永远写不出。去重键与 combined 实际列取交集；
+      // 交集为空退化为整行去重（同 dedupe_key=['*'）。
+      const combinedCols = allCols; // hasExisting=false 时即 newCols（无旧列可并）
+      const keyCols = dedupe_key.filter((k) => combinedCols.includes(k));
+      if (keyCols.length > 0) {
+        const keyList = keyCols.join(', ');
+        await runQuery(`CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT ON (${keyList}) * FROM combined ORDER BY ${keyList}`);
+      } else {
+        await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT DISTINCT * FROM combined");
+      }
     } else {
       await runQuery("CREATE OR REPLACE TEMP TABLE deduped AS SELECT * FROM combined");
     }

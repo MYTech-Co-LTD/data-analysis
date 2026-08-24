@@ -56,6 +56,7 @@ function buildBody(distributionBranch: number, dtFrom: string, dtTo: string, off
   });
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- 2026-08-24：存量宽松 any（lemeng 动态 schema），仅过 lint 门禁，语义零改动 */
 // 扁平化：提取明细核心字段（snake_case，落 Parquet 用）。pos_order_* / 门店 / 商品 / 交易量额毛利
 function flattenRecords(records: any[]): any[] {
   return records.map(r => ({
@@ -81,7 +82,7 @@ function flattenRecords(records: any[]): any[] {
     item_method: r.itemMethod,
     spec: r.spec,
     out_unit: r.outUnit,
-    lot_number: r.lotNumber,
+    lot_number: r.lotNumber ?? null, // 2026-08-24：源 API 停止返回 lotNumber——保列置 NULL，避免 /merge 去重键 Binder Error（列缺失致当天分区写不出）
     out_amount: r.outAmount,            // 调出数量（拿货量）
     out_money: r.outMoney,              // 调出金额
     out_unit_price: r.outUnitPrice,
