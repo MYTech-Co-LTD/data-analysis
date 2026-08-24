@@ -20,7 +20,10 @@ async function checkTokenBlacklist(token: string, sub?: string): Promise<boolean
       .join("")
       .slice(0, 16);
 
-    const baseUrl = process.env.NEXT_PUBLIC_INSFORGE_URL || "http://localhost:7130";
+    // 2026-08-24 修复：InsForge OSS 网关无 /rest/v1 路由（Supabase 云约定），恒 404。
+    // 服务端直连内网 PostgREST（与 web/lib/scheduler 同源），鉴权用 POSTGREST_ANON_KEY。
+    const baseUrl = process.env.POSTGREST_URL || "http://postgrest:3000";
+    const pgrstKey = process.env.POSTGREST_ANON_KEY || "";
     // 离职四 sink①：按 sub 拉黑与按单 token 拉黑并集——thin-sync disable 动作成功后
     // 写入 user_id 维度行，旧 7 天 JWT 全部即刻拒。
     const orFilter = sub
@@ -30,6 +33,7 @@ async function checkTokenBlacklist(token: string, sub?: string): Promise<boolean
       `${baseUrl}/rest/v1/token_blacklist?${orFilter}&select=id`,
       {
         headers: {
+          "apikey": pgrstKey,
           "Authorization": `Bearer ${token}`,
           "Accept": "application/json",
         },
