@@ -13,3 +13,8 @@ database/migrations/053_target_breakdown.sql:89   # pre-reform: SELECT id INTO v
 database/migrations/062_breakdown_all_brand.sql:40 # pre-reform: 同上，062 是 053→063 之间的过渡版本（已被 099 覆盖）
 database/migrations/063_breakdown_three_level.sql:43 # pre-reform: spec §1.1 根因 bug——SELECT system_book_code INTO ... WHERE branch_num=v_branch LIMIT 1（已被 099 删除）
 database/migrations/063_breakdown_three_level.sql:50 # pre-reform: spec §1.1 根因 bug——SELECT id INTO v_sub ... branch_num=v_branch LIMIT 1（已被 099 复合键覆盖）
+
+# 2026-08-27 agent-query 商品键守卫单测：反面样例行——故意复现违规 SQL 形态，断言网关报 forbidden_branch_join。属测试夹具非业务代码。
+web/lib/agent-query/__tests__/sql-guards.test.ts:20
+web/lib/agent-query/__tests__/sql-guards.test.ts:80
+web/lib/agent-query/__tests__/sql-guards.test.ts:94
