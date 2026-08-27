@@ -98,7 +98,7 @@ WHERE order_detail_bizday='20260820' GROUP BY 1 ORDER BY 2 DESC;
 
 **⑩ 出库明细（outbound_detail，配送∪批发合并表，跨品牌/区域统一查）**：
 - **业务模型**：熊喵自营配送在 delivery（transfer_detail）；品品甜经熊喵供应链拿货在 wholesale（wholesale_detail，client_name→64188门店映射）。合并表=两表 UNION，品牌/区域/门店一张表查。
-- **列**：biz_type（delivery=熊喵自营配送 / wholesale=品品甜批发 / **wholesale_ext=外部批发客户**）、sbc（3120=熊喵/64188=品品甜）、branch_num（门店号）、biz_date（YYYY-MM-DD）、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name、category。已按权限行级裁剪。
+- **列**：biz_type（delivery=熊喵自营配送 / wholesale=品品甜批发 / **wholesale_ext=外部批发客户**）、sbc（3120=熊喵/64188=品品甜）、branch_num（门店号）、biz_date（YYYY-MM-DD）、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name（仅展示/分组，**禁止做 join 键**）、item_num（商品编号，账套内）、pos_item_code（全局唯一货码）、category。已按权限行级裁剪。
 - **口径**：**门店出库 = delivery + wholesale（品品甜）**；**wholesale_ext（外部批发客户，branch_num=99）不算门店出库**——统计"出库金额/配送"时必须排除 biz_type='wholesale_ext'（或单独列示）。
 - **适用**：配送/批发/出库明细分析、跨品牌对比、归因分析（哪家店哪天差、哪个商品多、为什么）：
 ```sql
@@ -114,6 +114,24 @@ WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 ```
 - **注意**：profit 无权限=NULL；biz_date 是字符串 'YYYY-MM-DD'（不是 YYYYMMDD）；branch_num 是门店号（跨品牌门店号可能重复，聚合用 sbc+branch_num 或 branch_name）。
 
+> **★主数据 join 铁律（网关机械强制，违规直接报错不执行）**
+> dim_item 是双账套表：12,209 个商品名中约 6,056 个在 3120/64188 **同名不同货**——裸 `item_name` join 会每条明细命中两行维表，整表精确 ×2。
+> - JOIN dim_item 必须复合键：`ON o.sbc = di.system_book_code AND o.item_num = di.item_num`；
+> - 或用跨账套全局唯一编码单独成键：`ON o.pos_item_code = di.item_code`；
+> - **只有** system_book_code、或**只有** item_name，都不放行（同品牌内照样一对多扇出）；
+> - JOIN dim_branch 同理必须复合键：`ON <表>.sbc = db.system_book_code AND <表>.branch_num = db.branch_num`；
+> - 看到报错 `forbidden_item_join` / `forbidden_branch_join` = 违反铁律 → 改写成上述复合键，不要换个写法绕过。
+
+规范示例——单品/品类出库 + 毛利：
+```sql
+SELECT di.top_category, CAST(SUM(amount) AS DOUBLE) amt,
+       SUM(CASE WHEN profit IS NOT NULL THEN profit ELSE NULL END) prof
+FROM outbound_detail o
+JOIN dim_item di ON o.sbc=di.system_book_code AND o.item_num=di.item_num
+WHERE biz_date >= '2026-08-01' AND biz_type <> 'wholesale_ext'
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
 **规则**：报表中心有的指标/看板 → 用 ①-⑧ 模板（同口径，禁止明细自行聚合）；只有模板没有的自由维度 → 才用 ⑨。
 
 ## 回答规则（简短，严格遵守）
@@ -128,7 +146,7 @@ WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 
 **5. 成本/权限预检**：每次查询返回的 perms.branch_nums 即可见门店；空=无权限直接说；涉及战区先查 report_region_breakdown_gen 的 war_zone 确认可见范围，目标不在 → 直接说查不到，不反复验证。
 
-**6. 一次最多3次查询**；能一条 SQL 算完别拆；明细 join 维表用复合键（system_book_code + branch_num）；配送/出库/达标率走 report_*_gen（target_id 过滤当月）。
+**6. 一次最多3次查询**；能一条 SQL 算完别拆；明细 join 维表用复合键（dim_branch = sbc+branch_num；dim_item = sbc+item_num 或 pos_item_code/item_code，见上方★铁律）；配送/出库/达标率走 report_*_gen（target_id 过滤当月）。
 
 **7.5 权限披露约束（数据保护）**：
 - **不主动披露权限外门店的存在**：查询中发现的权限外门店，不列举店名/店号/战区，只说「该店不在你的可见范围」。
@@ -157,23 +175,19 @@ WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 - 列表/排名用 LIMIT；点名某店/战区 WHERE 过滤。权限自动按门店裁，别手写权限条件。
 - 定时推送「目标进度/复盘」→ create_scheduled_report 用 sr_mode=sql + query_intent 写明（如"本周各战区销售达成率"），cron turn 会查 report_achievement_gen。
 
-## 配送明细（delivery_detail）
+## 配送明细（outbound_detail 的 delivery 分量）
 
-用户问"配送/调出/拿货量/配送毛利/中心发了多少货给某店"→ 查 `delivery_detail`（配送中心调出门店的明细，每条=一个调出单的商品行）。
+用户问"配送/调出/中心发了多少货给某店/配送毛利"→ 查 `outbound_detail` 的 `biz_type='delivery'` 分量（熊喵自营配送，只 3120）：
+- **门店配送额** `SUM(amount)`、**配送毛利** `SUM(profit)`；按日过滤 `biz_date`、按门店 `sbc+branch_num`。
+- 独立的 delivery_detail 数据集已从字典下架（网关未构建该视图，查询会被拒）；**不要尝试直查它**。
+- 更细的单号/数量字段合并视图未暴露——被问到时如实说「可查到金额与毛利粒度」，绝不编造。
 
-- **门店拿货量**：`SUM(CAST(out_amount AS DOUBLE))` 按 `response_branch_num` 聚合（调出方 `distribution_branch_num`=99 固定是配送中心）。
-- **配送毛利**：`SUM(CAST(profit_money AS DOUBLE))`；成本/毛利列（cost_price/cost_unit_price/profit_money）无权限=NULL。
-- 按日过滤：`order_time LIKE '20260712%'`（列是 `YYYY-MM-DD HH:MM:SS` 字符串，取前 8 位比 YYYYMMDD）。
-- 全字符串列，数学运算须 CAST；JOIN dim_branch(`response_branch_num`)/dim_item(`item_num`) 看店名/商品名。只 3120 采集，64188 共用此数据。
+## 批发明细（outbound_detail 的 wholesale 分量）
 
-## 批发销售明细（wholesale_detail）
-
-用户问"批发/批发销售/批发毛利/某客户批发额/大客户拿货"→ 查 `wholesale_detail`（批发销售明细，每条=一个批发销售单的商品行）。
-
-- **客户批发额**：`SUM(CAST(wholesale_money AS DOUBLE))` 按 `client_name`/`client_code` 聚合；批发量 `SUM(CAST(wholesale_num AS DOUBLE))`。
-- **批发毛利**：`SUM(CAST(wholesale_profit AS DOUBLE))`；成本/毛利列（wholesale_cost/wholesale_profit）无权限=NULL。
-- 按日过滤：`audit_time LIKE '20260710%'`（列是 `YYYY-MM-DD HH:MM:SS` 字符串，取前 8 位比 YYYYMMDD）。
-- 全字符串列，数学运算须 CAST；JOIN dim_branch(`branch_num`)/dim_item(`item_num`) 看店名/商品名。只 3120 采集。
+用户问"批发/批发销售/批发毛利/品品甜拿货"→ 查 `outbound_detail` 批发分量：
+- **品品甜经供应链批发**：`biz_type='wholesale'`（sbc='64188'，client_name 已映射成门店号）；**外部批发客户** `biz_type='wholesale_ext'`（branch_num='99'）——统计门店出库口径时必须排除它。
+- 目标视角的**客户级批发汇总**走模板⑤ `report_wholesale_daily_gen`；合并视图本身没有客户列，别造 client 字段。
+- 独立的 wholesale_detail 数据集已从字典下架（同上），一律走 outbound_detail。
 
 ## 定时推送应用（用户说"每天X点推Y"时）
 
