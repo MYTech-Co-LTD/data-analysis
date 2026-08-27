@@ -375,7 +375,11 @@ agent-query 网关 function（functions/agent-query，新建）
    │         client_credentials + JWKS 服务身份模式由 push-admin 先验证，AGENT_API_KEY 降级开关保留，§4.3）
    ├─ ② 授权：get_user_perms（PERMS_INPUT 感知，§6.2）查 data_permissions 逐维合成
    │         perms = { branch_nums, brands, categories, can_see_cost }（角色∪部门 UNION → 个人 override）
-   ├─ ③ SQL 白名单：只 SELECT / 禁 read_parquet 与写操作 / 强制 LIMIT
+   ├─ ③ SQL 白名单：只 SELECT / 禁 read_parquet 与写操作 / 强制 LIMIT / 复合键 join 机械守卫
+   │         （实现 `functions/_shared/sql-guards.ts`，网关 validateSql 接线）：①门店键——ON/USING 出现
+   │           branch_num 必须同带 system_book_code（forbidden_branch_join）；②商品键——JOIN dim_item 必带
+   │           sbc+item_num 或全局唯一 pos_item_code/item_code，裸 item_name 拒绝（forbidden_item_join，
+   │           2026-08-27 小海单品报表双账套同名整表×2 事故后置入）。单测锁定于 web/lib/agent-query/__tests__
    ├─ ④ 拼权限视图：行 WHERE branch_num IN (...) + 列 CASE 脱敏成本组
    ├─ ⑤ 跨引擎编排（若 JOIN 涉及 PG 维表）：用用户 JWT 查 PostgREST（走 RLS）→ 注入 DuckDB 临时表
    └─ ⑥ 审计：写 agent_query_logs（006 已建）
