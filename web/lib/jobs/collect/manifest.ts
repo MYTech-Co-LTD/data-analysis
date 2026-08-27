@@ -47,20 +47,33 @@ const MAX_VERIFY_RETRIES = 3;
 // 新一天对账最近 N 天（不只前一日）：晚生成/晚审核的单据若在 N 天内落账，
 // 会被后续某天的对账发现并触发 full 补采（修 lookback=1 只对前一天的盲区）。
 const RECONCILE_DAYS = 3;
-// 逐天比 API count vs 库已采 count（最近 N 天，不含今天）：任一天 lib<api 返回该天日期，全匹配返回 null
-async function reconcileTrailingDays(
+// 逐天比 API count vs 库已采 count（最近 N 天，不含今天）：
+//   mismatch  → lib !== api（漏采/stale）→ full 重采
+//   delayed   → api=0 但库有数据（源数据延迟生成，如配送按审核时间晚落账）→ 不 full（API 还 0 时
+//               full 覆盖会清空更糟），记 delayed 告警；后续对账（12:00/19:00/次日02:00）API 恢复
+//               后走 mismatch → 自动 full 补采。修复 2026-08-26 配送数据延迟被 `api<=0 continue` 静默跳过盲区。
+//   真无数据（api=0 且库 0，如节假日）→ 跳过
+export async function reconcileTrailingDays(
   N: number,
   apiCount: (date: string) => Promise<number>,
   libCount: (date: string) => Promise<number>,
-): Promise<string | null> {
+): Promise<{ mismatch?: string; delayed?: string[] }> {
+  const delayed: string[] = [];
   for (let i = 1; i <= N; i++) {
     const d = getDateOffsetChina(-i);
     const api = await apiCount(d);
-    if (api <= 0) continue; // 该天 API 无数据（节假日/未来日），跳过
+    if (api <= 0) {
+      const lib = await libCount(d);
+      if (lib > 0) {
+        delayed.push(d);
+        console.warn(`[scheduler] ${d} API count=0 但库 ${lib} 行（数据延迟/异常，待 API 恢复补采）`);
+      }
+      continue; // 真无数据（节假日/未来日）→ 跳过
+    }
     const lib = await libCount(d);
-    if (lib !== api) return d; // 少了=漏采 OR 多了=stale/退货 → full 重采
+    if (lib !== api) return { mismatch: d }; // 少了=漏采 OR 多了=stale/退货 → full 重采
   }
-  return null;
+  return delayed.length ? { delayed } : {};
 }
 
 // C1: 采集 verified 后触发报表计算（service 身份，无 perms；算全量写 report_*，查询时裁剪）。
@@ -273,11 +286,14 @@ export async function executeTask(task: CollectTask, opts?: { reconcile?: boolea
       let mode: 'full' | 'incremental';
       if (opts?.reconcile) {
         // 对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
-        const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
+        const rc = await reconcileTrailingDays(RECONCILE_DAYS,
           (d) => lemeng.count!({ authToken, task: 'delivery', distributionBranch, branchNumsStr }, [d, d]),
           (d) => duckdbParquetCount(`lemeng/transfer_detail/${companyId}/${d.replace(/-/g, '')}/all.parquet`));
-        mode = mismatch ? 'full' : 'incremental';
-        console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${mismatch ? `不匹配@${mismatch}` : '全匹配'} → ${mode}`);
+        if (rc.delayed?.length) {
+          await notifyWecom('⚠️ 配送数据疑似延迟', `${task.name} ${rc.delayed.join(',')} API=0 但库有数据，后续对账 API 恢复后自动补采`).catch(() => {});
+        }
+        mode = rc.mismatch ? 'full' : 'incremental';
+        console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${rc.mismatch ? `不匹配@${rc.mismatch}` : (rc.delayed?.length ? `延迟@${rc.delayed.join(',')}` : '全匹配')} → ${mode}`);
       } else {
         mode = 'incremental';
       }
@@ -377,11 +393,14 @@ export async function executeTask(task: CollectTask, opts?: { reconcile?: boolea
       let mode: 'full' | 'incremental';
       if (opts?.reconcile) {
         // 对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
-        const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
+        const rc = await reconcileTrailingDays(RECONCILE_DAYS,
           (d) => lemeng.count!({ authToken, task: 'wholesale', branchNumsStr }, [d, d]),
           (d) => duckdbParquetCount(`lemeng/wholesale_detail/${companyId}/${d.replace(/-/g, '')}/all.parquet`));
-        mode = mismatch ? 'full' : 'incremental';
-        console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${mismatch ? `不匹配@${mismatch}` : '全匹配'} → ${mode}`);
+        if (rc.delayed?.length) {
+          await notifyWecom('⚠️ 批发数据疑似延迟', `${task.name} ${rc.delayed.join(',')} API=0 但库有数据，后续对账自动补采`).catch(() => {});
+        }
+        mode = rc.mismatch ? 'full' : 'incremental';
+        console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${rc.mismatch ? `不匹配@${rc.mismatch}` : (rc.delayed?.length ? `延迟@${rc.delayed.join(',')}` : '全匹配')} → ${mode}`);
       } else {
         mode = 'incremental';
       }
@@ -475,11 +494,14 @@ export async function executeTask(task: CollectTask, opts?: { reconcile?: boolea
     let mode: 'full' | 'incremental';
     if (opts?.reconcile) {
       // 新一天：对账最近 RECONCILE_DAYS 天（不只前一日，兜晚落账单据）
-      const mismatch = await reconcileTrailingDays(RECONCILE_DAYS,
+      const rc = await reconcileTrailingDays(RECONCILE_DAYS,
         (d) => lemeng.count!({ authToken, task: 'retail', branchNums, branchNumsStr }, [d, d]),
         (d) => duckdbParquetCount(`lemeng/retail_detail/${companyId}/${d}/all.parquet`));
-      mode = mismatch ? 'full' : 'incremental';
-      console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${mismatch ? `不匹配@${mismatch}` : '全匹配'} → ${mode}`);
+      if (rc.delayed?.length) {
+        await notifyWecom('⚠️ 销售数据疑似延迟', `${task.name} ${rc.delayed.join(',')} API=0 但库有数据，后续对账自动补采`).catch(() => {});
+      }
+      mode = rc.mismatch ? 'full' : 'incremental';
+      console.log(`[scheduler] ${task.name} 对账最近${RECONCILE_DAYS}天 ${rc.mismatch ? `不匹配@${rc.mismatch}` : (rc.delayed?.length ? `延迟@${rc.delayed.join(',')}` : '全匹配')} → ${mode}`);
     } else {
       mode = 'incremental'; // 当天纯增量（API 实时涨，当天对账永远库<API 不准；漏了次日对账前一日兜底补）
     }
