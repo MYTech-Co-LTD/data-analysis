@@ -9,6 +9,7 @@
 // （scripts/deploy-functions.sh 用 .bundle 产物或本目录 index.bundle.js 部署；InsForge 运行时模型不变）。
 const { signJwt } = require("../_shared/jwt");
 const { json: sharedJson } = require("../_shared/cors");
+const { assertCompositeKeyJoins } = require("../_shared/sql-guards");
 
 // ===== 配置 =====
 const AGENT_API_KEY = Deno.env.get("AGENT_API_KEY");
@@ -206,30 +207,13 @@ function validateSql(raw, allowedTables) {
   while ((m = FROM_JOIN_REF_RE.exec(trimmed)) !== null) {
     if (!allowed.has(m[2].toLowerCase())) throw new Error("forbidden_table:" + m[2]);
   }
-  // ⑤ JOIN 复合键铁律（机械强制，2026-08-20 三次实测：裸 branch_num 跨品牌扇出错标）：
-  //    ON/USING 里出现 branch_num 必须同时带 system_book_code；CROSS JOIN 一律拒。
+  // ⑤ JOIN 复合键铁律（机械强制；实现提取至 ../_shared/sql-guards，单测锁定于
+  //    web/lib/agent-query/__tests__/sql-guards.test.ts）：
+  //    ① 门店键：ON/USING 出现 branch_num 必须同时带 system_book_code（2026-08-20 三次实测扇出错标）；
+  //    ② 商品键：JOIN dim_item 必须携带 item_num/item_code——裸 item_name 双账套同名整表 ×2
+  //      （2026-08-27 小海单品报表翻倍事故，毛利精确 2 倍实证）。CROSS JOIN 一律拒。
   if (/\bCROSS\s+JOIN\b/i.test(trimmed)) throw new Error("forbidden_cross_join");
-  // 表名后可选别名（带 AS 或裸别名，如 dim_branch b）
-  const aliasRe = "(?:\\s+(?:AS\\s+)?[A-Za-z_][A-Za-z0-9_]*)?";
-  const joinRe = new RegExp(
-    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+ON\\b([\\s\\S]*?)(?=\\b(?:JOIN|WHERE|GROUP BY|ORDER BY|LIMIT|HAVING|UNION)\\b|$)", "gi");
-  let jm;
-  joinRe.lastIndex = 0;
-  while ((jm = joinRe.exec(trimmed)) !== null) {
-    const onClause = jm[1] || "";
-    if (/\bbranch_num\b/i.test(onClause) && !/\bsystem_book_code\b/i.test(onClause)) {
-      throw new Error("forbidden_branch_join");
-    }
-  }
-  const usingRe = new RegExp(
-    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+USING\\s*\\(([^)]*)\\)", "gi");
-  let um;
-  usingRe.lastIndex = 0;
-  while ((um = usingRe.exec(trimmed)) !== null) {
-    if (/\bbranch_num\b/i.test(um[1]) && !/\bsystem_book_code\b/i.test(um[1])) {
-      throw new Error("forbidden_branch_join");
-    }
-  }
+  assertCompositeKeyJoins(trimmed);
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
 }
@@ -283,17 +267,18 @@ async function runDuckdb(userSelect, perms, reg) {
       ? "WHERE 1=0"
       : "WHERE regexp_replace(sbc || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2') IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const outboundProfit = `CASE WHEN ${canSee} THEN t.profit ELSE NULL END AS profit`;
-  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT biz_type, sbc, branch_num, biz_date, amount, " + outboundProfit + ", item_name, category FROM (" +
+  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT biz_type, sbc, branch_num, biz_date, amount, " + outboundProfit + ", item_name, item_num, pos_item_code, category FROM (" +
     "SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, " +
     "response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, CAST(out_money AS DOUBLE) AS amount, " +
-    "CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, item_category AS category " +
+    "CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, " +
+    "item_num AS item_num, pos_item_code AS pos_item_code, item_category AS category " +
     "FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet', filename=true) " +
     "UNION ALL " +
     "SELECT CASE WHEN db.branch_num IS NULL THEN 'wholesale_ext' ELSE 'wholesale' END AS biz_type, " +
     "COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, " +
     "COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, " +
     "CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, " +
-    "d.pos_item_name AS item_name, d.pos_item_category_name AS category " +
+    "d.pos_item_name AS item_name, d.item_num AS item_num, d.pos_item_code AS pos_item_code, d.pos_item_category_name AS category " +
     "FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet', filename=true) d " +
     "LEFT JOIN dim_branch db ON db.system_book_code='64188' AND db.branch_name = d.client_name " +
     ") t " + outboundFilter + ";";

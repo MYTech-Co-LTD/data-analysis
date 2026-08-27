@@ -1,4 +1,15 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
 var __commonJS = (cb, mod) => function __require() {
   try {
     return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
@@ -6,6 +17,19 @@ var __commonJS = (cb, mod) => function __require() {
     throw mod = 0, e;
   }
 };
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // functions/_shared/jwt.ts
 var require_jwt = __commonJS({
@@ -52,9 +76,62 @@ var require_cors = __commonJS({
   }
 });
 
+// functions/_shared/sql-guards.ts
+var sql_guards_exports = {};
+__export(sql_guards_exports, {
+  assertBranchJoin: () => assertBranchJoin,
+  assertCompositeKeyJoins: () => assertCompositeKeyJoins,
+  assertItemJoin: () => assertItemJoin
+});
+function forEachJoinClause(sql, visit) {
+  let m;
+  JOIN_ON_RE.lastIndex = 0;
+  while ((m = JOIN_ON_RE.exec(sql)) !== null) visit(m[1], "on", m[2] || "");
+  JOIN_USING_RE.lastIndex = 0;
+  while ((m = JOIN_USING_RE.exec(sql)) !== null) visit(m[1], "using", m[2] || "");
+}
+function assertBranchJoin(sql) {
+  forEachJoinClause(sql, (_table, _kind, onText) => {
+    if (/\bbranch_num\b/i.test(onText) && !/\bsystem_book_code\b/i.test(onText)) {
+      throw new Error("forbidden_branch_join");
+    }
+  });
+}
+function assertItemJoin(sql) {
+  forEachJoinClause(sql, (table, _kind, onText) => {
+    if (!new RegExp("^dim_item$", "i").test(table)) return;
+    const hasKey = HAS_ITEM_KEY_RE.test(onText);
+    const keyIsGloballyUnique = /\bitem_code\b/i.test(onText);
+    const hasBrandAnchor = /\bsystem_book_code\b/i.test(onText);
+    if (!hasKey || !(keyIsGloballyUnique || hasBrandAnchor)) {
+      throw new Error("forbidden_item_join");
+    }
+  });
+}
+function assertCompositeKeyJoins(sql) {
+  assertBranchJoin(sql);
+  assertItemJoin(sql);
+}
+var ALIAS_RE, JOIN_ON_RE, JOIN_USING_RE, HAS_ITEM_KEY_RE;
+var init_sql_guards = __esm({
+  "functions/_shared/sql-guards.ts"() {
+    ALIAS_RE = "(?:\\s+(?:AS\\s+)?[A-Za-z_][A-Za-z0-9_]*)?";
+    JOIN_ON_RE = new RegExp(
+      "\\bJOIN\\s+([A-Za-z_][A-Za-z0-9_]*)" + ALIAS_RE + "\\s+ON\\b([\\s\\S]*?)(?=\\b(?:JOIN|WHERE|GROUP BY|ORDER BY|LIMIT|HAVING|UNION)\\b|$)",
+      "gi"
+    );
+    JOIN_USING_RE = new RegExp(
+      "\\bJOIN\\s+([A-Za-z_][A-Za-z0-9_]*)" + ALIAS_RE + "\\s+USING\\s*\\(([^)]*)\\)",
+      "gi"
+    );
+    HAS_ITEM_KEY_RE = /\b(?:item_num|item_code|pos_item_code)\b/i;
+  }
+});
+
 // functions/agent-query/index.js
 var { signJwt } = require_jwt();
 var { json: sharedJson } = require_cors();
+var { assertCompositeKeyJoins: assertCompositeKeyJoins2 } = (init_sql_guards(), __toCommonJS(sql_guards_exports));
 var AGENT_API_KEY = Deno.env.get("AGENT_API_KEY");
 var JWT_SECRET = Deno.env.get("JWT_SIGNING_KEY") || Deno.env.get("JWT_SECRET") || "";
 var DUCKDB_URL = Deno.env.get("DUCKDB_URL") || "http://duckdb:9000";
@@ -241,30 +318,7 @@ function validateSql(raw, allowedTables) {
     if (!allowed.has(m[2].toLowerCase())) throw new Error("forbidden_table:" + m[2]);
   }
   if (/\bCROSS\s+JOIN\b/i.test(trimmed)) throw new Error("forbidden_cross_join");
-  const aliasRe = "(?:\\s+(?:AS\\s+)?[A-Za-z_][A-Za-z0-9_]*)?";
-  const joinRe = new RegExp(
-    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+ON\\b([\\s\\S]*?)(?=\\b(?:JOIN|WHERE|GROUP BY|ORDER BY|LIMIT|HAVING|UNION)\\b|$)",
-    "gi"
-  );
-  let jm;
-  joinRe.lastIndex = 0;
-  while ((jm = joinRe.exec(trimmed)) !== null) {
-    const onClause = jm[1] || "";
-    if (/\bbranch_num\b/i.test(onClause) && !/\bsystem_book_code\b/i.test(onClause)) {
-      throw new Error("forbidden_branch_join");
-    }
-  }
-  const usingRe = new RegExp(
-    "\\bJOIN\\s+[A-Za-z_][A-Za-z0-9_]*" + aliasRe + "\\s+USING\\s*\\(([^)]*)\\)",
-    "gi"
-  );
-  let um;
-  usingRe.lastIndex = 0;
-  while ((um = usingRe.exec(trimmed)) !== null) {
-    if (/\bbranch_num\b/i.test(um[1]) && !/\bsystem_book_code\b/i.test(um[1])) {
-      throw new Error("forbidden_branch_join");
-    }
-  }
+  assertCompositeKeyJoins2(trimmed);
   if (/\bLIMIT\b/i.test(trimmed)) return trimmed;
   return trimmed + " LIMIT " + MAX_ROWS;
 }
@@ -286,7 +340,7 @@ async function runDuckdb(userSelect, perms, reg) {
   viewSql += "\nCREATE OR REPLACE TEMP VIEW retail_detail AS SELECT rd.*, db.region_name, db.first_level_region AS war_zone_name FROM (SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code FROM (SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t) rd LEFT JOIN dim_branch db ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num;";
   const outboundFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE regexp_replace(sbc || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2') IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const outboundProfit = `CASE WHEN ${canSee} THEN t.profit ELSE NULL END AS profit`;
-  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT biz_type, sbc, branch_num, biz_date, amount, " + outboundProfit + ", item_name, category FROM (SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, CAST(out_money AS DOUBLE) AS amount, CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, item_category AS category FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet', filename=true) UNION ALL SELECT CASE WHEN db.branch_num IS NULL THEN 'wholesale_ext' ELSE 'wholesale' END AS biz_type, COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, d.pos_item_name AS item_name, d.pos_item_category_name AS category FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet', filename=true) d LEFT JOIN dim_branch db ON db.system_book_code='64188' AND db.branch_name = d.client_name ) t " + outboundFilter + ";";
+  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT biz_type, sbc, branch_num, biz_date, amount, " + outboundProfit + ", item_name, item_num, pos_item_code, category FROM (SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, CAST(out_money AS DOUBLE) AS amount, CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, item_num AS item_num, pos_item_code AS pos_item_code, item_category AS category FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet', filename=true) UNION ALL SELECT CASE WHEN db.branch_num IS NULL THEN 'wholesale_ext' ELSE 'wholesale' END AS biz_type, COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, d.pos_item_name AS item_name, d.item_num AS item_num, d.pos_item_code AS pos_item_code, d.pos_item_category_name AS category FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet', filename=true) d LEFT JOIN dim_branch db ON db.system_book_code='64188' AND db.branch_name = d.client_name ) t " + outboundFilter + ";";
   const combined = viewSql + "\n" + userSelect;
   const res = await fetch(DUCKDB_URL + "/query", {
     method: "POST",
