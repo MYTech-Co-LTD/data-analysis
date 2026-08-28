@@ -271,12 +271,12 @@ async function runDuckdb(userSelect, perms, reg) {
       ? "WHERE 1=0"
       : "WHERE regexp_replace(sbc || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2') IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const outboundProfit = `CASE WHEN ${canSee} THEN t.profit ELSE NULL END AS profit`;
-  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT t.biz_type, t.sbc, t.ledger_sbc, t.branch_num, t.biz_date, t.amount, " +
+  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT t.biz_type, t.sbc, t.ledger_sbc, t.branch_num, t.biz_date, t.sale_date, t.amount, " +
     outboundProfit + ", t.item_name, t.item_num, t.pos_item_code, t.category, " +
     "di.category_group, di.top_category, di.item_code FROM (" +
     "SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, " +
     "regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS ledger_sbc, " +
-    "response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, CAST(out_money AS DOUBLE) AS amount, " +
+    "response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, substr(sale_time,1,10) AS sale_date, CAST(out_money AS DOUBLE) AS amount, " +
     "CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, " +
     "item_num AS item_num, pos_item_code AS pos_item_code, item_category AS category " +
     "FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet', filename=true) " +
@@ -284,7 +284,7 @@ async function runDuckdb(userSelect, perms, reg) {
     "SELECT CASE WHEN db.branch_num IS NULL THEN 'wholesale_ext' ELSE 'wholesale' END AS biz_type, " +
     "COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, " +
     "regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1) AS ledger_sbc, " +
-    "COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, " +
+    "COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, substr(d.audit_time,1,10) AS sale_date, " +
     "CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, " +
     "d.pos_item_name AS item_name, d.item_num AS item_num, d.pos_item_code AS pos_item_code, d.pos_item_category_name AS category " +
     "FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet', filename=true) d " +
