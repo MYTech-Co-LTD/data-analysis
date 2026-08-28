@@ -273,7 +273,7 @@ async function runDuckdb(userSelect, perms, reg) {
   const outboundProfit = `CASE WHEN ${canSee} THEN t.profit ELSE NULL END AS profit`;
   viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT t.biz_type, t.sbc, t.ledger_sbc, t.branch_num, t.biz_date, t.amount, " +
     outboundProfit + ", t.item_name, t.item_num, t.pos_item_code, t.category, " +
-    "di.top_category, di.item_code FROM (" +
+    "di.category_group, di.top_category, di.item_code FROM (" +
     "SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, " +
     "regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS ledger_sbc, " +
     "response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, CAST(out_money AS DOUBLE) AS amount, " +
