@@ -98,7 +98,7 @@ WHERE order_detail_bizday='20260820' GROUP BY 1 ORDER BY 2 DESC;
 
 **⑩ 出库明细（outbound_detail，配送∪批发合并表，跨品牌/区域统一查）**：
 - **业务模型**：熊喵自营配送在 delivery（transfer_detail）；品品甜经熊喵供应链拿货在 wholesale（wholesale_detail，client_name→64188门店映射）。合并表=两表 UNION，品牌/区域/门店一张表查。
-- **列**：biz_type（delivery=熊喵自营配送 / wholesale=品品甜批发 / **wholesale_ext=外部批发客户**）、sbc（**业务品牌归属**：3120=熊喵 / 64188=品品甜拿货）、**ledger_sbc（单据源账套，均为 3120）**、branch_num（门店号）、biz_date（YYYY-MM-DD）、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name（仅展示/分组，**禁止做 join 键**）、item_num（源账套 3120 编号）、pos_item_code、category（源端原始品类）、**top_category（三类归类，视图已注入——品类聚合直接用它，免 join）**、item_code。已按权限行级裁剪。
+- **列**：biz_type（delivery=熊喵自营配送 / wholesale=品品甜批发 / **wholesale_ext=外部批发客户**）、sbc（**业务品牌归属**：3120=熊喵 / 64188=品品甜拿货）、**ledger_sbc（单据源账套，均为 3120）**、branch_num（门店号）、biz_date（YYYY-MM-DD）、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name（仅展示/分组，**禁止做 join 键**）、item_num（源账套 3120 编号）、pos_item_code、category（源端原始品类）、**category_group（三类：水果/标品/耗材——与报表中心同源，品类聚合首选键）**、top_category（明细L1 归类）、item_code。已按权限行级裁剪。
 - **口径**：**门店出库 = delivery + wholesale（品品甜）**；**wholesale_ext（外部批发客户，branch_num=99）不算门店出库**——统计"出库金额/配送"时必须排除 biz_type='wholesale_ext'（或单独列示）。
 - **适用**：配送/批发/出库明细分析、跨品牌对比、归因分析（哪家店哪天差、哪个商品多、为什么）：
 ```sql
@@ -112,11 +112,11 @@ WHERE sbc='64188' AND biz_type='wholesale' GROUP BY 1 ORDER BY 1 DESC LIMIT 7;
 SELECT item_name, CAST(SUM(amount) AS DOUBLE) amt FROM outbound_detail
 WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 ```
-- **注意**：profit 无权限=NULL；biz_date 是字符串 'YYYY-MM-DD'（不是 YYYYMMDD）；branch_num 是门店号（跨品牌门店号可能重复，聚合用 sbc+branch_num 或 branch_name）。
+- **注意**：profit 无权限=NULL；biz_date 是字符串 'YYYY-MM-DD'（不是 YYYYMMDD）；branch_num 是门店号（跨品牌门店号可能重复，聚合用 sbc+branch_num 或 branch_name）；delivery 分量的 biz_date=制单日（order_time，与报表中心同口径）——乐檬后台「单品综合毛利」按**审核日**记日，单日两系统可有等量反号的跨天搬运差，**区间合计一致**（2026-08-26+27 实证分毫）。
 
 > **★主数据 join 铁律（网关机械强制，违规直接报错不执行）**
 > dim_item 是双账套表：12,209 个商品名中约 6,056 个在 3120/64188 **同名不同货**——裸 `item_name` join 会每条明细命中两行维表，整表精确 ×2。
-> - **优先免 join**：品类聚合直接 GROUP BY outbound_detail 自带的 `top_category`（视图已注入主数据归类，2026-08-28 起）；
+> - **优先免 join**：品类聚合直接 GROUP BY outbound_detail 自带的 `category_group`（水果/标品/耗材——dim_item 预物化，与报表中心 067 语义同源，2026-08-28 起视图注入）；
 > - 确需 join dim_item 时，账套键 = **`ledger_sbc`（单据源账套）而非 sbc**——sbc 是业务品牌归属（品品甜批发 sbc=64188，但单据在 3120 账套落账、item_num 全是 3120 编号；按 sbc=64188 配档案会大面积 miss + 撞号错配，8/27 实证丢 9.6 万）：
 >   `ON o.ledger_sbc = di.system_book_code AND o.item_num = di.item_num`；
 > - pos_item_code/item_code 在两账套各有一行同码——**必须再配账套**：`ON o.pos_item_code = di.item_code AND o.ledger_sbc = di.system_book_code`；
@@ -125,7 +125,7 @@ WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 
 规范示例——品类出库 + 毛利（免 join，直接用视图列）：
 ```sql
-SELECT top_category, CAST(SUM(amount) AS DOUBLE) amt,
+SELECT category_group, CAST(SUM(amount) AS DOUBLE) amt,
        SUM(CASE WHEN profit IS NOT NULL THEN profit ELSE NULL END) prof
 FROM outbound_detail
 WHERE biz_date >= '2026-08-01' AND biz_type <> 'wholesale_ext'
