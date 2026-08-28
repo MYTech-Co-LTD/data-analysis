@@ -99,18 +99,18 @@ WHERE order_detail_bizday='20260820' GROUP BY 1 ORDER BY 2 DESC;
 **⑩ 出库明细（outbound_detail，配送∪批发合并表，跨品牌/区域统一查）**：
 - **业务模型**：熊喵自营配送在 delivery（transfer_detail）；品品甜经熊喵供应链拿货在 wholesale（wholesale_detail，client_name→64188门店映射）。合并表=两表 UNION，品牌/区域/门店一张表查。
 - **列**：biz_type（delivery=熊喵自营配送 / wholesale=品品甜批发 / **wholesale_ext=外部批发客户**）、sbc（**业务品牌归属**：3120=熊喵 / 64188=品品甜拿货）、**ledger_sbc（单据源账套，均为 3120）**、branch_num（门店号）、biz_date（制单日，YYYY-MM-DD，与报表中心同口径）、**sale_date（出库完成日——与乐檬后台单品综合毛利页同锚，按日对齐乐檬用此列）**、amount（金额）、profit（毛利，**无成本权限=NULL**）、item_name（仅展示/分组，**禁止做 join 键**）、item_num（源账套 3120 编号）、pos_item_code、category（源端原始品类）、**category_group（三类：水果/标品/耗材——与报表中心同源，品类聚合首选键）**、top_category（明细L1 归类）、item_code。已按权限行级裁剪。
-- **口径**：**门店出库 = delivery + wholesale（品品甜）**；**wholesale_ext（外部批发客户，branch_num=99）不算门店出库**——统计"出库金额/配送"时必须排除 biz_type='wholesale_ext'（或单独列示）。
+- **口径**：**门店出库 = delivery + wholesale（品品甜）**；**wholesale_ext（外部批发客户，branch_num=99）不算门店出库**——统计"出库金额/配送"时必须排除 biz_type='wholesale_ext'（或单独列示）。**★日期锚默认 `sale_date`（出库完成日=乐檬后台单品综合毛利口径）**：问"昨天/某日/8月出库·配送·毛利"一律 `WHERE sale_date ...`；`biz_date`（制单日）仅当用户明确要对齐报表中心口径时使用，且回答时注明口径。
 - **适用**：配送/批发/出库明细分析、跨品牌对比、归因分析（哪家店哪天差、哪个商品多、为什么）：
 ```sql
--- 某店 8月 每日出库（配送+批发合并）
-SELECT biz_date, biz_type, CAST(SUM(amount) AS DOUBLE) amt
-FROM outbound_detail WHERE branch_num='1' AND biz_date>='2026-08-01' GROUP BY 1,2 ORDER BY 1;
+-- 某店 8月 每日出库（配送+批发合并，出库日口径）
+SELECT sale_date, biz_type, CAST(SUM(amount) AS DOUBLE) amt
+FROM outbound_detail WHERE branch_num='1' AND sale_date>='2026-08-01' GROUP BY 1,2 ORDER BY 1;
 -- 品品甜门店批发按日
-SELECT biz_date, CAST(SUM(amount) AS DOUBLE) amt FROM outbound_detail
+SELECT sale_date, CAST(SUM(amount) AS DOUBLE) amt FROM outbound_detail
 WHERE sbc='64188' AND biz_type='wholesale' GROUP BY 1 ORDER BY 1 DESC LIMIT 7;
 -- 8/20 出库商品 Top
 SELECT item_name, CAST(SUM(amount) AS DOUBLE) amt FROM outbound_detail
-WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+WHERE sale_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 ```
 - **注意**：profit 无权限=NULL；日期列是字符串 'YYYY-MM-DD'（不是 YYYYMMDD）；branch_num 是门店号（跨品牌门店号可能重复，聚合用 sbc+branch_num 或 branch_name）；delivery 分量 `biz_date`=制单日（order_time，与报表中心同口径），`sale_date`=出库完成日（与乐檬后台单品综合毛利页同锚）——单日两锚可有等量反号的跨天搬运差、区间合计一致（2026-08-26+27 实证分毫）；**与乐檬页对单日数字 → 用 sale_date 过滤**。
 
@@ -123,12 +123,12 @@ WHERE biz_date='2026-08-20' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
 > - JOIN dim_branch 同理复合键：`ON <表>.sbc = db.system_book_code AND <表>.branch_num = db.branch_num`；
 > - 看到报错 `forbidden_item_join` / `forbidden_branch_join` = 违反铁律 → 改写成上述复合键，不要换个写法绕过。
 
-规范示例——品类出库 + 毛利（免 join，直接用视图列）：
+规范示例——品类出库 + 毛利（免 join，直接用视图列；sale_date=出库日口径）：
 ```sql
 SELECT category_group, CAST(SUM(amount) AS DOUBLE) amt,
        SUM(CASE WHEN profit IS NOT NULL THEN profit ELSE NULL END) prof
 FROM outbound_detail
-WHERE biz_date >= '2026-08-01' AND biz_type <> 'wholesale_ext'
+WHERE sale_date >= '2026-08-01' AND biz_type <> 'wholesale_ext'
 GROUP BY 1 ORDER BY 2 DESC;
 ```
 
