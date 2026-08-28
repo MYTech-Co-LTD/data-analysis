@@ -261,14 +261,21 @@ async function runDuckdb(userSelect, perms, reg) {
   //   业务模型：熊喵自营配送在 transfer_detail(3120)；品品甜经熊喵供应链的批发在 wholesale_detail，
   //   client_name→64188门店映射（066 同款）。权限沙箱 = (sbc+branch_num) normKey 归一套用户键，
   //   profit 毛利按 can_see_cost 脱敏；外部客户(99)不在任何门店权限内自然被滤。
+  //   2026-08-28：新增 ledger_sbc（单据源账套，配送/批发均=3120 文件路径账套）≠ sbc（业务品牌归属，
+  //   64188=品品甜客户映射）——批发明细 item_num 全是 3120 编号空间，按 sbc=64188 配 dim_item 会
+  //   大面积 miss + 小号段撞号错配（8/27 实证 325 行/9.6万被丢）。主数据属性（top_category/item_code）
+  //   由视图内联注入（LEFT JOIN dim_item ON ledger_sbc+item_num），品类聚合免 join 且不再静默丢行。
   const outboundFilter = allBranches
     ? ""
     : authKeys.length === 0
       ? "WHERE 1=0"
       : "WHERE regexp_replace(sbc || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2') IN (" + authKeys.map(sqlLit).join(", ") + ")";
   const outboundProfit = `CASE WHEN ${canSee} THEN t.profit ELSE NULL END AS profit`;
-  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT biz_type, sbc, branch_num, biz_date, amount, " + outboundProfit + ", item_name, item_num, pos_item_code, category FROM (" +
+  viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT t.biz_type, t.sbc, t.ledger_sbc, t.branch_num, t.biz_date, t.amount, " +
+    outboundProfit + ", t.item_name, t.item_num, t.pos_item_code, t.category, " +
+    "di.top_category, di.item_code FROM (" +
     "SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, " +
+    "regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS ledger_sbc, " +
     "response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, CAST(out_money AS DOUBLE) AS amount, " +
     "CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, " +
     "item_num AS item_num, pos_item_code AS pos_item_code, item_category AS category " +
@@ -276,12 +283,14 @@ async function runDuckdb(userSelect, perms, reg) {
     "UNION ALL " +
     "SELECT CASE WHEN db.branch_num IS NULL THEN 'wholesale_ext' ELSE 'wholesale' END AS biz_type, " +
     "COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, " +
+    "regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1) AS ledger_sbc, " +
     "COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, " +
     "CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, " +
     "d.pos_item_name AS item_name, d.item_num AS item_num, d.pos_item_code AS pos_item_code, d.pos_item_category_name AS category " +
     "FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet', filename=true) d " +
     "LEFT JOIN dim_branch db ON db.system_book_code='64188' AND db.branch_name = d.client_name " +
-    ") t " + outboundFilter + ";";
+    ") t LEFT JOIN dim_item di ON di.system_book_code = t.ledger_sbc AND t.item_num = di.item_num " +
+    outboundFilter + ";";
   // 一次提交：建视图 + 用户 SELECT（同连接，临时视图隔离，已实测）
   const combined = viewSql + "\n" + userSelect;
   const res = await fetch(DUCKDB_URL + "/query", {
