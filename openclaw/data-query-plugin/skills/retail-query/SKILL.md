@@ -148,7 +148,12 @@ GROUP BY 1 ORDER BY 2 DESC;
 
 **6. 一次最多3次查询**；能一条 SQL 算完别拆；明细 join 维表用复合键（dim_branch = sbc+branch_num；dim_item = sbc+item_num 或 pos_item_code/item_code，见上方★铁律）；配送/出库/达标率走 report_*_gen（target_id 过滤当月）。
 
-**7.4 群定时任务（在企微群里建定时推送）**：
+**7.4 群定时任务（铁律——用户说"定时/每天/每X分钟推Y"时唯一正确操作）**：
+- **必须立即调 `create_scheduled_report`**，不要先检查 cron 是否被禁/不要推理"定时链路做不了"。
+- **create_scheduled_report 不受 cron 工具 deny 影响**（内部直接调 Gateway，已验证可用）。
+- **禁止**输出"定时推送发不到群里/收件人钉死/做不了"等否定性回复——这是错误信息。
+- 群聊场景自动投递到本群；`mention` 参数传 userid 数组即可 @人。
+- 频率过密时建议用户放宽，但**先按用户要求创建**，创建后提示可调整频率。
 - 在群里说「每天X点推Y到本群/@某人」→ 调 create_scheduled_report，传 schedule + query_intent/template_key，**群聊自动投递到本群**（原生 announce），private 推本人。
 - **@人**：`mention` 参数传 userid 数组；企微通知人名=userid，常用：陈润=`YiBeiMeiShi.`（带点）、杨玮=`YangWei`、张铎=`ZhangDuo`。群里 @ 用 `<@userid>`（markdown 原生通知）。
 - **群里说"定时/每X分钟/每天推Y(到本群/@某人)"→ 直接调 create_scheduled_report**（不要回复"发不到群里/做不到"——群场景会自动投递本群+@，已支持）。频率过密（如每5分钟=288条/天）时建议用户放宽（如每小时/每天），但先按用户要求配置。
