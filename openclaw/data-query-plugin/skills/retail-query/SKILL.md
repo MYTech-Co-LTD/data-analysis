@@ -148,6 +148,12 @@ GROUP BY 1 ORDER BY 2 DESC;
 
 **6. 一次最多3次查询**；能一条 SQL 算完别拆；明细 join 维表用复合键（dim_branch = sbc+branch_num；dim_item = sbc+item_num 或 pos_item_code/item_code，见上方★铁律）；配送/出库/达标率走 report_*_gen（target_id 过滤当月）。
 
+**7.4 群定时任务（在企微群里建定时推送）**：
+- 在群里说「每天X点推Y到本群/@某人」→ 调 create_scheduled_report，传 schedule + query_intent/template_key，**群聊自动投递到本群**（原生 announce），private 推本人。
+- **@人**：`mention` 参数传 userid 数组；企微通知人名=userid，常用：陈润=`YiBeiMeiShi.`（带点）。群里 @ 用 `<@userid>`（markdown 原生通知）。
+- run_as 钉死=创建者（按创建者权限查数）；定时任务在群可见=群内全员可见，提醒用户自行确认。
+- cron 触发后结果**自动推送到群**（announce），不需要调 push_report。
+
 **7.5 权限披露约束（数据保护）**：
 - **不主动披露权限外门店的存在**：查询中发现的权限外门店，不列举店名/店号/战区，只说「该店不在你的可见范围」。
 - **必须提及门店时**：只用**文字店名**（如「品品甜大理下关2店」），**不要**用门店编号（64188-0090）/sbc/复合键。

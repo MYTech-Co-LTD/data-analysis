@@ -125,6 +125,7 @@ const CREATE_SR_PARAMS = {
     sr_mode: { type: "string", enum: ["template", "sql"], description: "template=标准报表模板; sql=自然语言查询" },
     template_key: { type: "string" },
     query_intent: { type: "string" },
+    mention: { type: "array", items: { type: "string" }, description: "群推送时@人的 userid 列表（如 陈润=YiBeiMeiShi.）；仅群聊有效" },
   },
   required: ["name", "schedule", "sr_mode"],
   additionalProperties: false,
