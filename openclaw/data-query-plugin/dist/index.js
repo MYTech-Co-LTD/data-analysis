@@ -325,20 +325,32 @@ export default definePluginEntry({
           execute: async (_id, params) => {
             const obj = typeof params === "string" ? JSON.parse(params) : (params || {});
             if (!owner) return { error: "无法识别创建者（非会话上下文）" };
+            // 群检测：deliveryContext.from = "wecom:group:<chatid>"（群）；私聊 = "wecom:<userid>"（大小写不敏感前缀）
+            const dctx = (ctx && ctx.deliveryContext) || {};
+            const fromStr = typeof dctx.from === "string" ? dctx.from : "";
+            const isGroup = /^wecom:group:/i.test(fromStr);
+            const groupChatid = isGroup ? fromStr.replace(/^wecom:group:/i, "") : null;
+            // @人：mention 数组（userid），群推送以 <@userid> 嵌入 markdown（企微原生通知）
+            const mentions = Array.isArray(obj.mention) ? obj.mention.filter((u) => typeof u === "string" && u) : [];
+            const mentionMark = mentions.length ? "\n\n（请@：" + mentions.map((u) => `<@${u}>`).join(" ") + "）" : "";
             const message = obj.sr_mode === "template"
-              ? `执行报表模板 ${obj.template_key}：用 query_retail_data 查数据，再用 push_report 推送结果`
-              : `查询：${obj.query_intent}。用 query_retail_data 查数据，再用 push_report 推送结果`;
+              ? `执行报表模板 ${obj.template_key}：用 query_retail_data 查数据并汇报结果${mentionMark}`
+              : `查询：${obj.query_intent}。用 query_retail_data 查数据并汇报结果${mentionMark}`;
+            const delivery = isGroup
+              ? { announce: "announce", channel: "wecom", to: "group:" + groupChatid, bestEffort: true }
+              : { mode: "none" };
             let job;
             try {
               job = await callGatewayTool("cron.add", {}, {
                 name: obj.name, schedule: obj.schedule, sessionTarget: "isolated",
-                payload: { kind: "agentTurn", message }, delivery: { mode: "none" },
+                payload: { kind: "agentTurn", message }, delivery,
               });
             } catch (e) { return { error: "cron 创建异常", detail: String(e) }; }
             const cronJobId = job && (job.id || job.job_id || (job.job && job.job.id));
             if (!cronJobId) return { error: "cron 创建失败（无 job id）", detail: JSON.stringify(job).slice(0, 300) };
             const upsert = await gatewayPost({ mode: "upsert_scheduled", userId: owner, cron_job_id: cronJobId, name: obj.name, sr_mode: obj.sr_mode, template_key: obj.template_key, query_intent: obj.query_intent });
-            return { success: true, cron_job_id: cronJobId, scheduled_report_id: upsert && upsert.id, message: `已建定时应用「${obj.name}」，按你的权限查并推送给你` };
+            const extra = isGroup ? "自动推送到本群" + (mentions.length ? `（@${mentions.join(",")}）` : "") : "推送给你";
+            return { success: true, cron_job_id: cronJobId, scheduled_report_id: upsert && upsert.id, message: `已建定时应用「${obj.name}」，按你的权限查数后${extra}` };
           },
         };
       },

@@ -150,7 +150,8 @@ GROUP BY 1 ORDER BY 2 DESC;
 
 **7.4 群定时任务（在企微群里建定时推送）**：
 - 在群里说「每天X点推Y到本群/@某人」→ 调 create_scheduled_report，传 schedule + query_intent/template_key，**群聊自动投递到本群**（原生 announce），private 推本人。
-- **@人**：`mention` 参数传 userid 数组；企微通知人名=userid，常用：陈润=`YiBeiMeiShi.`（带点）。群里 @ 用 `<@userid>`（markdown 原生通知）。
+- **@人**：`mention` 参数传 userid 数组；企微通知人名=userid，常用：陈润=`YiBeiMeiShi.`（带点）、杨玮=`YangWei`、张铎=`ZhangDuo`。群里 @ 用 `<@userid>`（markdown 原生通知）。
+- **群里说"定时/每X分钟/每天推Y(到本群/@某人)"→ 直接调 create_scheduled_report**（不要回复"发不到群里/做不到"——群场景会自动投递本群+@，已支持）。频率过密（如每5分钟=288条/天）时建议用户放宽（如每小时/每天），但先按用户要求配置。
 - run_as 钉死=创建者（按创建者权限查数）；定时任务在群可见=群内全员可见，提醒用户自行确认。
 - cron 触发后结果**自动推送到群**（announce），不需要调 push_report。
 
