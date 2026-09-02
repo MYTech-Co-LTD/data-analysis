@@ -1,5 +1,5 @@
 // web/lib/report-center/boards/item-top/manifest.ts
-// 商品 TOP 板块（P4）：serverGet = 现有 getItemBreakdownTop 迁入（逻辑不动，含 closed 快照/日榜 RPC）。
+// 商品 TOP 板块（P4）：serverGet = 现有 getItemBreakdownTop 迁入（逻辑不动；2026-09-02 千人千面后 closed 目标同样查 live 视图）。
 // 2026-08-19 拆分（用户裁定：销售/出库按角色分开配置）：一个数据源 → 两个看板
 //   item-top-sale（商品 TOP·销售）/ item-top-outbound（商品 TOP·出库），
 //   各自独立能力 key（view-board:item-top-sale / item-top-outbound），渲染各自半区。
@@ -19,7 +19,7 @@ async function serverGet(targetId: number, opts: BoardCtx) {
     startDate: typeof opts.startDate === "string" ? opts.startDate : undefined,
     endDate: typeof opts.endDate === "string" ? opts.endDate : undefined,
   };
-  const r = await getItemBreakdownTop(targetId, opts.closed, dates);
+  const r = await getItemBreakdownTop(targetId, dates);
   return { rows: [r], status: r.status, error: r.error };
 }
 

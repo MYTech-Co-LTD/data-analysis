@@ -1,4 +1,5 @@
 // web/lib/report-center/__tests__/region-breakdown.test.ts
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Task 2: 验证 getRegionBreakdown 返 GetterResult（ok / no-data / error 三态）。
 // mock 链匹配真实代码：getClient().database.from(...).select(...).eq(...).order(...) → { data, error }
 import { describe, it, expect, vi } from "vitest";
@@ -16,10 +17,6 @@ vi.mock("@/lib/error", () => ({
   }),
 }));
 
-// getSnapshotRows 不会被 closed=false 路径触发；stub 之防止真实解析
-vi.mock("../target-snapshot", () => ({
-  getSnapshotRows: vi.fn(),
-}));
 
 function makeClient(data: unknown, error: unknown) {
   return {

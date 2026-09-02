@@ -2,11 +2,11 @@
 // 类别出库报表数据获取
 //
 // F1.1（前端数据准确性守护 P0）：返 GetterResult<CategorySummaryRow>，吞错改 status='error'。
-// 保留 closed 分支 "有快照用快照、无快照 fall-through live" 行为，select 字段不变。
+// 2026-09-02 千人千面：closed 目标下钻同样查 live 视图（target_status ['active','closed']），
+// 快照 JSONB 降级为审计存档，getter 不再读 target_snapshot_breakdowns。
 import { getClient } from "@/lib/api";
 import { wrapError } from "@/lib/error";
 import { okResult, errorResult, type GetterResult } from "./types";
-import { getSnapshotRows } from "./target-snapshot";
 
 export interface CategorySummaryRow {
   target_id: number;
@@ -27,29 +27,8 @@ export interface CategorySummaryRow {
 const CATEGORY_ORDER = ['水果', '标品', '耗材', '合计'] as const;
 
 export async function getCategorySummary(
-  targetId: string,
-  closed?: boolean
+  targetId: string
 ): Promise<GetterResult<CategorySummaryRow>> {
-  // 已定格目标：读快照（视图不再算 closed 目标）
-  if (closed) {
-    try {
-      const snap = await getSnapshotRows(Number(targetId), "category");
-      if (snap.status === "ok") {
-        return okResult(
-          (snap.rows as CategorySummaryRow[]).sort(
-            (a, b) =>
-              CATEGORY_ORDER.indexOf(a.category as any) -
-              CATEGORY_ORDER.indexOf(b.category as any)
-          )
-        );
-      }
-      // snap.status !== 'ok'：保持原 fall-through 行为（无快照即查 live）
-    } catch (e) {
-      console.error("category_summary snapshot:", e);
-      return errorResult<CategorySummaryRow>([], wrapError(e));
-    }
-  }
-
   try {
     const client = await getClient();
     const { data, error } = await client.database
@@ -61,8 +40,8 @@ export async function getCategorySummary(
 
     // 按固定顺序排序：水果→标品→耗材→合计
     const sorted = (data ?? []).sort((a, b) => {
-      const idxA = CATEGORY_ORDER.indexOf(a.category as any);
-      const idxB = CATEGORY_ORDER.indexOf(b.category as any);
+      const idxA = CATEGORY_ORDER.indexOf(a.category as (typeof CATEGORY_ORDER)[number]);
+      const idxB = CATEGORY_ORDER.indexOf(b.category as (typeof CATEGORY_ORDER)[number]);
       return idxA - idxB;
     });
 

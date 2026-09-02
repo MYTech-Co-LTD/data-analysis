@@ -100,9 +100,6 @@ export default async function TargetDashboard({
     name: string;
     [key: string]: unknown;
   };
-  // 已定格目标：各模块从 target_snapshot_breakdowns 读 close_target 冻结快照（视图不再算 closed 目标）
-  const closed = t.status === "closed";
-
   // 看板级能力过滤（用户要求：每个看板抽象成能力自由配给角色）：只渲染有权限的看板模块。
   // 无 token/解码失败 → permissions=[] → 默认全部隐藏（fail-open 软门禁：无权限看板不渲染，不阻塞整页）；
   // 但看板数据本身仍由 PostgREST RLS 按门店范围裁剪（数据安全不依赖本显示层过滤）。
@@ -116,7 +113,6 @@ export default async function TargetDashboard({
       // 透传目标周期（t 来自 RLS 可见的报表视图）：item-top 等 getter 不再直查 targets 底表，
       // 避免门店权限用户被 targets 的 branch RLS 挡掉 ALL 目标（PGRST116 → 整板加载失败）。
       board.serverGet(targetId, {
-        closed,
         startDate: t.start_date,
         endDate: t.end_date,
       }),

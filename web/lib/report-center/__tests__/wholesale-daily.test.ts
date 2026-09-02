@@ -1,4 +1,5 @@
 // web/lib/report-center/__tests__/wholesale-daily.test.ts
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Task 2: 验证 getWholesaleDaily / getWholesaleDailyCustomers 返 GetterResult（ok / no-data / error 三态）。
 // getWholesaleDaily mock 链：from().select().eq().order() → { data, error }
 // getWholesaleDailyCustomers mock 链：from().select().eq().eq().order() → { data, error }
@@ -20,9 +21,6 @@ vi.mock("@/lib/error", () => ({
   }),
 }));
 
-vi.mock("../target-snapshot", () => ({
-  getSnapshotRows: vi.fn(),
-}));
 
 describe("getWholesaleDaily", () => {
   it("returns error (not []) on fetch failure", async () => {
