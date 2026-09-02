@@ -28,6 +28,8 @@ interface CategorySummaryProps {
   targetMonth: number;
   targetId: number;
   progress?: number; // 时间进度（如 0.677）；传了则完成率按「完成率/时间进度」相对着色
+  /** 目标已结束（closed）：「当天/差额日均」语义失效，列值/抽屉/导出统一显示 "—" */
+  closed?: boolean;
   isMobile?: boolean;
 }
 
@@ -62,13 +64,22 @@ function fmtRate(r: number | null): string {
   return r == null ? "—" : `${(r * 100).toFixed(1)}%`;
 }
 
-export function CategorySummary({ result, targetMonth, targetId, progress, isMobile = false }: CategorySummaryProps) {
+export function CategorySummary({ result, targetMonth, targetId, progress, closed = false, isMobile = false }: CategorySummaryProps) {
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [drawerCat, setDrawerCat] = useState<string | null>(null);
   // F2.3: costMasked=true 时所有 profit/margin 列头挂角标。
   // 注意：profit_*_target 是目标值不脱敏（不挂角标）；只 profit_actual/rate/margin + daily_* 挂。
   const costMasked = !useCanSeeCost();
+
+  // closed 目标「当天/差额日均」无意义（2026-09-02 用户裁定）：列值/抽屉/导出统一 "—"，
+  // 可疑着色与角标一并关闭；数据行与合计累加保持原值（F3 合计自洽对账不受影响）。
+  // dRaw 供 Excel 用（导出保持原始数值，仅 closed 时掩 "—"）；dVal/dRate 是表格单元格格式化。
+  const dVal = (v: number | null | undefined) => (closed ? "—" : fmtCurrency(v));
+  const dRate = (v: number | null) => (closed ? "—" : fmtRate(v));
+  const dRaw = (v: number) => (closed ? "—" : v);
+  const dCls = (susp: boolean, base: string) => (closed ? "" : suspiciousClass(susp, base));
+  const dTitle = (susp: boolean) => (closed ? undefined : suspiciousTitle(susp));
 
   // 排除「合计」行（视图可能返回），tbody 只展示明细，tfoot 展示合计
   const detailRows = useMemo(
@@ -165,10 +176,10 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
       { label: "月毛利金额", value: fmtCurrency(d.profit_actual) },
       { label: "月毛利完成率", value: fmtRate(d.profit_rate) },
       { label: "月毛利率", value: fmtRate(d.profit_margin), color: marginColor(d.profit_margin) },
-      { label: "当天出库金额", value: fmtCurrency(d.daily_amount) },
-      { label: "当天出库毛利", value: fmtCurrency(d.daily_profit) },
-      { label: "当天毛利率", value: fmtRate(d.daily_profit_margin), color: marginColor(d.daily_profit_margin) },
-      { label: "差额日均毛利目标", value: fmtCurrency(d.remaining_daily_profit_target) },
+      { label: "当天出库金额", value: dVal(d.daily_amount) },
+      { label: "当天出库毛利", value: dVal(d.daily_profit) },
+      { label: "当天毛利率", value: dRate(d.daily_profit_margin), color: closed ? undefined : marginColor(d.daily_profit_margin) },
+      { label: "差额日均毛利目标", value: dVal(d.remaining_daily_profit_target) },
     ];
   }
 
@@ -182,15 +193,15 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
       r.category,
       r.sale_target, r.sale_actual, fmtRate(r.sale_rate),
       r.profit_target, r.profit_actual ?? "", fmtRate(r.profit_rate), fmtRate(r.profit_margin),
-      r.daily_amount, r.daily_profit ?? "", fmtRate(r.daily_profit_margin),
-      r.remaining_daily_profit_target,
+      dRaw(r.daily_amount), closed ? "—" : (r.daily_profit ?? ""), dRate(r.daily_profit_margin),
+      dRaw(r.remaining_daily_profit_target),
     ]);
     body.push([
       "合计",
       totals.saleTarget, totals.saleActual, fmtRate(totals.saleRate),
       totals.profitTarget, totals.profitActual ?? "", fmtRate(totals.profitRate), fmtRate(totals.profitMargin),
-      totals.dailyAmount, totals.dailyProfit ?? "", fmtRate(totals.dailyProfitMargin),
-      totals.remainingDailyProfitTarget ?? "",
+      dRaw(totals.dailyAmount), closed ? "—" : (totals.dailyProfit ?? ""), dRate(totals.dailyProfitMargin),
+      closed ? "—" : (totals.remainingDailyProfitTarget ?? ""),
     ]);
     exportExcel([head, ...body], `${targetMonth}月仓储出库数据报表`);
   };
@@ -311,17 +322,17 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
                   <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.profitMargin, marginColor(r.profit_margin))}`} title={suspiciousTitle(s.profitMargin)}>
                     {fmtRate(r.profit_margin)}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyAmount, "text-slate-700")}`} title={suspiciousTitle(s.dailyAmount)}>
-                    {fmtCurrency(r.daily_amount)}
+                  <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailyAmount, "text-slate-700")}`} title={dTitle(s.dailyAmount)}>
+                    {dVal(r.daily_amount)}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyProfit, "text-slate-700")}`} title={suspiciousTitle(s.dailyProfit)}>
-                    {fmtCurrency(r.daily_profit)}
+                  <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailyProfit, "text-slate-700")}`} title={dTitle(s.dailyProfit)}>
+                    {dVal(r.daily_profit)}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyProfitMargin, marginColor(r.daily_profit_margin))}`} title={suspiciousTitle(s.dailyProfitMargin)}>
-                    {fmtRate(r.daily_profit_margin)}
+                  <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailyProfitMargin, marginColor(r.daily_profit_margin))}`} title={dTitle(s.dailyProfitMargin)}>
+                    {dRate(r.daily_profit_margin)}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.remaining, "text-slate-700")}`} title={suspiciousTitle(s.remaining)}>
-                    {fmtCurrency(r.remaining_daily_profit_target)}
+                  <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.remaining, "text-slate-700")}`} title={dTitle(s.remaining)}>
+                    {dVal(r.remaining_daily_profit_target)}
                   </td>
                 </tr>
                 );
@@ -353,17 +364,17 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
                 <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousMargin(totals.profitMargin), marginColor(totals.profitMargin))}`}>
                   {fmtRate(totals.profitMargin)}
                 </td>
-                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousAmount(totals.dailyAmount), "")}`}>
-                  {fmtCurrency(totals.dailyAmount)}
+                <td className={`px-3 py-2 text-right tabular-nums ${dCls(isSuspiciousAmount(totals.dailyAmount), "")}`}>
+                  {dVal(totals.dailyAmount)}
                 </td>
-                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousProfit(totals.dailyProfit), "")}`}>
-                  {fmtCurrency(totals.dailyProfit)}
+                <td className={`px-3 py-2 text-right tabular-nums ${dCls(isSuspiciousProfit(totals.dailyProfit), "")}`}>
+                  {dVal(totals.dailyProfit)}
                 </td>
-                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousMargin(totals.dailyProfitMargin), marginColor(totals.dailyProfitMargin))}`}>
-                  {fmtRate(totals.dailyProfitMargin)}
+                <td className={`px-3 py-2 text-right tabular-nums ${dCls(isSuspiciousMargin(totals.dailyProfitMargin), marginColor(totals.dailyProfitMargin))}`}>
+                  {dRate(totals.dailyProfitMargin)}
                 </td>
-                <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousAmount(totals.remainingDailyProfitTarget), "")}`}>
-                  {fmtCurrency(totals.remainingDailyProfitTarget)}
+                <td className={`px-3 py-2 text-right tabular-nums ${dCls(isSuspiciousAmount(totals.remainingDailyProfitTarget), "")}`}>
+                  {dVal(totals.remainingDailyProfitTarget)}
                 </td>
               </tr>
             </tfoot>
@@ -418,8 +429,8 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
                   <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.profitMargin, marginColor(r.profit_margin))}`} title={suspiciousTitle(s.profitMargin)}>
                     {fmtRate(r.profit_margin)}
                   </td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.dailyAmount, "text-slate-700")}`} title={suspiciousTitle(s.dailyAmount)}>
-                    {fmtCurrency(r.daily_amount)}
+                  <td className={`px-2 py-2 text-right tabular-nums ${dCls(s.dailyAmount, "text-slate-700")}`} title={dTitle(s.dailyAmount)}>
+                    {dVal(r.daily_amount)}
                   </td>
                   <td className="px-1 py-2 text-right">
                     <button
@@ -445,8 +456,8 @@ export function CategorySummary({ result, targetMonth, targetId, progress, isMob
                 <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousMargin(totals.profitMargin), marginColor(totals.profitMargin))}`}>
                   {fmtRate(totals.profitMargin)}
                 </td>
-                <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(isSuspiciousAmount(totals.dailyAmount), "")}`}>
-                  {fmtCurrency(totals.dailyAmount)}
+                <td className={`px-2 py-2 text-right tabular-nums ${dCls(isSuspiciousAmount(totals.dailyAmount), "")}`}>
+                  {dVal(totals.dailyAmount)}
                 </td>
                 <td className="px-1 py-2"></td>
               </tr>

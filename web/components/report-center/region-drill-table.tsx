@@ -24,6 +24,8 @@ interface RegionDrillTableProps {
   result: GetterResult<RegionBreakdownRow>;
   targetMonth: number;
   progress: number; // 时间进度，如 0.677
+  /** 目标已结束（closed）：「当天/剩余日均」语义失效，列值/抽屉/导出统一显示 "—" */
+  closed?: boolean;
   isMobile?: boolean;
 }
 
@@ -55,10 +57,18 @@ interface TreeNode {
   data: RegionBreakdownRow;
 }
 
-export function RegionDrillTable({ result, targetMonth, progress, isMobile = false }: RegionDrillTableProps) {
+export function RegionDrillTable({ result, targetMonth, progress, closed = false, isMobile = false }: RegionDrillTableProps) {
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+
+  // closed 目标「当天/剩余日均」无意义（2026-09-02 用户裁定）：列值/抽屉/导出统一 "—"，
+  // 可疑着色与角标一并关闭；数据行保持原值（F3 合计自洽对账不受影响）。
+  // dRaw 供 Excel 用（导出保持原始数值，仅 closed 时掩 "—"）；dVal 是表格单元格格式化。
+  const dVal = (v: number | null | undefined) => (closed ? "—" : fmtCurrency(v));
+  const dRaw = (v: number) => (closed ? "—" : v);
+  const dCls = (susp: boolean) => (closed ? "" : suspiciousClass(susp, "text-slate-700"));
+  const dTitle = (susp: boolean) => (closed ? undefined : suspiciousTitle(susp));
 
   // 构建树形结构
   const tree = useMemo(() => {
@@ -143,10 +153,10 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
       { label: "月配送目标", value: fmtCurrency(d.delivery_target), color: suspiciousClass(isSuspiciousAmount(d.delivery_target), "text-slate-800") },
       { label: "月配送金额", value: fmtCurrency(d.delivery_actual), color: suspiciousClass(isSuspiciousAmount(d.delivery_actual), "text-slate-800") },
       { label: "月配送完成率", value: fmtRate(d.delivery_rate), color: suspiciousClass(isSuspiciousRate(d.delivery_rate), rateColor(d.delivery_rate, progress)) },
-      { label: "当天销售金额", value: fmtCurrency(d.daily_sale), color: suspiciousClass(isSuspiciousAmount(d.daily_sale), "text-slate-800") },
-      { label: "当天配送金额", value: fmtCurrency(d.daily_delivery), color: suspiciousClass(isSuspiciousAmount(d.daily_delivery), "text-slate-800") },
-      { label: "剩余日均销售目标", value: fmtCurrency(d.remaining_daily_sale_target), color: suspiciousClass(isSuspiciousAmount(d.remaining_daily_sale_target), "text-slate-800") },
-      { label: "剩余日均配送目标", value: fmtCurrency(d.remaining_daily_delivery_target), color: suspiciousClass(isSuspiciousAmount(d.remaining_daily_delivery_target), "text-slate-800") },
+      { label: "当天销售金额", value: dVal(d.daily_sale), color: dCls(isSuspiciousAmount(d.daily_sale)) },
+      { label: "当天配送金额", value: dVal(d.daily_delivery), color: dCls(isSuspiciousAmount(d.daily_delivery)) },
+      { label: "剩余日均销售目标", value: dVal(d.remaining_daily_sale_target), color: dCls(isSuspiciousAmount(d.remaining_daily_sale_target)) },
+      { label: "剩余日均配送目标", value: dVal(d.remaining_daily_delivery_target), color: dCls(isSuspiciousAmount(d.remaining_daily_delivery_target)) },
       { label: "配销比目标", value: formatRatio(targetRatio(d.delivery_target, d.sale_target)), color: suspiciousClass(isSuspiciousMargin(targetRatio(d.delivery_target, d.sale_target)), "text-slate-800") },
       { label: "配销比", value: formatRatio(actualRatio(d.delivery_actual, d.sale_actual)), color: suspiciousClass(isSuspiciousMargin(actualRatio(d.delivery_actual, d.sale_actual)), absoluteThreeColor(ratioAchievement(d.delivery_actual, d.sale_actual, d.delivery_target, d.sale_target))) },
     ];
@@ -162,7 +172,7 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
     };
     flatten(tree);
     const head = ["大区名称", "小区名称", "门店名称", "月销售目标", "月销售金额", "月销售完成率", "月配送目标", "月配送金额", "月配送完成率", "当天销售金额", "当天配送金额", "剩余日均销售目标", "剩余日均配送目标", "配销比目标", "配销比"];
-    const body = flatRowsData.map((r) => [r.region_name, r.sub_region_name ?? "", r.branch_name ?? "", r.sale_target, r.sale_actual, fmtRate(r.sale_rate), r.delivery_target, r.delivery_actual, fmtRate(r.delivery_rate), r.daily_sale, r.daily_delivery, r.remaining_daily_sale_target, r.remaining_daily_delivery_target, formatRatio(targetRatio(r.delivery_target, r.sale_target)), formatRatio(actualRatio(r.delivery_actual, r.sale_actual))]);
+    const body = flatRowsData.map((r) => [r.region_name, r.sub_region_name ?? "", r.branch_name ?? "", r.sale_target, r.sale_actual, fmtRate(r.sale_rate), r.delivery_target, r.delivery_actual, fmtRate(r.delivery_rate), dRaw(r.daily_sale), dRaw(r.daily_delivery), dRaw(r.remaining_daily_sale_target), dRaw(r.remaining_daily_delivery_target), formatRatio(targetRatio(r.delivery_target, r.sale_target)), formatRatio(actualRatio(r.delivery_actual, r.sale_actual))]);
     exportExcel([head, ...body], `${targetMonth}月门店零售配送数据报表`);
   };
 
@@ -256,10 +266,10 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryTarget, "text-slate-700")}`} title={suspiciousTitle(s.deliveryTarget)}>{fmtCurrency(node.data.delivery_target)}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryActual, "text-slate-700")}`} title={suspiciousTitle(s.deliveryActual)}>{fmtCurrency(node.data.delivery_actual)}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryRate, rateColor(node.data.delivery_rate, progress))}`} title={suspiciousTitle(s.deliveryRate)}>{fmtRate(node.data.delivery_rate)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailySale, "text-slate-700")}`} title={suspiciousTitle(s.dailySale)}>{fmtCurrency(node.data.daily_sale)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyDelivery, "text-slate-700")}`} title={suspiciousTitle(s.dailyDelivery)}>{fmtCurrency(node.data.daily_delivery)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.remainingSale, "text-slate-700")}`} title={suspiciousTitle(s.remainingSale)}>{fmtCurrency(node.data.remaining_daily_sale_target)}</td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.remainingDelivery, "text-slate-700")}`} title={suspiciousTitle(s.remainingDelivery)}>{fmtCurrency(node.data.remaining_daily_delivery_target)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailySale)}`} title={dTitle(s.dailySale)}>{dVal(node.data.daily_sale)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailyDelivery)}`} title={dTitle(s.dailyDelivery)}>{dVal(node.data.daily_delivery)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.remainingSale)}`} title={dTitle(s.remainingSale)}>{dVal(node.data.remaining_daily_sale_target)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.remainingDelivery)}`} title={dTitle(s.remainingDelivery)}>{dVal(node.data.remaining_daily_delivery_target)}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.ratioTarget, "text-slate-400")}`} title={suspiciousTitle(s.ratioTarget)}>{formatRatio(targetRatio(node.data.delivery_target, node.data.sale_target))}</td>
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.ratioActual, absoluteThreeColor(ratioAchievement(node.data.delivery_actual, node.data.sale_actual, node.data.delivery_target, node.data.sale_target)))}`} title={suspiciousTitle(s.ratioActual)}>{formatRatio(actualRatio(node.data.delivery_actual, node.data.sale_actual))}</td>
                   </tr>
@@ -311,7 +321,7 @@ export function RegionDrillTable({ result, targetMonth, progress, isMobile = fal
                     </td>
                     <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.saleRate, rateColor(node.data.sale_rate, progress))}`} title={suspiciousTitle(s.saleRate)}>{fmtRate(node.data.sale_rate)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.deliveryRate, rateColor(node.data.delivery_rate, progress))}`} title={suspiciousTitle(s.deliveryRate)}>{fmtRate(node.data.delivery_rate)}</td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.dailySale, "text-slate-700")}`} title={suspiciousTitle(s.dailySale)}>{fmtCurrency(node.data.daily_sale)}</td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${dCls(s.dailySale)}`} title={dTitle(s.dailySale)}>{dVal(node.data.daily_sale)}</td>
                     <td className="px-1 py-2 text-right">
                       <button onClick={() => setDetailNode(node)} aria-label="查看全部字段" className="inline-flex h-8 w-8 items-center justify-center text-slate-400 hover:text-slate-700">
                         <ChevronRight size={16} strokeWidth={1.5} />

@@ -8,6 +8,7 @@ import type { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 
 export function RegionBoard({
   result,
+  target,
   targetMonth,
   progress,
   isMobile,
@@ -17,6 +18,7 @@ export function RegionBoard({
       result={result}
       targetMonth={targetMonth}
       progress={progress}
+      closed={target.status === "closed"}
       isMobile={isMobile}
     />
   );
