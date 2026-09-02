@@ -1,4 +1,5 @@
 // web/lib/report-center/__tests__/category-summary.test.ts
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // Task 2: 验证 getCategorySummary 返 GetterResult（ok / no-data / error 三态）。
 // mock 链：getClient().database.from(...).select(...).eq(...) → { data, error }（无 order）
 import { describe, it, expect, vi } from "vitest";
@@ -16,9 +17,6 @@ vi.mock("@/lib/error", () => ({
   }),
 }));
 
-vi.mock("../target-snapshot", () => ({
-  getSnapshotRows: vi.fn(),
-}));
 
 function makeClient(data: unknown, error: unknown) {
   return {

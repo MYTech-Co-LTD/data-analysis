@@ -1,10 +1,17 @@
 import type { ViewConfig } from './types.js';
 
 /**
- * 目标窗口语义（2026-08-03 机制定稿）：视图只算 ACTIVE total 目标（target_status:'active'）。
- * 已结束目标由 close_target 固化进 target_snapshots（report_achievement_v 读快照），生成视图不再重算——
- * 否则每次查询都对所有 active+closed 目标实时聚合，既浪费又会让定格目标随源数据漂移。
- * 配置 target_status='active' → tgt CTE `status IN ('active')`。
+ * 目标窗口语义（2026-09-02 修订——千人千面，原 2026-08-03「统一 active + closed 读快照」废弃）：
+ * - KPI 层 report_achievement_gen：closed total 目标全量用户读 target_snapshots 定格快照
+ *   （close_target 服务级固化，迁移 210 起函数体内注入全量 claims——SECURITY DEFINER 调用无用户
+ *   上下文，必须显式授权才能冻结全量真值；曾因服务调用无 data_scope 冻结出全 0 空壳，实例 823）；
+ *   受限用户（branch_scope_limited）走 live 重算 + 目标分母收缩（scoped_tgt）——KPI 千人千面在读取层实现。
+ * - 下钻 6 视图（brand/region/category/item/supply/wholesale_daily）：
+ *   target_status: ['active','closed'] 统一实时重算，视图自带行级 scope 过滤 → 下钻千人千面天然继承；
+ *   前端 getter 已删 closed 快照分支，统一查 live 视图。target_snapshot_breakdowns JSONB 降级为审计存档。
+ * - 批发客户两视图（wholesale_customer/wholesale_daily_customer）同样 ['active','closed']
+ *   （无 qa 断言覆盖，closed 收编无对账影响；前端按 target_id 查，closed 目标天然可查）。
+ * - 视图 target_status 与 qa-checks.json 断言 ref_sql 的 status 子句必须一致（否则 C2 对账误报）。
  */
 
 /**

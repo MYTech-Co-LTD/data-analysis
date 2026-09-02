@@ -6,11 +6,11 @@
 // margin 为 round(x,4) 即 0-1 小数（0.1234 = 12.34%），amount=0 时 NULLIF 致 margin NULL
 //
 // F1.1（前端数据准确性守护 P0）：返 GetterResult<SupplyChainOutboundRow>，吞错改 status='error'。
-// 保留 closed 分支 "有快照用快照、无快照 fall-through live" 行为，select 字段不变。
+// 2026-09-02 千人千面：closed 目标下钻同样查 live 视图（target_status ['active','closed']），
+// 快照 JSONB 降级为审计存档，getter 不再读 target_snapshot_breakdowns。
 import { getClient } from "@/lib/api";
 import { wrapError } from "@/lib/error";
 import { okResult, errorResult, type GetterResult } from "./types";
-import { getSnapshotRows } from "./target-snapshot";
 
 export interface SupplyChainOutboundRow {
   target_id: number;
@@ -34,22 +34,7 @@ export interface SupplyChainOutboundRow {
 
 export async function getSupplyChainOutbound(
   targetId: number,
-  closed?: boolean,
 ): Promise<GetterResult<SupplyChainOutboundRow>> {
-  // 已定格目标：读快照
-  if (closed) {
-    try {
-      const snap = await getSnapshotRows(targetId, "supply");
-      if (snap.status === "ok") {
-        return okResult(snap.rows as SupplyChainOutboundRow[]);
-      }
-      // snap.status !== 'ok'：保持原 fall-through 行为（无快照即查 live）
-    } catch (e) {
-      console.error("supply_chain_outbound snapshot:", e);
-      return errorResult<SupplyChainOutboundRow>([], wrapError(e));
-    }
-  }
-
   try {
     const client = await getClient();
     const { data, error } = await client.database
