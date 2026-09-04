@@ -197,11 +197,16 @@ module.exports = async function request(request) {
   }
 
   // ⑧ 推进水位
-  await fetch(`${POSTGREST_URL}/journal_push_state?key=eq.record_watermark`, {
+  const wmRes = await fetch(`${POSTGREST_URL}/journal_push_state?key=eq.record_watermark`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
     body: JSON.stringify({ value: String(now), updated_at: new Date().toISOString() }),
   });
+  // 水位写失败 = 下轮重复扫描/推送，必须暴露
+  if (!wmRes.ok) {
+    const body = await wmRes.text();
+    return json({ error: `watermark PATCH failed ${wmRes.status}: ${body.slice(0, 200)}`, processed: processed.length }, 502);
+  }
 
   return json({
     ok: true,
@@ -214,7 +219,7 @@ module.exports = async function request(request) {
 }
 
 async function markSeen(uuid, info, warZone) {
-  await fetch(`${POSTGREST_URL}/journal_push_seen`, {
+  const res = await fetch(`${POSTGREST_URL}/journal_push_seen`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Prefer: "resolution=ignore-duplicates" },
     body: JSON.stringify({
@@ -223,4 +228,9 @@ async function markSeen(uuid, info, warZone) {
       war_zone: warZone,
     }),
   });
+  // 防重是本流水线的正确性关键：写失败必须暴露，否则下轮重复推送
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`markSeen failed ${res.status}: ${body.slice(0, 200)} (uuid=${uuid})`);
+  }
 }
