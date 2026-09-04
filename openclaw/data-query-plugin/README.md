@@ -53,6 +53,13 @@ docker exec deploy-openclaw-1 node openclaw.mjs skills list
 - openclaw 容器 env 有 `AGENT_API_KEY`（与 agent-query function secret 同值）+ `AGENT_QUERY_URL`（默认 `http://insforge:7130/functions/agent-query`）—— 见 `deploy/docker-compose.prod.yml`。
 - agent-query 网关、`get_user_perms`、`execute_sql_rls`、DuckDB 权限视图均已部署（§4.2）。
 
+## 变更记录
+
+- 2026-09-04 `create_scheduled_report` payload 模板补投递指令：`...查数据，再用 push_report 推送结果`。
+  根因（job d124af21 两日无推送）：私聊任务 `delivery={mode:none}`，投递全靠 turn 内 push_report，
+  但旧模板只写「查数据并汇报结果」，turn 查完数只写 summary 就结束，无人收到。
+  存量 job 已同步修 payload 并实测触发验证通过（wecom-notify 200，summary「日报推送完成」）。
+
 ## 卸载注意
 
 `plugins uninstall --force` 会残留 `plugins.load.paths` 指向已删目录，致 gateway 崩溃。卸载后用 `openclaw doctor --fix` 或手动清 `openclaw.json` 的 `load.paths`。
