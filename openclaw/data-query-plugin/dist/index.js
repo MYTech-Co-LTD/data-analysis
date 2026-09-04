@@ -333,11 +333,16 @@ export default definePluginEntry({
             // @人：mention 数组（userid），群推送以 <@userid> 嵌入 markdown（企微原生通知）
             const mentions = Array.isArray(obj.mention) ? obj.mention.filter((u) => typeof u === "string" && u) : [];
             const mentionMark = mentions.length ? "\n\n（请@：" + mentions.map((u) => `<@${u}>`).join(" ") + "）" : "";
+            // payload 必须含投递指令：私聊任务 delivery=none，全靠 turn 内 push_report（收件人从绑定查）。
+            // 实测踩过（d124af21）：漏 push_report 指令 → turn 查完数只写 summary，无人收到推送。
             const message = obj.sr_mode === "template"
-              ? `执行报表模板 ${obj.template_key}：用 query_retail_data 查数据并汇报结果${mentionMark}`
-              : `查询：${obj.query_intent}。用 query_retail_data 查数据并汇报结果${mentionMark}`;
+              ? `执行报表模板 ${obj.template_key}：用 query_retail_data 查数据，再用 push_report 推送结果${mentionMark}`
+              : `查询：${obj.query_intent}。用 query_retail_data 查数据，再用 push_report 推送结果${mentionMark}`;
+            // 群推送 to 必须用裸群 chatid（如 wrfjPaWwAAO8f4e7y3r71pD71JAsWAzA），不带 group:/wecom: 前缀。
+            // 实测：wecom channel 的 sendWeComMessage 在 Bot WS 路径只剥 wecom: 前缀；
+            // 裸 chatid 经 wsClient.sendMessage 直接发群，delivered:true；带 group: 前缀会发失败。
             const delivery = isGroup
-              ? { announce: "announce", channel: "wecom", to: "group:" + groupChatid, bestEffort: true }
+              ? { announce: "announce", channel: "wecom", to: groupChatid, bestEffort: true }
               : { mode: "none" };
             let job;
             try {
