@@ -151,6 +151,7 @@ GROUP BY 1 ORDER BY 2 DESC;
 **7.4 群定时任务（铁律——用户说"定时/每天/每X分钟推Y"时唯一正确操作）**：
 - **必须立即调 `create_scheduled_report`**，不要先检查 cron 是否被禁/不要推理"定时链路做不了"。
 - **create_scheduled_report 不受 cron 工具 deny 影响**（内部直接调 Gateway，已验证可用）。
+- **群推送 to=裸群 chatid（不带 `group:`/`wecom:` 前缀）**（已验证：裸 chatid `delivered:true`；`wecom:group:` 前缀 `delivered:false`）。勿在 `create_scheduled_report` 里拼 `"group:"+chatid`。（实现细节，勿改）
 - **禁止**输出"定时推送发不到群里/收件人钉死/做不了"等否定性回复——这是错误信息。
 - 群聊场景自动投递到本群；`mention` 参数传 userid 数组即可 @人。
 - 频率过密时建议用户放宽，但**先按用户要求创建**，创建后提示可调整频率。
@@ -213,11 +214,15 @@ GROUP BY 1 ORDER BY 2 DESC;
 - name：应用名
 - schedule：用户说的时间（每天9点=`{kind:'cron',expr:'0 9 * * *',tz:'Asia/Shanghai'}`；每小时=`{kind:'every',everyMs:3600000}`）
 - sr_mode：标准报表（业绩/周报/品类排行）→ template + template_key；个性化 → sql + query_intent
+- delivery：**默认不传（=chat，结果到机器人对话，含文件）**；仅用户特别强调“消息通知推送”时传 'notify'（走应用消息）
 - run_as/delivery_to 自动=你本人（钉死，不可改）
 
 cron 触发时（自动 agent turn）务必高效、不重复：
 - **一问一查**：先调一次 `list_datasets` 看列，然后**一条**聚合 SQL（COUNT/SUM/GROUP BY）搞定。**禁止**反复 query 试错（列名一次看清，别查 5 次以上）。
-- **只用 `push_report` 推送一次**（收件人自动从绑定取）。**禁用 `send_notify`**——cron turn 无 @sender 会推默认组且与 push_report 重复推送。
+- **投递渠道分两种（默认对话，例外通知）**：
+  - **默认 delivery:'chat'（默认，不传也是）**：结果投递到**机器人对话**（私聊=用户与小海会话；群聊=本群）。文本由 cron delivery 自动投，**不要调 `push_report`**；生成了 Excel 等文件则 turn 内直接把文件发到对话（aibot 原生支持）。
+  - **delivery:'notify'（仅当用户特别强调“通过消息通知/应用通知推送”才用）**：结果走**应用消息**（wecom-notify）。此时**必须调 `push_report` 推送一次**（收件人自动从绑定取），不调则无人收到。
+  - **禁用 `send_notify`**——cron turn 无 @sender 会推默认组且与 push_report 重复推送。
 - **不要**手动用 cron 工具建定时（已被禁用，走 create_scheduled_report）。
 
 **删除定时**：用户说"取消/删除某定时"→ 调 `delete_scheduled_report`(cron_job_id，建时返回的 id)。
