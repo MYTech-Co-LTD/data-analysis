@@ -176,6 +176,8 @@ set_secret "CASDOOR_CLIENT_ID" "${CASDOOR_CLIENT_ID:-}"
 # 通讯录变更事件推送（webhook 接收）
 set_secret "WECOM_TOKEN" "${WECOM_TOKEN:-}"
 set_secret "WECOM_ENCODING_AES_KEY" "${WECOM_ENCODING_AES_KEY:-}"
+# 日报推送（journal-push）：群机器人 webhook（区域经理复盘日报 → 战区达标率）
+set_secret "JOURNAL_PUSH_WEBHOOK_URL" "${JOURNAL_PUSH_WEBHOOK_URL:-}"
 # function 内部读报表/写审计所需（createClient 调 InsForge API + 推送卡片链接）
 set_secret "INSFORGE_BASE_URL" "${INSFORGE_BASE_URL:-http://insforge:7130}"
 # 管理 API key（ik_），function 内 createClient/admin 调用备用（当前无固定消费者，保留备用）
