@@ -3,56 +3,56 @@
     "view": "report_brand_metric_gen",
     "metric": "sale_amount",
     "view_sum_filter": "system_book_code <> '合计'",
-    "ref_sql": "SELECT COALESCE(SUM(s.total_sale), 0) FROM report_daily_sales s JOIN targets t ON s.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num AND is_assessed_war_zone(db.first_level_region))",
+    "ref_sql": "SELECT COALESCE(SUM(s.total_sale), 0) FROM report_daily_sales s JOIN targets t ON s.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num AND is_assessed_war_zone(db.first_level_region))",
     "tolerance": 0.01
   },
   {
     "view": "report_brand_metric_gen",
     "metric": "sale_target",
     "view_sum_filter": "system_book_code <> '合计'",
-    "ref_sql": "SELECT COALESCE(SUM(tmv.target_value), 0) FROM target_metric_values tmv JOIN targets bt ON bt.id = tmv.target_id WHERE tmv.metric_code = 'sale' AND bt.breakdown_level = 'store' AND bt.parent_target_id IN (SELECT id FROM targets WHERE target_level = 'total' AND status = 'active')",
+    "ref_sql": "SELECT COALESCE(SUM(tmv.target_value), 0) FROM target_metric_values tmv JOIN targets bt ON bt.id = tmv.target_id WHERE tmv.metric_code = 'sale' AND bt.breakdown_level = 'store' AND bt.parent_target_id IN (SELECT id FROM targets WHERE target_level = 'total' AND status IN ('active','closed'))",
     "tolerance": 0.01
   },
   {
     "view": "report_brand_metric_gen",
     "metric": "delivery_amount",
     "view_sum_filter": "system_book_code <> '合计'",
-    "ref_sql": "SELECT COALESCE((SELECT SUM(d.out_money) FROM report_daily_delivery d JOIN targets t ON d.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = d.system_book_code AND db.branch_num = d.branch_num AND is_assessed_war_zone(db.first_level_region))), 0) + COALESCE((SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w JOIN targets t ON w.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE w.system_book_code = '64188' AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))), 0)",
+    "ref_sql": "SELECT COALESCE((SELECT SUM(d.out_money) FROM report_daily_delivery d JOIN targets t ON d.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = d.system_book_code AND db.branch_num = d.branch_num AND is_assessed_war_zone(db.first_level_region))), 0) + COALESCE((SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w JOIN targets t ON w.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE w.system_book_code = '64188' AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))), 0)",
     "tolerance": 0.01
   },
   {
     "view": "report_region_breakdown_gen",
     "metric": "sale_actual",
     "view_sum_filter": "level = 'store'",
-    "ref_sql": "SELECT COALESCE(SUM(s.total_sale), 0) FROM report_daily_sales s JOIN targets t ON s.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num AND is_assessed_war_zone(db.first_level_region))",
+    "ref_sql": "SELECT COALESCE(SUM(s.total_sale), 0) FROM report_daily_sales s JOIN targets t ON s.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = s.system_book_code AND db.branch_num = s.branch_num AND is_assessed_war_zone(db.first_level_region))",
     "tolerance": 0.01
   },
   {
     "view": "report_region_breakdown_gen",
     "metric": "delivery_actual",
     "view_sum_filter": "level = 'store'",
-    "ref_sql": "SELECT COALESCE((SELECT SUM(d.out_money) FROM report_daily_delivery d JOIN targets t ON d.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = d.system_book_code AND db.branch_num = d.branch_num AND is_assessed_war_zone(db.first_level_region))), 0) + COALESCE((SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w JOIN targets t ON w.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE w.system_book_code = '64188' AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))), 0)",
+    "ref_sql": "SELECT COALESCE((SELECT SUM(d.out_money) FROM report_daily_delivery d JOIN targets t ON d.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = d.system_book_code AND db.branch_num = d.branch_num AND is_assessed_war_zone(db.first_level_region))), 0) + COALESCE((SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w JOIN targets t ON w.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE w.system_book_code = '64188' AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))), 0)",
     "tolerance": 0.01
   },
   {
     "view": "report_supply_chain_outbound_gen",
     "metric": "delivery_amount",
     "view_sum_filter": "level = 'store'",
-    "ref_sql": "SELECT COALESCE((SELECT SUM(d.out_money) FROM report_daily_delivery d JOIN targets t ON d.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = d.system_book_code AND db.branch_num = d.branch_num AND is_assessed_war_zone(db.first_level_region))), 0) + COALESCE((SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w JOIN targets t ON w.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active' WHERE w.system_book_code = '64188' AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))), 0)",
+    "ref_sql": "SELECT COALESCE((SELECT SUM(d.out_money) FROM report_daily_delivery d JOIN targets t ON d.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = d.system_book_code AND db.branch_num = d.branch_num AND is_assessed_war_zone(db.first_level_region))), 0) + COALESCE((SELECT SUM(w.wholesale_amount) FROM report_daily_wholesale_customer w JOIN targets t ON w.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE w.system_book_code = '64188' AND EXISTS (SELECT 1 FROM dim_branch db WHERE db.system_book_code = '64188' AND db.branch_name = w.client_name AND is_assessed_war_zone(db.first_level_region))), 0)",
     "tolerance": 0.01
   },
   {
     "view": "report_wholesale_customer_gen",
     "metric": "wholesale_amount",
     "view_sum_filter": "1=1",
-    "ref_sql": "SELECT COALESCE(SUM(s.wholesale_amount), 0) FROM report_daily_wholesale_customer s JOIN targets t ON s.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status = 'active'",
+    "ref_sql": "SELECT COALESCE(SUM(s.wholesale_amount), 0) FROM report_daily_wholesale_customer s JOIN targets t ON s.biz_date BETWEEN t.start_date AND t.end_date AND t.target_level = 'total' AND t.status IN ('active','closed')",
     "tolerance": 0.01
   },
   {
     "view": "report_wholesale_daily_gen",
     "metric": "wholesale_ext_amount",
     "view_sum_filter": "1=1",
-    "ref_sql": "SELECT COALESCE(SUM(s.wholesale_money), 0) FROM report_daily_wholesale s JOIN targets t ON s.biz_date BETWEEN t.start_date AND LEAST(current_date, t.end_date) AND t.target_level = 'total' AND t.status = 'active' WHERE s.system_book_code = '3120'",
+    "ref_sql": "SELECT COALESCE(SUM(s.wholesale_money), 0) FROM report_daily_wholesale s JOIN targets t ON s.biz_date BETWEEN t.start_date AND LEAST(current_date, t.end_date) AND t.target_level = 'total' AND t.status IN ('active','closed') WHERE s.system_book_code = '3120'",
     "tolerance": 0.01
   },
   {

@@ -10,9 +10,7 @@ import type { GetterResult } from "@/lib/report-center/types";
 
 /** BoardCtx：宿主注入 serverGet 的上下文——插件禁止自行建 client / 读取参数之外的秘密。 */
 export interface BoardCtx {
-  /** 已定格目标：各模块从 target_snapshot_breakdowns 读 close_target 冻结快照（视图不再算 closed 目标） */
-  closed?: boolean;
-  /** 未来扩展（设备/权限/品牌等） */
+  /** 未来扩展（设备/权限/品牌等）。2026-09-02 千人千面后不再注入 closed——closed 目标下钻由视图实时重算 */
   [key: string]: unknown;
 }
 

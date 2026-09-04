@@ -34,6 +34,8 @@ interface SupplyChainOutboundTableProps {
   startDate: string;
   endDate: string;
   targetId: number; // 预留（任务要求 props 含此字段，纯展示组件当前未直接使用）
+  /** 目标已结束（closed）：「当天」语义失效，列值/抽屉/导出统一显示 "—" */
+  closed?: boolean;
   isMobile?: boolean;
 }
 
@@ -71,6 +73,7 @@ export function SupplyChainOutboundTable({
   result,
   startDate,
   endDate,
+  closed = false,
   isMobile = false,
 }: SupplyChainOutboundTableProps) {
   const { rows, status, error } = result;
@@ -78,6 +81,16 @@ export function SupplyChainOutboundTable({
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   // F2.3: costMasked=true 时所有 profit/margin 列头挂角标（出库毛利/毛利率/当天出库毛利/当天毛利率）
   const costMasked = !useCanSeeCost();
+
+  // closed 目标「当天」语义失效（2026-09-02 用户裁定）：当天列值/抽屉/导出统一 "—"，
+  // 可疑着色一并关闭；数据行与合计累加保持原值（F3 合计自洽对账不受影响）。
+  // dRaw 供 Excel 用（导出保持原始数值，仅 closed 时掩 "—"）；dVal/dProfit/dMargin 是表格单元格格式化。
+  const dVal = (v: number) => (closed ? "—" : fmtCurrency(v));
+  const dProfit = (v: number | null) => (closed ? "—" : fmtProfit(v));
+  const dMargin = (v: number | null) => (closed ? "—" : fmtMargin(v));
+  const dRaw = (v: number) => (closed ? "—" : v);
+  const dCls = (susp: boolean, base: string) => (closed ? "" : suspiciousClass(susp, base));
+  const dTitle = (susp: boolean) => (closed ? undefined : suspiciousTitle(susp));
 
   // 构建三级树：region -> sub_region -> store
   // parent_code 链：region=NULL / sub_region=region_code(=war_zone) / store=sub_region_code(=region_l2)
@@ -246,9 +259,9 @@ export function SupplyChainOutboundTable({
       { label: "出库金额", value: fmtCurrency(d.delivery_amount), color: suspiciousClass(isSuspiciousAmount(d.delivery_amount), numColor) },
       { label: "出库毛利", value: fmtProfit(d.delivery_profit), color: suspiciousClass(isSuspiciousProfit(d.delivery_profit), numColor) },
       { label: "毛利率", value: fmtMargin(d.delivery_margin), color: suspiciousClass(isSuspiciousMargin(d.delivery_margin), numColor) },
-      { label: "当天出库金额", value: fmtCurrency(d.daily_delivery_amount), color: suspiciousClass(isSuspiciousAmount(d.daily_delivery_amount), numColor) },
-      { label: "当天出库毛利", value: fmtProfit(d.daily_delivery_profit), color: suspiciousClass(isSuspiciousProfit(d.daily_delivery_profit), numColor) },
-      { label: "当天毛利率", value: fmtMargin(d.daily_delivery_margin), color: suspiciousClass(isSuspiciousMargin(d.daily_delivery_margin), numColor) },
+      { label: "当天出库金额", value: dVal(d.daily_delivery_amount), color: dCls(isSuspiciousAmount(d.daily_delivery_amount), numColor) },
+      { label: "当天出库毛利", value: dProfit(d.daily_delivery_profit), color: dCls(isSuspiciousProfit(d.daily_delivery_profit), numColor) },
+      { label: "当天毛利率", value: dMargin(d.daily_delivery_margin), color: dCls(isSuspiciousMargin(d.daily_delivery_margin), numColor) },
     ];
   }
 
@@ -283,9 +296,9 @@ export function SupplyChainOutboundTable({
         r.delivery_amount,
         r.delivery_profit ?? "",
         r.delivery_margin != null ? fmtMargin(r.delivery_margin) : "",
-        r.daily_delivery_amount,
-        r.daily_delivery_profit ?? "",
-        r.daily_delivery_margin != null ? fmtMargin(r.daily_delivery_margin) : "",
+        dRaw(r.daily_delivery_amount),
+        closed ? "—" : (r.daily_delivery_profit ?? ""),
+        closed ? "—" : (r.daily_delivery_margin != null ? fmtMargin(r.daily_delivery_margin) : ""),
       ];
     });
     body.push([
@@ -293,9 +306,9 @@ export function SupplyChainOutboundTable({
       totals.amount,
       totals.profit ?? "",
       totals.margin != null ? fmtMargin(totals.margin) : "",
-      totals.dailyAmount,
-      totals.dailyProfit ?? "",
-      totals.dailyMargin != null ? fmtMargin(totals.dailyMargin) : "",
+      dRaw(totals.dailyAmount),
+      closed ? "—" : (totals.dailyProfit ?? ""),
+      closed ? "—" : (totals.dailyMargin != null ? fmtMargin(totals.dailyMargin) : ""),
     ]);
     exportExcel([head, ...body], title);
   };
@@ -416,14 +429,14 @@ export function SupplyChainOutboundTable({
                     <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.margin, numColor)}`} title={suspiciousTitle(s.margin)}>
                       {fmtMargin(node.data.delivery_margin)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyAmount, numColor)}`} title={suspiciousTitle(s.dailyAmount)}>
-                      {fmtCurrency(node.data.daily_delivery_amount)}
+                    <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailyAmount, numColor)}`} title={dTitle(s.dailyAmount)}>
+                      {dVal(node.data.daily_delivery_amount)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyProfit, numColor)}`} title={suspiciousTitle(s.dailyProfit)}>
-                      {fmtProfit(node.data.daily_delivery_profit)}
+                    <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailyProfit, numColor)}`} title={dTitle(s.dailyProfit)}>
+                      {dProfit(node.data.daily_delivery_profit)}
                     </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${suspiciousClass(s.dailyMargin, numColor)}`} title={suspiciousTitle(s.dailyMargin)}>
-                      {fmtMargin(node.data.daily_delivery_margin)}
+                    <td className={`px-3 py-2 text-right tabular-nums ${dCls(s.dailyMargin, numColor)}`} title={dTitle(s.dailyMargin)}>
+                      {dMargin(node.data.daily_delivery_margin)}
                     </td>
                   </tr>
                 );
@@ -444,13 +457,13 @@ export function SupplyChainOutboundTable({
                   {fmtMargin(totals.margin)}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  {fmtCurrency(totals.dailyAmount)}
+                  {dVal(totals.dailyAmount)}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  {fmtProfit(totals.dailyProfit)}
+                  {dProfit(totals.dailyProfit)}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums">
-                  {fmtMargin(totals.dailyMargin)}
+                  {dMargin(totals.dailyMargin)}
                 </td>
               </tr>
             </tfoot>
@@ -529,8 +542,8 @@ export function SupplyChainOutboundTable({
                     <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.margin, numColor)}`} title={suspiciousTitle(s.margin)}>
                       {fmtMargin(node.data.delivery_margin)}
                     </td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${suspiciousClass(s.dailyAmount, numColor)}`} title={suspiciousTitle(s.dailyAmount)}>
-                      {fmtCurrency(node.data.daily_delivery_amount)}
+                    <td className={`px-2 py-2 text-right tabular-nums ${dCls(s.dailyAmount, numColor)}`} title={dTitle(s.dailyAmount)}>
+                      {dVal(node.data.daily_delivery_amount)}
                     </td>
                     <td className="px-1 py-2 text-right">
                       <button

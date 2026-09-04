@@ -8,6 +8,7 @@ import type { CategorySummaryRow } from "@/lib/report-center/category-summary";
 
 export function CategoryBoard({
   result,
+  target,
   targetMonth,
   targetId,
   progress,
@@ -19,6 +20,7 @@ export function CategoryBoard({
       targetMonth={targetMonth}
       targetId={targetId}
       progress={progress}
+      closed={target.status === "closed"}
       isMobile={isMobile}
     />
   );

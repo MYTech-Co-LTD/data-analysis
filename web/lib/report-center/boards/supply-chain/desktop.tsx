@@ -19,6 +19,7 @@ export function SupplyChainBoard({
       startDate={target.start_date}
       endDate={target.end_date}
       targetId={targetId}
+      closed={target.status === "closed"}
       isMobile={isMobile}
     />
   );
