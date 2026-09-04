@@ -55,7 +55,9 @@ docker exec deploy-openclaw-1 node openclaw.mjs skills list
 
 ## 变更记录
 
-- 2026-09-04 `create_scheduled_report` payload 模板补投递指令：`...查数据，再用 push_report 推送结果`。
+- 2026-09-04(2) **定时任务投递渠道默认改为对话**：`create_scheduled_report` 新增 `delivery` 参数（默认 `chat`=机器人对话，私聊 delivery={mode:announce,channel:wecom,to:创建者}，文本由 cron delivery 投递、文件由 turn 内直发；群聊不变=本群）；仅用户特别强调「消息通知推送」时传 `notify`（=原 push_report 应用消息模式）。
+  同时修复：delivery 旧格式 `{announce:'announce'}` 已被 openclaw 新版 schema 拒绝（实测 cron.add INVALID_REQUEST），改为 `{mode:'announce'}`；skill 同步更新投递渠道规则。实测：SDK 建测试 job（mode:announce→私聊 to=ZhangDuo）创建成功且 WS 投递 ack。
+- 2026-09-04(1) `create_scheduled_report` payload 模板补投递指令：`...查数据，再用 push_report 推送结果`。
   根因（job d124af21 两日无推送）：私聊任务 `delivery={mode:none}`，投递全靠 turn 内 push_report，
   但旧模板只写「查数据并汇报结果」，turn 查完数只写 summary 就结束，无人收到。
   存量 job 已同步修 payload 并实测触发验证通过（wecom-notify 200，summary「日报推送完成」）。
