@@ -1,6 +1,6 @@
 ---
 name: notify
-description: 发送企微通知（全格式）。采集完成/异常告警/定时汇报/用户要求通知时激活，用 send_notify 发 markdown/text/textcard/图文/模板卡片，按内容选最合适的格式。
+description: 发送企微通知（全格式）。采集完成/异常告警/定时汇报/用户要求通知时激活，用 send_notify 发 markdown/text/textcard/图文/模板卡片；推送到群机器人 webhook 时用 push_webhook（图片/markdown/text/file）。按内容选最合适的格式。
 metadata:
   openclaw:
     emoji: "🔔"
@@ -9,6 +9,27 @@ metadata:
 # 通知发送 Skill
 
 需要**主动发一条企微通知**时使用（不是普通对话回复）。
+
+## 工具：push_webhook（群机器人 webhook 推送）
+
+用户提供群机器人 webhook URL（`https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...`）要求推送到群时，**必须用本工具，禁止手写 curl**：
+
+```
+push_webhook({
+  webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
+  msgtype: "image" | "markdown" | "text" | "file",
+  content?,        // markdown/text 正文（markdown 支持 <@userid> 与表格）
+  image_path?,     // image：服务器上图片绝对路径（≤2MB，base64+md5 姿势已内置）
+  file_path?,      // file：自动 upload_media 换 media_id
+  mentioned_list?, // text：@人 userid 列表（"@all" 表全员）
+})
+```
+
+铁律：
+- **单条消息只能一种类型**。要“图片 + @提醒”→ **连发两条**：先 push_webhook(image)，再 push_webhook(markdown, 含 <@userid>)。
+- **禁止 image 失败后降级成 file**（2026-09-04 踩过：降级导致用户收到文件而非图片）。image 失败先检查图片格式/大小，换 png 重试。
+- **生图**：用常驻渲染工程 `workspace/render/`（resvg + 中文字体已就绪）：写 SVG（font-family="Noto Sans SC"）→ `cd /home/node/.openclaw/workspace/render && node render.js <in.svg> <out.png>`。不要现场 npm install。
+- webhook 的 markdown 支持 `<@userid>` @（实测蓝色高亮）；markdown_v2 不支持 @。
 
 ## 工具：send_notify
 
