@@ -12,6 +12,8 @@
 //
 // 依赖：仅 openclaw 运行时（definePluginEntry 由 loader 解析）。无 typebox 等 npm 依赖。
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import fs from "node:fs";
+import path from "node:path";
 
 const NOTIFY_URL =
   process.env.NOTIFY_URL || "http://insforge:7130/functions/wecom-notify";
@@ -219,6 +221,94 @@ export default definePluginEntry({
         };
       },
       { name: TOOL_NAME },
+    );
+
+    // push_webhook：群机器人 webhook 推送（姿势固化在代码里，模型不用猜）。
+    // 背景（2026-09-04）：agent 手写 curl 推图到群机器人 webhook 报 invalid media type
+    // 后自行降级为 file 文件，用户看到的是文件而非图片。本工具把正确姿势封死：
+    //   image = base64+md5 直传（实测 errcode 0）；file = webhook/upload_media 取 media_id；
+    //   markdown/text 支持 <@userid> 与 mentioned_list。禁止再手写 curl 推 webhook。
+    api.registerTool(
+      (_ctx) => {
+        return {
+          name: "push_webhook",
+          description:
+            "向企业微信群机器人 webhook 推送一条消息（图片/markdown/文本/文件）。" +
+            "用户提供 webhook URL（形如 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...）要求推送到群时使用。" +
+            "★姿势已固化：image 自动 base64+md5 直传（不要自己 curl，手写易报 invalid media type）；" +
+            "file 自动 upload_media 换 media_id；markdown/text 内容里可用 <@userid> @人。" +
+            "注意：单条消息只能一种类型——要“图片+@提醒”请连发两条（本工具调两次）。",
+          parameters: {
+            type: "object",
+            properties: {
+              webhook_url: { type: "string", description: "群机器人 webhook 完整 URL（含 key= 参数）" },
+              msgtype: { type: "string", enum: ["image", "markdown", "text", "file"], description: "消息类型" },
+              content: { type: "string", description: "markdown/text 的正文（markdown 支持 <@userid> 与表格）" },
+              image_path: { type: "string", description: "msgtype=image 时：服务器上图片文件的绝对路径（png/jpg，≤2MB）" },
+              file_path: { type: "string", description: "msgtype=file 时：服务器上文件的绝对路径（≤20MB）" },
+              mentioned_list: { type: "array", items: { type: "string" }, description: "msgtype=text 时：@人的 userid 列表（\"@all\" 表全员）" },
+            },
+            required: ["webhook_url", "msgtype"],
+            additionalProperties: false,
+          },
+          execute: async (_id, params) => {
+            const obj = typeof params === "string" ? JSON.parse(params) : params || {};
+            const pick = (k) =>
+              obj[k] ?? (obj.input && obj.input[k]) ?? (obj.arguments && obj.arguments[k]) ?? (obj.parameters && obj.parameters[k]);
+            const hookUrl = String(pick("webhook_url") || "");
+            const msgtype = String(pick("msgtype") || "");
+            if (!/^https:\/\/qyapi\.weixin\.qq\.com\/cgi-bin\/webhook\/send\?/.test(hookUrl)) {
+              return { error: "webhook_url 必须是企微群机器人 webhook（https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...）" };
+            }
+            let body;
+            try {
+              if (msgtype === "image") {
+                const p = String(pick("image_path") || "");
+                if (!p || !fs.existsSync(p)) return { error: "image_path 不存在：" + p };
+                const buf = fs.readFileSync(p);
+                if (buf.length > 2 * 1024 * 1024) return { error: "图片超过 2MB（群机器人 image 上限），请压缩后重试" };
+                body = { msgtype: "image", image: { base64: buf.toString("base64") } };
+                const { createHash } = await import("node:crypto");
+                body.image.md5 = createHash("md5").update(buf).digest("hex");
+              } else if (msgtype === "file") {
+                const p = String(pick("file_path") || "");
+                if (!p || !fs.existsSync(p)) return { error: "file_path 不存在：" + p };
+                const key = new URL(hookUrl).searchParams.get("key");
+                const upUrl = `https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key=${key}&type=file`;
+                const fd = new FormData();
+                fd.append("media", new Blob([fs.readFileSync(p)]), path.basename(p));
+                const up = await (await fetch(upUrl, { method: "POST", body: fd })).json();
+                if (up.errcode !== 0 || !up.media_id) return { error: "upload_media 失败", detail: up };
+                body = { msgtype: "file", file: { media_id: up.media_id } };
+              } else if (msgtype === "markdown") {
+                const content = String(pick("content") || "");
+                if (!content) return { error: "markdown 需要 content" };
+                body = { msgtype: "markdown", markdown: { content } };
+              } else if (msgtype === "text") {
+                const content = String(pick("content") || "");
+                if (!content) return { error: "text 需要 content" };
+                const ml = pick("mentioned_list");
+                body = { msgtype: "text", text: { content, ...(Array.isArray(ml) && ml.length ? { mentioned_list: ml.map(String) } : {}) } };
+              } else {
+                return { error: "msgtype 必须是 image|markdown|text|file" };
+              }
+            } catch (e) {
+              return { error: "构造消息失败：" + String(e).slice(0, 200) };
+            }
+            try {
+              const res = await (await fetch(hookUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+              })).json();
+              return { ok: res.errcode === 0, errcode: res.errcode, errmsg: res.errmsg, msgtype };
+            } catch (e) {
+              return { error: "推送失败：" + String(e).slice(0, 200) };
+            }
+          },
+        };
+      },
+      { name: "push_webhook" },
     );
   },
 });

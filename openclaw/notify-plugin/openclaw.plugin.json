@@ -1,7 +1,7 @@
 {
   "id": "notify",
   "name": "Notify",
-  "description": "统一通知出口工具。OpenClaw 主动发企微通知时调用 send_notify，转发到 wecom-notify function（App B 发送）。配套 notify skill 教模型何时/如何发通知。",
+  "description": "统一通知出口工具。OpenClaw 主动发企微通知时调用 send_notify（应用消息，App B）或 push_webhook（群机器人 webhook：图片/markdown/text/file，姿势固化）。配套 notify skill 教模型何时/如何发通知。",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
@@ -13,7 +13,8 @@
   },
   "contracts": {
     "tools": [
-      "send_notify"
+      "send_notify",
+      "push_webhook"
     ]
   },
   "skills": [
