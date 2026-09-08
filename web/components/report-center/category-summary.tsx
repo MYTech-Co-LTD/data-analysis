@@ -25,7 +25,8 @@ import { useCanSeeCost } from "./use-can-see-cost";
 
 interface CategorySummaryProps {
   result: GetterResult<CategorySummaryRow>;
-  targetMonth: number;
+  /** 当前目标名（如「26年中秋经营指标」），作标题前缀 */
+  targetName: string;
   targetId: number;
   progress?: number; // 时间进度（如 0.677）；传了则完成率按「完成率/时间进度」相对着色
   /** 目标已结束（closed）：「当天/差额日均」语义失效，列值/抽屉/导出统一显示 "—" */
@@ -64,7 +65,7 @@ function fmtRate(r: number | null): string {
   return r == null ? "—" : `${(r * 100).toFixed(1)}%`;
 }
 
-export function CategorySummary({ result, targetMonth, targetId, progress, closed = false, isMobile = false }: CategorySummaryProps) {
+export function CategorySummary({ result, targetName, targetId, progress, closed = false, isMobile = false }: CategorySummaryProps) {
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [drawerCat, setDrawerCat] = useState<string | null>(null);
@@ -203,11 +204,11 @@ export function CategorySummary({ result, targetMonth, targetId, progress, close
       dRaw(totals.dailyAmount), closed ? "—" : (totals.dailyProfit ?? ""), dRate(totals.dailyProfitMargin),
       closed ? "—" : (totals.remainingDailyProfitTarget ?? ""),
     ]);
-    exportExcel([head, ...body], `${targetMonth}月仓储出库数据报表`);
+    exportExcel([head, ...body], `${targetName}·供应链出库·品类汇总`);
   };
 
   const handleImage = () => {
-    if (tableRef.current) exportImage(tableRef.current, `${targetMonth}月仓储出库报表`);
+    if (tableRef.current) exportImage(tableRef.current, `${targetName}·供应链出库·品类汇总`);
   };
 
   const handleShare = async () => {
@@ -232,7 +233,7 @@ export function CategorySummary({ result, targetMonth, targetId, progress, close
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-700">
-          {targetMonth}月仓储出库数据报表
+          {targetName}·供应链出库·品类汇总
         </h3>
         <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} isMobile={isMobile} />
       </div>

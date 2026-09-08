@@ -25,7 +25,8 @@ import { actualRatio, formatRatio, marginAchievement, absoluteThreeColor } from 
 
 interface BrandMetricTableProps {
   result: GetterResult<BrandMetricRow>;
-  targetMonth?: number;
+  /** 当前目标名（如「26年中秋经营指标」），作标题前缀 */
+  targetName: string;
   progress?: number; // 时间进度（如 0.677）；传了则达成率按「达成率/时间进度」相对着色
   isMobile?: boolean;
 }
@@ -59,10 +60,10 @@ function rateColor(r: number | null, progress?: number): string {
 
 // 品牌×指标表：3 行（熊喵/品品甜/合计）。完成率三色，合计行高亮。
 // 镜像 category-summary.tsx 结构/样式 + chart-actions 导出。
-export function BrandMetricTable({ result, targetMonth, progress, isMobile = false }: BrandMetricTableProps) {
+export function BrandMetricTable({ result, targetName, progress, isMobile = false }: BrandMetricTableProps) {
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
-  const title = `${targetMonth ?? ""}月品牌×指标`;
+  const title = `${targetName}·品牌×指标`;
   // F2.3: can_see_cost=false 时 profit/margin 列头挂脱敏角标（NULL 透传由 fmtCurrency/fmtRate 兜「—」）
   const costMasked = !useCanSeeCost();
 

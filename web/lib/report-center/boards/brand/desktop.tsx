@@ -8,14 +8,14 @@ import type { BrandMetricRow } from "@/lib/report-center/brand-metric";
 
 export function BrandBoard({
   result,
-  targetMonth,
+  target,
   progress,
   isMobile,
 }: BoardProps<BrandMetricRow>) {
   const table = (
     <BrandMetricTable
       result={result}
-      targetMonth={targetMonth}
+      targetName={target.name}
       progress={progress}
       isMobile={isMobile}
     />

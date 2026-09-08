@@ -22,7 +22,8 @@ import { RowDetailDrawer, type DetailField } from "./row-detail-drawer";
 
 interface RegionDrillTableProps {
   result: GetterResult<RegionBreakdownRow>;
-  targetMonth: number;
+  /** 当前目标名（如「26年中秋经营指标」），作标题前缀 */
+  targetName: string;
   progress: number; // 时间进度，如 0.677
   /** 目标已结束（closed）：「当天/剩余日均」语义失效，列值/抽屉/导出统一显示 "—" */
   closed?: boolean;
@@ -57,7 +58,7 @@ interface TreeNode {
   data: RegionBreakdownRow;
 }
 
-export function RegionDrillTable({ result, targetMonth, progress, closed = false, isMobile = false }: RegionDrillTableProps) {
+export function RegionDrillTable({ result, targetName, progress, closed = false, isMobile = false }: RegionDrillTableProps) {
   const { rows, status, error } = result;
   const tableRef = useRef<HTMLDivElement>(null);
   const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
@@ -173,10 +174,10 @@ export function RegionDrillTable({ result, targetMonth, progress, closed = false
     flatten(tree);
     const head = ["大区名称", "小区名称", "门店名称", "月销售目标", "月销售金额", "月销售完成率", "月配送目标", "月配送金额", "月配送完成率", "当天销售金额", "当天配送金额", "剩余日均销售目标", "剩余日均配送目标", "配销比目标", "配销比"];
     const body = flatRowsData.map((r) => [r.region_name, r.sub_region_name ?? "", r.branch_name ?? "", r.sale_target, r.sale_actual, fmtRate(r.sale_rate), r.delivery_target, r.delivery_actual, fmtRate(r.delivery_rate), dRaw(r.daily_sale), dRaw(r.daily_delivery), dRaw(r.remaining_daily_sale_target), dRaw(r.remaining_daily_delivery_target), formatRatio(targetRatio(r.delivery_target, r.sale_target)), formatRatio(actualRatio(r.delivery_actual, r.sale_actual))]);
-    exportExcel([head, ...body], `${targetMonth}月门店零售配送数据报表`);
+    exportExcel([head, ...body], `${targetName}·门店零售配送数据报表`);
   };
 
-  const handleImage = () => { if (tableRef.current) exportImage(tableRef.current, `${targetMonth}月门店零售配送报表`); };
+  const handleImage = () => { if (tableRef.current) exportImage(tableRef.current, `${targetName}·门店零售配送报表`); };
   const handleShare = async () => {
     try { await navigator.clipboard.writeText(window.location.href); const { toast } = await import('sonner'); toast.success('链接已复制'); } catch { /* 剪贴板拒绝时静默 */ }
   };
@@ -195,7 +196,7 @@ export function RegionDrillTable({ result, targetMonth, progress, closed = false
     <div className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-medium text-slate-700">
-          {targetMonth}月门店零售/配送数据报表
+          {targetName}·门店零售/配送数据报表
           {totalAnomaly && <TotalAnomalyBadge />}
         </h3>
         <ChartActions onExcel={handleExcel} onImage={handleImage} onShare={handleShare} isMobile={isMobile} />

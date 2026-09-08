@@ -9,14 +9,13 @@ import type { RegionBreakdownRow } from "@/lib/report-center/region-breakdown";
 export function RegionBoard({
   result,
   target,
-  targetMonth,
   progress,
   isMobile,
 }: BoardProps<RegionBreakdownRow>) {
   const table = (
     <RegionDrillTable
       result={result}
-      targetMonth={targetMonth}
+      targetName={target.name}
       progress={progress}
       closed={target.status === "closed"}
       isMobile={isMobile}

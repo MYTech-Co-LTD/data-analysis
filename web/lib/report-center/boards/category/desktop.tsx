@@ -9,7 +9,6 @@ import type { CategorySummaryRow } from "@/lib/report-center/category-summary";
 export function CategoryBoard({
   result,
   target,
-  targetMonth,
   targetId,
   progress,
   isMobile,
@@ -17,7 +16,7 @@ export function CategoryBoard({
   const table = (
     <CategorySummary
       result={result}
-      targetMonth={targetMonth}
+      targetName={target.name}
       targetId={targetId}
       progress={progress}
       closed={target.status === "closed"}
