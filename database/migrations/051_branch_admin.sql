@@ -3,7 +3,7 @@
 -- 幂等：DROP VIEW IF EXISTS + CREATE VIEW（不用 CREATE OR REPLACE，CLAUDE.md 坑）；IF NOT EXISTS；GRANT 幂等
 
 -- ===== 1. branch_admin_v：dim_branch JOIN dim_region(战区) JOIN dim_branch_ext(分组/备注) =====
-DROP VIEW IF EXISTS branch_admin_v;
+DROP VIEW IF EXISTS branch_admin_v CASCADE;
 CREATE VIEW branch_admin_v AS
 SELECT
   b.system_book_code, b.branch_num, b.branch_id, b.branch_code, b.branch_name,
