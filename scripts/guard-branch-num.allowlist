@@ -18,3 +18,8 @@ database/migrations/063_breakdown_three_level.sql:50 # pre-reform: spec §1.1 �
 web/lib/agent-query/__tests__/sql-guards.test.ts:20
 web/lib/agent-query/__tests__/sql-guards.test.ts:80
 web/lib/agent-query/__tests__/sql-guards.test.ts:94
+
+# 2026-09-05 journal_push（PR #77）：211 号迁移 journal_war_zone_month_sales 视图 join——
+# ON s.branch_num = b.branch_num 与 AND s.system_book_code = b.system_book_code 复合键伴生
+# 写在紧邻下一行，guard 单行扫描窗口看不到伴生列，属扫描器窗口误报（SQL 语义安全，门店键铁律实际满足）。
+database/migrations/211_journal_push.sql:35
