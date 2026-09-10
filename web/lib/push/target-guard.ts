@@ -2,6 +2,7 @@
 // 目标结束守卫（spec §3.4）：触发前检查数据源目标——
 //   follow：视图「今天落区间」是否有行；fixed：视图 target_id+status=active 是否有行（targets 表 RLS 拦 anon，不能直查）。
 //   不 active → 跳过本次 + owner 一次性企微提醒（last_guard_notice_at 24h 防重）。
+//   listActiveTargets：follow 扇出用——列出今天落区间的全部进行中 total 目标（每目标一条推送）。
 
 import { sendWecomMarkdown } from '../wecom-send';
 
@@ -45,6 +46,44 @@ export async function checkTargetActive(
       : { active: false, reason: '无进行中目标（今天不在任何 active 目标周期内）' };
   } catch (e) {
     return { active: false, reason: `守卫查询失败：${String(e)}` };
+  }
+}
+
+export interface ActiveTarget {
+  target_id: number;
+  name: string;
+}
+
+/**
+ * 列出「今天落区间」的全部进行中 total 目标（按 target_id 去重）。
+ * follow 模式扇出用：一个目标推一条卡片（2026-09-10 定稿，替代原先 single tie-break 只取一个）。
+ * 与 checkTargetActive('follow')/引擎 resolveNumericValue 同一日界（北京 UTC+8）与视图口径。
+ */
+export async function listActiveTargets(): Promise<ActiveTarget[]> {
+  const { url, headers } = pg();
+  if (!url) return [];
+  try {
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const resp = await fetch(
+      `${url}/report_achievement_gen?select=target_id,name`
+      + `&target_level=eq.total&status=eq.active&start_date=lte.${today}&end_date=gte.${today}`
+      + `&order=start_date.desc,end_date.asc`,
+      { headers },
+    );
+    const rows = await resp.json().catch(() => []);
+    if (!Array.isArray(rows)) return [];
+    const seen = new Set<number>();
+    const out: ActiveTarget[] = [];
+    for (const r of rows as Array<{ target_id?: unknown; name?: unknown }>) {
+      const id = Number(r?.target_id);
+      if (!Number.isFinite(id) || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ target_id: id, name: String(r?.name ?? '') });
+    }
+    return out;
+  } catch (e) {
+    console.error('[target-guard] listActiveTargets 失败', e);
+    return [];
   }
 }
 

@@ -9,7 +9,7 @@ import { tryAcquireLock } from '../../scheduler-lock';
 import { AGENT_API_KEY } from '../env';
 import { runningTasks } from '../state';
 import { matchesDate, isTimeReached, type CronSpec } from './cron-match';
-import { checkTargetActive, notifyOwnerOnce } from '../../push/target-guard';
+import { checkTargetActive, notifyOwnerOnce, listActiveTargets } from '../../push/target-guard';
 
 // run_push 接口契约（Task 9 产出，按 spec §5.4 签名）
 interface RunPushOpts {
@@ -122,7 +122,7 @@ export const scheduledReportsManifest: JobManifest = {
       // 「今天」按北京时区取（UTC+8），与引擎 resolveNumericValue / target-guard 同一日界——
       //   否则北京 00:00-07:59 窗口内 last_run_date（UTC 串）跨日不一致 → 重复触发/错误判定（终审 I2）
       const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-      const results: Array<{ id: string; txnId?: string; skipped?: string; error?: string }> = [];
+      const results: Array<{ id: string; txnId?: string; skipped?: string; error?: string; targets?: number }> = [];
 
       for (const cfg of configs) {
         try {
@@ -133,7 +133,9 @@ export const scheduledReportsManifest: JobManifest = {
           if (!due || alreadyRan) continue;
           results.push({ id: cfg.config_id });
 
-          // 3) 目标守卫：无进行中目标 → 跳过 + owner 一次性提醒
+          // 3) 目标守卫 + 目标清单：
+          //   follow = 扇出「今天落区间」的全部进行中 total 目标（每个目标一条卡片，2026-09-10 定稿）；
+          //   fixed  = 锁定单目标（行为不变）。
           const guard = await checkTargetActive(cfg.target_mode, cfg.target_id ?? undefined);
           if (!guard.active) {
             console.log(`[scheduled-reports] ${cfg.name} 跳过：${guard.reason}`);
@@ -146,24 +148,56 @@ export const scheduledReportsManifest: JobManifest = {
             });
             continue;
           }
+          const fanout = cfg.target_mode === 'follow'
+            ? await listActiveTargets()
+            : (cfg.target_id ? [{ target_id: cfg.target_id, name: '' }] : []);
+          if (fanout.length === 0) {
+            // 防御：guard 已确认有 active 目标、清单却为空（视图不一致）→ 跳过并记当日，避免刷屏
+            console.log(`[scheduled-reports] ${cfg.name} 跳过：目标清单为空`);
+            results[results.length - 1].skipped = '目标清单为空';
+            await fetch(`${postgrestUrl}/push_configs?config_id=eq.${cfg.config_id}`, {
+              method: 'PATCH', headers: { ...pgHeaders, Prefer: 'return=minimal' },
+              body: JSON.stringify({ last_run_date: today }),
+            });
+            continue;
+          }
 
-          // 4) 触发（presetId 显式传，workflow 统一 scheduled-report）
-          const pushResult = await callRunPush({
-            workflow_id: 'scheduled-report',
-            operator_id: cfg.owner_wecom_id,
-            selector: cfg.selector_json,
-            preset_id: cfg.preset_id,
-            target_mode: cfg.target_mode,
-            target_id: cfg.target_id ?? undefined,
-          });
-          console.log(`[scheduled-reports] ${cfg.name} → txnId=${pushResult.txnId} groups=${pushResult.groups}`);
-          results[results.length - 1].txnId = pushResult.txnId;
+          // 4) 逐目标触发（follow 扇出全部进行中目标；fixed 单元素 = 原行为）。
+          //    逐目标隔离 error：全失败 → 不写 last_run_date（下轮重试）；部分失败 → 写 last_run_date
+          //    （避免已成功目标重复推送）并上抛错误供监控；全成功 → 写 txnId 清单。
+          const outcomes: Array<{ targetId: number; txnId?: string; error?: string }> = [];
+          for (const t of fanout) {
+            try {
+              const pushResult = await callRunPush({
+                workflow_id: 'scheduled-report',
+                operator_id: cfg.owner_wecom_id,
+                selector: cfg.selector_json,
+                preset_id: cfg.preset_id,
+                target_mode: 'fixed',
+                target_id: t.target_id,
+              });
+              console.log(`[scheduled-reports] ${cfg.name} target=${t.target_id} → txnId=${pushResult.txnId} groups=${pushResult.groups}`);
+              outcomes.push({ targetId: t.target_id, txnId: pushResult.txnId });
+            } catch (e: unknown) {
+              console.error(`[scheduled-reports] ${cfg.name} target=${t.target_id} 推送失败:`, (e as Error).message);
+              outcomes.push({ targetId: t.target_id, error: (e as Error).message });
+            }
+          }
+          const okTxns = outcomes.filter((o) => o.txnId).map((o) => o.txnId as string);
+          const errs = outcomes.filter((o) => o.error);
+          results[results.length - 1].txnId = okTxns.join(',');
+          results[results.length - 1].targets = outcomes.length;
 
-          // 5) 回写
-          await fetch(`${postgrestUrl}/push_configs?config_id=eq.${cfg.config_id}`, {
-            method: 'PATCH', headers: { ...pgHeaders, Prefer: 'return=minimal' },
-            body: JSON.stringify({ last_run_date: today, last_run_txn_id: pushResult.txnId }),
-          });
+          // 5) 回写（有成功投递即记当日已跑，防部分失败导致重复推送；全失败不写 → 下轮重试）
+          if (okTxns.length > 0) {
+            await fetch(`${postgrestUrl}/push_configs?config_id=eq.${cfg.config_id}`, {
+              method: 'PATCH', headers: { ...pgHeaders, Prefer: 'return=minimal' },
+              body: JSON.stringify({ last_run_date: today, last_run_txn_id: okTxns.join(',') }),
+            });
+          }
+          if (errs.length > 0) {
+            throw new Error(`${errs.length}/${fanout.length} 个目标推送失败: ${errs.map((e) => `${e.targetId}:${e.error}`).join('; ')}`);
+          }
         } catch (e: unknown) {
           console.error(`[scheduled-reports] ${cfg.name} 推送失败:`, (e as Error).message);
           results[results.length - 1].error = (e as Error).message;
