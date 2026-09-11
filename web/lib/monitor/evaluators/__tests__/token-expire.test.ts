@@ -25,6 +25,7 @@ const deps = (token: string | null): EvalDeps => ({
   getCredentialToken: async () => token,
   getCollectLogs: async () => [],
   getCollectTasks: async () => [],
+  duckdbQuery: async () => [],
 });
 
 describe('evalTokenExpire', () => {

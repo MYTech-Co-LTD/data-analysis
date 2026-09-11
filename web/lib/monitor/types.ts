@@ -10,6 +10,7 @@ export type CheckType =
   | 'request_fail'
   | 'data_freshness'
   | 'data_integrity'
+  | 'data_volume'
   | 'contact_sync';
 
 export type Severity = 'critical' | 'high' | 'medium';
@@ -47,6 +48,9 @@ export interface EvalDeps {
   getCollectLogs: (taskId: string, limit: number) => Promise<Array<{ status: string; started_at: string; error_message: string | null }>>;
   // collect_stall 用：取全部采集任务（last_run_at 心跳陈旧检测）
   getCollectTasks: () => Promise<Array<{ id: string; name: string; schedule_cron: string; enabled: boolean; last_run_at: string | null }>>;
+  // data_freshness / data_volume 用：直接跑 DuckDB 查询（web 容器无 boto3，DuckDB 服务即现成的 OSS 出口）。
+  // 返回 data 数组；非 2xx 或 success=false 时抛错（由 evaluator 决定「探测异常不报警」）。
+  duckdbQuery: (sql: string) => Promise<Array<Record<string, any>>>;
 }
 
 export interface ProbeOutcome {

@@ -17,6 +17,7 @@ const deps = (logs: Array<{ status: string; error_message?: string }>): EvalDeps
   getCredentialToken: async () => null,
   getCollectLogs: async () => logs.map(l => ({ status: l.status, started_at: '', error_message: l.error_message ?? null })),
   getCollectTasks: async () => [],
+  duckdbQuery: async () => [],
 });
 
 describe('evalCollectFail', () => {
