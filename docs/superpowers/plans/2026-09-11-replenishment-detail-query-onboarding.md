@@ -4,7 +4,7 @@
 
 **Goal:** 让 OpenClaw 能准确查询 OSS 上的补货（要货单）明细——把「注册表通用事实视图」能力从维表推广到事实表，并把补货数据集接进去，附带到达/完整性守护。
 
-**Architecture:** 在 `datasets` 表加一列 `scope_key_expr`（门店复合键 SQL 表达式）作为通用事实数据集的声明式契约；网关把该能力抽到共享纯函数 `functions/_shared/fact-view.ts`（可单测），对注册表声明的 fact 数据集统一构建「按注册列投影 + 行级权限裁剪」的 DuckDB 临时视图；存量两个硬编码视图 `retail_detail`/`outbound_detail` 完全不动。守护复用已接线但未实现的 `data_freshness`/`data_integrity` 两个 CheckType。
+**Architecture:** 在 `datasets` 表加一列 `scope_key_expr`（门店复合键 SQL 表达式）作为通用事实数据集的声明式契约；网关把该能力抽到共享纯函数 `functions/_shared/fact-view.ts`（可单测），对注册表声明的 fact 数据集统一构建「按注册列投影 + 行级权限裁剪」的 DuckDB 临时视图；存量两个硬编码视图 `retail_detail`/`outbound_detail` 完全不动。守护**复用**已接线但未实现的 `data_freshness`，并**新增** `data_volume`（不使用 `data_integrity`——其原义已被 QA 体系承担）。
 
 **Tech Stack:** Deno edge function（CommonJS，esbuild 打包）/ DuckDB（S3 直读 parquet）/ PostgREST / PostgreSQL 幂等迁移 / Next.js + vitest（web 侧）/ OpenClaw native plugin + SKILL.md
 
@@ -95,7 +95,7 @@
 ```
 **数据到达/完整性守护（2026-09-11 落地）**：`CheckType` 早已声明 `data_freshness` / `data_integrity` 两个类型但一直无 evaluator（空跑）。
 现用于守护**外部管线**写入 OSS 的数据集（如 `replenishment_detail`）：`data_freshness` 走 `runHourlyBucket`（每小时）检查昨日分区是否到达；
-`data_integrity` 走 `runDailyBucket`（每日 03:00）检查昨日行数 vs 近 7 日中位数偏离。**按账套各配一行规则**（禁止看合计，会被另一账套掩盖）。
+**新类型 `data_volume`** 走 `runDailyBucket`（每日 03:00）检查昨日行数 vs 近 7 日中位数偏离。**按账套各配一行规则**（禁止看合计，会被另一账套掩盖）。
 探测走 DuckDB 服务（web 容器无 boto3）；探测异常**不报警**（duckdb 本体故障由 `service_down` 桶负责，避免双报）。
 `runScan` 的双层隔离（无 evaluator 规则 `warn + continue`、每规则独立 `try/catch`）保证**规则可先于 evaluator 落库**。
 ```
@@ -107,7 +107,7 @@ git add docs/architecture.md
 git commit -m "docs(architecture): 注册表通用事实视图（scope_key_expr）+ 数据到达守护
 
 - §4.3 登记「新增数据集=插一行」原先只覆盖维表/pg_table，事实表是硬编码
-- §8.1 登记 data_freshness/data_integrity 兩个已声明未实现的 CheckType 落地"
+- §8.1 登记 data_freshness（复用）与新增 data_volume 两个 CheckType 的落地"
 ```
 
 ---
@@ -876,7 +876,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
   "SELECT check_type, target, enabled FROM monitor_rules WHERE target LIKE 'replenishment_detail:%' ORDER BY 1,2;"
 ```
 
-Expected: 1 行数据集（`scope_key_expr` 非空）；列数 `20`；规则 4 行（2×data_freshness + 2×data_integrity，全 `t`）
+Expected: 1 行数据集（`scope_key_expr` 非空）；列数 `20`；规则 4 行（2×data_freshness + 2×data_volume，全 `t`）
 
 - [ ] **Step 4: 确认字典能看见（且 total_money 不在）**
 
@@ -905,7 +905,7 @@ git commit -m "feat(migration): 213 补货明细数据集注册 + 到达/完整�
 
 - datasets 行含 scope_key_expr（账套||'-'||门店号 归一）
 - 20 列注册；total_money 有意不注册（行级 SUM 会整单翻倍）
-- 4 条 monitor_rules：data_freshness×2 + data_integrity×2（按账套各配）"
+- 4 条 monitor_rules：data_freshness×2 + data_volume×2（按账套各配）"
 ```
 
 ---
@@ -1832,7 +1832,7 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
 在 PR 评论里记录：Step 1 行数、Step 4 的 A/B 行数、Step 6 的对账数字。若走 changelog，加一行：
 
 ```
-【新增】补货(要货单)明细接入智能问数：注册表通用事实视图（datasets.scope_key_expr）+ 到达/行数守护（data_freshness/data_integrity）
+【新增】补货(要货单)明细接入智能问数：注册表通用事实视图（datasets.scope_key_expr）+ 到达/行数守护（data_freshness/data_volume）
 ```
 
 ---
