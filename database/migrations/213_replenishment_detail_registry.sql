@@ -82,7 +82,11 @@ VALUES
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1}'::jsonb,
   'high','🔴 [{severity}] 补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE)
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
-  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template;
+  name=EXCLUDED.name, threshold=EXCLUDED.threshold, severity=EXCLUDED.severity,
+  template=EXCLUDED.template, suppress_window_seconds=EXCLUDED.suppress_window_seconds;
+-- ↑ SET 列表覆盖除 enabled 外的**全部**插入列（name/threshold/severity/template/suppress_window_seconds）：
+--   漏任何一列都会留下与 ③④ 同类的静默 no-op——「部署成功却不改已存在的行」
+--   （例：日后把 suppress_window_seconds 从 1800 调成 600，行不会变）。
 -- ↑ 有意**不**写 `enabled=TRUE`：migrate.sh 每次部署全量重跑全部迁移，若这里强制回 TRUE，
 --   则 spec 回滚节那条 `UPDATE monitor_rules SET enabled=false ...` 的应急抑制会在下次部署被**静默撤销**。
 --   新行仍由 VALUES 里的 TRUE 正常启用；要**永久**停用则需改本迁移或删除规则行。
@@ -99,7 +103,11 @@ VALUES
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
   'high','🔴 [{severity}] 补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE)
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
-  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template;
+  name=EXCLUDED.name, threshold=EXCLUDED.threshold, severity=EXCLUDED.severity,
+  template=EXCLUDED.template, suppress_window_seconds=EXCLUDED.suppress_window_seconds;
+-- ↑ SET 列表覆盖除 enabled 外的**全部**插入列（name/threshold/severity/template/suppress_window_seconds）：
+--   漏任何一列都会留下与 ③④ 同类的静默 no-op——「部署成功却不改已存在的行」
+--   （例：日后把 suppress_window_seconds 从 1800 调成 600，行不会变）。
 -- ↑ 有意**不**写 `enabled=TRUE`：migrate.sh 每次部署全量重跑全部迁移，若这里强制回 TRUE，
 --   则 spec 回滚节那条 `UPDATE monitor_rules SET enabled=false ...` 的应急抑制会在下次部署被**静默撤销**。
 --   新行仍由 VALUES 里的 TRUE 正常启用；要**永久**停用则需改本迁移或删除规则行。
