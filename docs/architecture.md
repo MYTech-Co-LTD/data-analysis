@@ -989,6 +989,7 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 | `token_expire` | `auth_credentials` JWT，解 payload `exp` | 剩余 < before_hours；token 缺失/无法解析也 firing（evaluator 给 `message` 覆盖模板，避免静默"恢复"致盲） | ✅ 已实现 |
 | `collect_fail` | `collect_logs` | 连续失败 ≥ consecutive | ✅ 已实现 |
 | `service_down` | 主动探活 web/duckdb/insforge/postgres/deno/openclaw（应用级，5s 超时） | 任一不可达 | ✅ 已实现 |
+| `novu_health` | Novu 控制面探活（`NOVU_API_URL` 空=禁用）（spec §5.5） | 探活失败 | ✅ 已实现 |
 | `collect_stall`（🆕 迁移 165，设计清单外新增） | `collect_tasks.last_run_at`（rule.target = task_id） | enabled=true 且 now - last_run_at > 阈值（采集卡死/未跑） | ✅ 已实现 |
 | `request_fail` | `external_request_logs` | 窗口失败率 > failure_rate | ⏳ 未实现 |
 | `data_freshness` | ①（通用）PG 汇总表 + DuckDB parquet 最新日期；②（外部管线数据集）OSS 分区是否存在 | ①距今 > stale_hours；②期望业务日分区缺失 | 🔶 部分实现（② 外部管线分区到达已实现；① 通用陈旧度未实现） |
@@ -1433,7 +1434,7 @@ spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.m
 | carry 维表物化（C3） | ✅ 已实现 | /carry-dims（cron 04:33 兜底 + 变更回调），agent-query 查询侧读 dim parquet |
 | 美团数据源接入 | ⏳ 待讨论 | 架构待确认 |
 | 饿了么数据源接入 | ⏳ 待讨论 | 架构待确认 |
-| 监控告警体系 v1 | 🔶 部分实现 | 已实现 6/9：token_expire/collect_fail/service_down/collect_stall/data_freshness/data_volume；未实现：request_fail/data_integrity/contact_sync（§8.1 状态表） |
+| 监控告警体系 v1 | 🔶 部分实现 | 已实现 7/10：token_expire/collect_fail/service_down/collect_stall/novu_health/data_freshness/data_volume；未实现：request_fail/data_integrity/contact_sync（§8.1 状态表） |
 | 监控待实现 3 项 evaluator | ⏳ 待排期 | §8.1；data_integrity 部分职能已由 QA 体系承担（§10.10 L4） |
 | 模块化+插件化重构 | 🔶 进行中 | A+B-lite，P0–P5；P1（jobs/collectors 目录化+注册表）已落地，P3（function _shared 共享打包）已落地 |
 | 语义层 Cube 全替代 | ⏳ spec 已确认待实施 | §九 2026-08-15；生成器退役清单见 §10.10 |
