@@ -90,11 +90,16 @@ COMMENT ON COLUMN datasets.scope_key_expr IS
 ```sql
 CREATE OR REPLACE TEMP VIEW <name> AS
 SELECT * FROM (
-  SELECT <"* REPLACE (脱敏列)" 或 "*"（无敏感列时）>
+  SELECT <按 dataset_columns 显式投影；敏感列套 CASE WHEN <canSee> THEN col ELSE NULL END>
   FROM read_parquet('<source>', union_by_name=true)
 ) t
 WHERE <scope_key_expr> IN (<授权复合键集合>)      -- 未授权 → WHERE 1=0
 ```
+
+**投影由 `dataset_columns` 决定，不用 `SELECT *`**——这一点很关键：`SELECT *` 会把 parquet 里**全部**列暴露出去
+（补货有 28 列，含我们要拿掉的 `total_money`）。改为显式投影后：
+① `total_money` 只需**不注册**就自动从视图消失（无需额外机制）；② 不存在「无敏感列时 `SELECT * REPLACE ()` 非法 SQL」的问题；
+③ `dataset_columns` 成为「这个数据集能看见哪些列」的单一事实源。**列注册为空 → 不构建视图（fail-close）**。
 
 配套七点：
 
@@ -104,7 +109,7 @@ WHERE <scope_key_expr> IN (<授权复合键集合>)      -- 未授权 → WHERE 
   查询从 PG **误路由到 DuckDB 而失败**。即「function 先于迁移上线」的窗口会打挂现有报表问答。
   隔离后：列缺失只让**新数据集**不可用（fail-close），碰不到 `pgTables`/`retailGlob`/`costColumns`。
 - **fail-close**：`kind='fact'` 且 `scope_key_expr IS NULL` → 不建视图、不进白名单（**不是**「不过滤」）。与 CLAUDE.md「空集 = deny」一贯。
-- **`REPLACE()` 空集退化**：敏感列为空时必须退化成 `SELECT *`——`SELECT * REPLACE ()` 是非法 SQL（dimCarry 现有写法同款处理）。
+- **列投影 = `dataset_columns` 的注册列**（显式列出，非 `SELECT *`）：既要拿掉 `total_money`，也让「能看见哪些列」有单一事实源。注册列为空 → 不构建（fail-close）。
 - **跳过已硬编码的视图名**：`retail_detail` / `outbound_detail` 即使被注册也**不得**由通用路径重建（它们有 union/内联 join 的定制逻辑）。
 - **allowedTables 由注册表派生**（已硬编码的两个仍显式保留），不再手写维护。
 - **表达式校验三条**（校验失败 → 不建视图 + 记日志，fail-close）：
@@ -216,7 +221,8 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 | **窄授权行集严格 ⊂ 全量行集** | **防表达式塌缩成单值越权**（如 `system_book_code || '-7'`）——本设计唯一越权风险面 |
 | `scope_key_expr` 缺失的 fact 数据集 | 不进白名单、SELECT 被拒（fail-close） |
 | 表达式引用不到本数据集列 / 含 `;` | 拒绝构建 |
-| 无敏感列的 fact 数据集 | 视图正常构建（`REPLACE()` 空集退化生效），金额列不受影响 |
+| 无敏感列的 fact 数据集 | 视图按注册列正常构建，金额列不受影响 |
+| **未注册的列（如 `total_money`）** | 查它 → DuckDB 报 column not found（视图里压根没有），即「拿掉」生效 |
 | `retail_detail` / `outbound_detail` | 通用路径不介入，行为与改造前逐字节一致 |
 | 注册表主查询故障（模拟 400） | 走 fallback 且 **`pgTables` 仍为报表表全集**（路由不退化） |
 
@@ -229,7 +235,7 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 1. **`docs/architecture.md` §4.3 / §8.1 更新**（架构先行，先落地）
 2. 迁移 `212_registry_fact_scope.sql`：`datasets.scope_key_expr` 列 + 注释
 3. 迁移 `213_replenishment_detail_registry.sql`：`datasets` 行 + `dataset_columns` 列描述 + 两条 `monitor_rules`
-4. `functions/agent-query/index.js`：`loadRegistry` **以独立请求 + 独立 try/catch** 读 `scope_key_expr` 与逐数据集敏感列（**不得并入主 `datasets?select=`**）；`runDuckdb` 通用 fact 视图构建（含表达式三条校验、`REPLACE()` 空集退化、硬编码视图名跳过）；`allowedTables` 由注册表派生
+4. `functions/_shared/fact-view.ts`（新增纯函数，供单测锁定）+ `functions/agent-query/index.js` 接线：`loadRegistry` **以独立请求 + 独立 try/catch** 读 `scope_key_expr` 与逐数据集列（**不得并入主 `datasets?select=`**）；`runDuckdb` 通用 fact 视图构建（含表达式三条校验、按注册列投影、硬编码视图名跳过）；`allowedTables` 由注册表派生
 5. `web/lib/monitor/`：`evaluators/data-freshness.ts` + `data-integrity.ts`，注册进 `EVALUATORS`；`EvalDeps` 加必填 `duckdbQuery` 并在 `runtime.ts` `buildDeps` 注入 —— ⚠️ 存量 evaluator 测试 fake 需同步补该字段（机械，3~4 文件）
 6. `openclaw/data-query-plugin/skills/retail-query/SKILL.md`：⑫补货模板
 7. 测试：`web/lib/agent-query/__tests__/` 扩 `validateSql`/表达式校验单测；`web/lib/monitor/evaluators/__tests__/` 加两个 evaluator 单测；三类身份权限冒烟；分毫级准确性冒烟

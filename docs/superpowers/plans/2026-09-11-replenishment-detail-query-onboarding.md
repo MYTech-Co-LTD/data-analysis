@@ -1,0 +1,1621 @@
+# 补货(要货单)明细接入问数 实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 让 OpenClaw 能准确查询 OSS 上的补货（要货单）明细——把「注册表通用事实视图」能力从维表推广到事实表，并把补货数据集接进去，附带到达/完整性守护。
+
+**Architecture:** 在 `datasets` 表加一列 `scope_key_expr`（门店复合键 SQL 表达式）作为通用事实数据集的声明式契约；网关把该能力抽到共享纯函数 `functions/_shared/fact-view.ts`（可单测），对注册表声明的 fact 数据集统一构建「按注册列投影 + 行级权限裁剪」的 DuckDB 临时视图；存量两个硬编码视图 `retail_detail`/`outbound_detail` 完全不动。守护复用已接线但未实现的 `data_freshness`/`data_integrity` 两个 CheckType。
+
+**Tech Stack:** Deno edge function（CommonJS，esbuild 打包）/ DuckDB（S3 直读 parquet）/ PostgREST / PostgreSQL 幂等迁移 / Next.js + vitest（web 侧）/ OpenClaw native plugin + SKILL.md
+
+**Spec:** `docs/superpowers/specs/2026-09-11-replenishment-detail-query-onboarding-design.md`
+
+## Global Constraints
+
+- **部署次序是硬约束**（违反会打挂现有报表问答）：
+  `① architecture.md → ② agent-query function → ③ 迁移 212 → ④ restart postgrest → ⑤ 迁移 213 → ⑥ monitor evaluator（可在 213 前后）`
+- **`scope_key_expr` 与逐数据集列必须走独立请求 + 独立 try/catch**，**绝不可并入 `loadRegistry` 现有的 `datasets?select=...` 主查询**。PostgREST 对未知列返 400，主查询一挂整个 `loadRegistry` 走 fallback → `pgTables` 退回只剩 3 张报表表 → 现有 `report_*_gen` 查询误路由到 DuckDB 而失败。
+- **账套列名必须是 `system_book_code`**（`assertBranchJoin` 是字面量匹配，不认 `sbc`/`company_id`）。
+- **`total_money` 不注册**（单头金额逐行重复，行级 SUM 整单翻倍）。靠「按注册列投影」自动从视图消失。
+- **视图列 = `dataset_columns` 注册列**（显式投影，非 `SELECT *`）。注册列为空 → 不构建视图（fail-close）。
+- **fail-close**：`scope_key_expr` 为空/非法 → 不建视图、不进白名单。授权空集 → `WHERE 1=0`（不是「不过滤」）。
+- **不做存量重构**：`retail_detail` / `outbound_detail` 仍走原硬编码分支，通用路径显式跳过这两个名字。
+- **沿用「全量构建」模式**：每查询无条件构建全部权限视图（保持现状，不引入懒构建）。
+- **迁移必须幂等**：`ADD COLUMN IF NOT EXISTS` / `ON CONFLICT` / `WHERE NOT EXISTS`；迁移头注释须写 `-- spec: docs/superpowers/specs/2026-09-11-replenishment-detail-query-onboarding-design.md`（pre-commit 迁移↔spec 关联守卫）。
+- **测试命令**：`cd web && npm test`（vitest，**不做类型检查**）；类型检查必须跑 `cd web && npm run build`。
+- 回滚：字典 `DELETE FROM datasets WHERE name='replenishment_detail'`；守护 `UPDATE monitor_rules SET enabled=false WHERE check_type IN ('data_freshness','data_integrity')`。
+
+## File Structure
+
+| 文件 | 职责 | 动作 |
+|---|---|---|
+| `docs/architecture.md` | §4.3 注册表能力、§8.1 守护类型 | Modify（架构先行） |
+| `functions/_shared/fact-view.ts` | 通用事实视图的两件纯逻辑：表达式校验 + 视图 SQL 生成 | Create |
+| `web/lib/agent-query/__tests__/fact-view.test.ts` | 上述纯函数的契约单测（跨包镜像，同 `sql-guards.test.ts` 惯例） | Create |
+| `functions/agent-query/index.js` | 注册表读取（隔离）、视图构建接线、白名单派生 | Modify |
+| `database/migrations/212_registry_fact_scope.sql` | `datasets.scope_key_expr` 列 | Create |
+| `database/migrations/213_replenishment_detail_registry.sql` | 补货数据集注册 + 4 条守护规则 | Create |
+| `web/lib/monitor/types.ts` | `EvalDeps` 加 `duckdbQuery` | Modify |
+| `web/lib/monitor/runtime.ts` | `buildDeps` 注入 `duckdbQuery` | Modify |
+| `web/lib/monitor/evaluators/data-freshness.ts` | 分区到达守护 | Create |
+| `web/lib/monitor/evaluators/data-integrity.ts` | 行数异常守护 | Create |
+| `web/lib/monitor/evaluators/index.ts` | `EVALUATORS` 注册两个新 evaluator | Modify |
+| `web/lib/monitor/evaluators/__tests__/data-freshness.test.ts` | 到达守护单测 | Create |
+| `web/lib/monitor/evaluators/__tests__/data-integrity.test.ts` | 行数守护单测 | Create |
+| `web/lib/monitor/**/__tests__/*.test.ts`（5 个存量） | 补 `duckdbQuery` 到 deps fake | Modify |
+| `openclaw/data-query-plugin/skills/retail-query/SKILL.md` | ⑫补货模板 | Modify |
+
+---
+
+### Task 1: 架构文档先行更新
+
+**Files:**
+- Modify: `docs/architecture.md`（§4.3 数据注册中心、§8.1 监控）
+
+**Interfaces:**
+- Consumes: 无
+- Produces: 无（文档）；但按仓库 CLAUDE.md「架构先行」，本任务必须先于一切代码改动合并。
+
+- [ ] **Step 1: 更新 §4.3 数据注册中心段**
+
+在 `docs/architecture.md` 的 §4.3「🆕 数据注册中心 = 取数知识单一事实源（迁移 031）」段落中，把「自动感知」那句的适用范围讲准。定位现有这一行：
+
+```
+- **自动感知**：新增维表/报表 = `datasets` 插一行 → 两侧下一轮即见，**不改 markdown、内容变更不重部署**（插件/function 各只一次性改动）。
+```
+
+替换为：
+
+```
+- **自动感知**：新增维表/报表 = `datasets` 插一行 → 两侧下一轮即见，**不改 markdown、内容变更不重部署**（插件/function 各只一次性改动）。
+- **🆕 通用事实视图（迁移 212，2026-09-11）**：上述「插一行即见」原先只对维表（`kind=dim AND carry_enabled`）与 `pg_table` 成立；
+  **事实表（`kind=fact`）此前无通用路径**——`retail_detail` / `outbound_detail` 的视图是硬编码在 `functions/agent-query/index.js` 的。
+  现新增声明式契约：`datasets.scope_key_expr`（事实数据集的**门店复合键 SQL 表达式**，对注册列求值，产出归一形态 `sbc-branch_num`）。
+  网关对 `engine='duckdb_view' AND kind='fact' AND scope_key_expr IS NOT NULL AND exposed` 的数据集统一构建：
+  ① 列投影 = `dataset_columns` 注册列（**显式投影，非 `SELECT *`**；敏感列套 `CASE WHEN can_see_cost THEN col ELSE NULL END`）→
+  未注册的列（如逐行重复的单头金额）天然不出现；② 行级权限 = `WHERE <scope_key_expr> IN (<授权复合键>)`，授权空集 → `WHERE 1=0`。
+  `scope_key_expr` 空/非法 / 注册列为空 → **不构建视图且不进 SQL 白名单（fail-close）**。
+  两个存量硬编码视图**不重构**（它们有 union / 内联 dim join 的定制逻辑），通用路径显式跳过其名字。
+  **注册表的通用事实扩展必须独立请求读取**（不得并入主 `datasets?select=`）——PostgREST 对未知列返 400，
+  主查询失败会使 `pgTables` 回退到硬编码兜底值，导致 `report_*_gen` 查询误路由到 DuckDB。
+```
+
+- [ ] **Step 2: 更新 §8.1 监控段，登记两个守护类型**
+
+找到 §8.1 中讲 `monitor_rules` 的段落，在其后追加一段：
+
+```
+**数据到达/完整性守护（2026-09-11 落地）**：`CheckType` 早已声明 `data_freshness` / `data_integrity` 两个类型但一直无 evaluator（空跑）。
+现用于守护**外部管线**写入 OSS 的数据集（如 `replenishment_detail`）：`data_freshness` 走 `runHourlyBucket`（每小时）检查昨日分区是否到达；
+`data_integrity` 走 `runDailyBucket`（每日 03:00）检查昨日行数 vs 近 7 日中位数偏离。**按账套各配一行规则**（禁止看合计，会被另一账套掩盖）。
+探测走 DuckDB 服务（web 容器无 boto3）；探测异常**不报警**（duckdb 本体故障由 `service_down` 桶负责，避免双报）。
+`runScan` 的双层隔离（无 evaluator 规则 `warn + continue`、每规则独立 `try/catch`）保证**规则可先于 evaluator 落库**。
+```
+
+- [ ] **Step 3: 提交**
+
+```bash
+git add docs/architecture.md
+git commit -m "docs(architecture): 注册表通用事实视图（scope_key_expr）+ 数据到达守护
+
+- §4.3 登记「新增数据集=插一行」原先只覆盖维表/pg_table，事实表是硬编码
+- §8.1 登记 data_freshness/data_integrity 兩个已声明未实现的 CheckType 落地"
+```
+
+---
+
+### Task 2: 通用事实视图纯函数（TDD）
+
+**Files:**
+- Create: `functions/_shared/fact-view.ts`
+- Test: `web/lib/agent-query/__tests__/fact-view.test.ts`
+
+**Interfaces:**
+- Consumes: 无（零依赖纯函数）
+- Produces:
+  - `export interface FactColumn { name: string; sensitive: boolean }`
+  - `export interface FactViewSpec { name: string; glob: string; scopeKeyExpr: string; columns: FactColumn[]; authKeys: string[]; allBranches: boolean; canSeeCost: boolean }`
+  - `export function validateScopeKeyExpr(expr: string, columnNames: string[]): void`（非法时 throw，`e.message` 为错误码）
+  - `export function buildFactViewSql(spec: FactViewSpec): string`
+
+- [ ] **Step 1: Write the failing test**
+
+创建 `web/lib/agent-query/__tests__/fact-view.test.ts`：
+
+```ts
+// 通用事实视图纯函数单测（functions/_shared/fact-view.ts 的镜像契约）
+// 背景：spec 2026-09-11-replenishment-detail-query-onboarding-design
+// 关键不变量：① 列投影只含注册列（未注册列如单头金额天然消失）
+//            ② 行过滤 fail-close（授权空集 → WHERE 1=0，非「不过滤」）
+//            ③ 表达式校验挡住常量/多语句（防行过滤失效 → 越权）
+import { describe, it, expect } from "vitest";
+import { validateScopeKeyExpr, buildFactViewSql } from "../../../../functions/_shared/fact-view";
+
+const COLS = ["system_book_code", "branch_num", "branch_name", "subtotal", "total_money"];
+
+describe("validateScopeKeyExpr", () => {
+  it("合法表达式通过", () => {
+    expect(() =>
+      validateScopeKeyExpr(
+        "regexp_replace(system_book_code || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2')",
+        COLS
+      )
+    ).not.toThrow();
+  });
+
+  it("空表达式拒绝 empty_scope_expr", () => {
+    expect(() => validateScopeKeyExpr("   ", COLS)).toThrowError(/empty_scope_expr/);
+  });
+
+  it("多语句拒绝 scope_expr_semicolon", () => {
+    expect(() => validateScopeKeyExpr("system_book_code; DROP TABLE x", COLS)).toThrowError(
+      /scope_expr_semicolon/
+    );
+  });
+
+  it("子查询拒绝 scope_expr_forbidden_keyword", () => {
+    expect(() =>
+      validateScopeKeyExpr("(SELECT 'x' FROM t) || branch_num", COLS)
+    ).toThrowError(/scope_expr_forbidden_keyword/);
+  });
+
+  it("不引用本数据集任何列 → scope_expr_no_column（挡纯常量）", () => {
+    expect(() => validateScopeKeyExpr("'3120-7'", COLS)).toThrowError(/scope_expr_no_column/);
+  });
+
+  it("引用列名但大小写不同视为合法（SQL 标识符不区分大小写）", () => {
+    expect(() => validateScopeKeyExpr("SYSTEM_BOOK_CODE || '-' || branch_num", COLS)).not.toThrow();
+  });
+});
+
+describe("buildFactViewSql：列投影 = 注册列", () => {
+  const base = {
+    name: "replenishment_detail",
+    glob: "s3://lemeng-datasource/duckle/lemeng/replenishment_detail/*/*/all.parquet",
+    scopeKeyExpr: "system_book_code || '-' || branch_num",
+    canSeeCost: false,
+  };
+
+  it("未注册的列不出现在视图里（total_money 消失）", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [
+        { name: "system_book_code", sensitive: false },
+        { name: "branch_num", sensitive: false },
+        { name: "subtotal", sensitive: false },
+      ],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    expect(sql).toContain('"subtotal"');
+    expect(sql).not.toContain("total_money");
+  });
+
+  it("敏感列套 CASE WHEN 脱敏", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "profit", sensitive: true }],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    expect(sql).toContain('CASE WHEN FALSE THEN "profit" ELSE NULL END AS "profit"');
+  });
+
+  it("canSeeCost=true 时脱敏开关放开", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      canSeeCost: true,
+      columns: [{ name: "profit", sensitive: true }],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    expect(sql).toContain('CASE WHEN TRUE THEN "profit" ELSE NULL END AS "profit"');
+  });
+
+  it("授权空集 → WHERE 1=0（fail-close，不是不过滤）", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "branch_num", sensitive: false }],
+      authKeys: [],
+      allBranches: false,
+    });
+    expect(sql).toContain("WHERE 1=0");
+    expect(sql).not.toContain("IN (");
+  });
+
+  it("全量授权 → 不加行过滤", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "branch_num", sensitive: false }],
+      authKeys: [],
+      allBranches: true,
+    });
+    expect(sql).not.toContain("WHERE");
+  });
+
+  it("窄授权 → IN 列表 + 单引号转义", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "branch_num", sensitive: false }],
+      authKeys: ["3120-7", "3120-8"],
+      allBranches: false,
+    });
+    expect(sql).toContain(`IN ('3120-7', '3120-8')`);
+  });
+
+  it("始终读 parquet 全列（union_by_name）并按名字取注册列", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "branch_num", sensitive: false }],
+      authKeys: [],
+      allBranches: true,
+    });
+    expect(sql).toContain(`read_parquet('${base.glob}', union_by_name=true)`);
+    expect(sql).toMatch(/CREATE OR REPLACE TEMP VIEW replenishment_detail AS/);
+  });
+
+  it("注册列名为空 → 拒绝 empty_columns", () => {
+    expect(() =>
+      buildFactViewSql({ ...base, columns: [], authKeys: ["3120-7"], allBranches: false })
+    ).toThrowError(/empty_columns/);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd web && npx vitest run lib/agent-query/__tests__/fact-view.test.ts`
+Expected: FAIL —— `Failed to resolve import "../../../../functions/_shared/fact-view"`
+
+- [ ] **Step 3: Write minimal implementation**
+
+创建 `functions/_shared/fact-view.ts`：
+
+```ts
+// functions/_shared/fact-view.ts
+// 通用事实视图的纯逻辑（spec 2026-09-11-replenishment-detail-query-onboarding-design §方案1）
+// 零依赖，供 functions/agent-query/index.js require，并在 web/lib/agent-query/__tests__/fact-view.test.ts 锁定契约。
+//
+// 职责边界：只做「表达式合法性」与「视图 SQL 拼接」两件事，不碰网络/权限数据获取。
+// 三条不变量（改动前先读单测）：
+//   ① 列投影 = dataset_columns 注册列（显式投影，不用 SELECT *）→ 未注册列天然不可见
+//   ② 行过滤 fail-close：授权空集 → WHERE 1=0
+//   ③ 表达式必须引用本数据集至少一列 → 挡住纯常量（行过滤失效即越权）
+
+export interface FactColumn {
+  name: string;
+  sensitive: boolean;
+}
+
+export interface FactViewSpec {
+  name: string;
+  glob: string;
+  scopeKeyExpr: string;
+  columns: FactColumn[];
+  authKeys: string[];
+  allBranches: boolean;
+  canSeeCost: boolean;
+}
+
+// SQL 字符串字面量转义（与 agent-query/index.js 的 sqlLit 同语义）
+function sqlLit(s: string): string {
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+
+function sqlIdent(s: string): string {
+  return '"' + String(s).replace(/"/g, '""') + '"';
+}
+
+// 表达式里出现即视为危险的关键字（子查询/写操作）；只做词边界匹配，不解析 SQL
+const EXPR_FORBIDDEN_KEYWORDS = [
+  "SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
+  "ATTACH", "DETACH", "COPY", "PRAGMA", "GRANT", "REVOKE", "TRUNCATE", "CALL",
+];
+
+// 门店复合键表达式校验。非法抛错（message = 错误码），调用方据此 fail-close（不建视图 + 不进白名单）。
+export function validateScopeKeyExpr(expr: string, columnNames: string[]): void {
+  const t = String(expr ?? "").trim();
+  if (!t) throw new Error("empty_scope_expr");
+  if (t.includes(";")) throw new Error("scope_expr_semicolon");
+  const u = t.toUpperCase();
+  for (const kw of EXPR_FORBIDDEN_KEYWORDS) {
+    if (new RegExp("\\b" + kw + "\\b").test(u)) throw new Error("scope_expr_forbidden_keyword");
+  }
+  // 必须引用本数据集至少一列（挡纯常量，如 '3120-7'）
+  const hit = columnNames.some((c) =>
+    new RegExp("\\b" + String(c).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(t)
+  );
+  if (!hit) throw new Error("scope_expr_no_column");
+}
+
+// 生成权限视图 SQL。caller 负责先跑 validateScopeKeyExpr 与「注册列非空」校验。
+export function buildFactViewSql(spec: FactViewSpec): string {
+  const cols = spec.columns || [];
+  if (cols.length === 0) throw new Error("empty_columns");
+  const canSee = spec.canSeeCost ? "TRUE" : "FALSE";
+  // ① 列投影：敏感列整组按 can_see_cost 脱敏
+  const projection = cols
+    .map((c) =>
+      c.sensitive
+        ? `CASE WHEN ${canSee} THEN ${sqlIdent(c.name)} ELSE NULL END AS ${sqlIdent(c.name)}`
+        : sqlIdent(c.name)
+    )
+    .join(", ");
+  // ② 行过滤：全量授权不加过滤；否则 IN 授权复合键；空集 → 1=0（fail-close）
+  const where = spec.allBranches
+    ? ""
+    : spec.authKeys.length === 0
+      ? " WHERE 1=0"
+      : " WHERE " + spec.scopeKeyExpr + " IN (" + spec.authKeys.map(sqlLit).join(", ") + ")";
+  return (
+    "\nCREATE OR REPLACE TEMP VIEW " + spec.name + " AS SELECT * FROM (" +
+    "SELECT " + projection + " FROM read_parquet(" + sqlLit(spec.glob) + ", union_by_name=true)" +
+    ") t" + where + ";"
+  );
+}
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `cd web && npx vitest run lib/agent-query/__tests__/fact-view.test.ts`
+Expected: PASS（13 个用例全绿）
+
+- [ ] **Step 5: 确认没有破坏既有守卫单测**
+
+Run: `cd web && npx vitest run lib/agent-query`
+Expected: PASS（新增 `fact-view.test.ts` + 既有 `sql-guards.test.ts` 全绿）
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add functions/_shared/fact-view.ts web/lib/agent-query/__tests__/fact-view.test.ts
+git commit -m "feat(agent-query): 通用事实视图纯函数——表达式校验 + 列投影 + fail-close 行过滤"
+```
+
+---
+
+### Task 3: 网关接线（注册表隔离读取 + 通用视图 + 白名单派生）
+
+**Files:**
+- Modify: `functions/agent-query/index.js`（`loadRegistry`、`runDuckdb`、入口的 `allowedTables` 组装）
+
+**Interfaces:**
+- Consumes: Task 2 的 `validateScopeKeyExpr` / `buildFactViewSql` / `FactColumn`
+- Produces: `REG_CACHE` 新增 `factViews: Array<{ name: string; glob: string; scopeKeyExpr: string; columns: FactColumn[] }>`
+
+> **为什么本任务没有单测**：改动全是 I/O 编排（PostgREST 取数、拼视图串、路由）。可测的纯逻辑已全部落在 Task 2。
+> 本任务的验证是「语法 + 全量既有单测不回归 + Task 11 的生产冒烟」。不要为了凑测试把 I/O 拆出来。
+>
+> spec 权限表里那条「注册表主查询故障（模拟 400）→ 走 fallback 且 `pgTables` 仍为报表表全集」，
+> 在本设计下是**结构性保证而非可运行时注入的场景**：`loadFactScopes` 是独立请求，它无论怎么失败都改不到
+> `pgTables` 的赋值路径。**审查方式是读代码确认这一点**；运行时侧由 Task 11 Step 3 断言 `engine === 'pg'` 兜底。
+
+- [ ] **Step 1: 在 import 区加纯函数引用**
+
+`functions/agent-query/index.js` 顶部现有三行 `require`：
+
+```js
+const { signJwt } = require("../_shared/jwt");
+const { json: sharedJson } = require("../_shared/cors");
+const { assertCompositeKeyJoins } = require("../_shared/sql-guards");
+```
+
+在其后追加一行：
+
+```js
+const { validateScopeKeyExpr, buildFactViewSql } = require("../_shared/fact-view");
+```
+
+- [ ] **Step 2: 新增「硬编码视图名」常量**
+
+在 `const MAX_ROWS = 1000;` 上方（配置区）加：
+
+```js
+// 通用事实视图必须跳过的名字：这两个视图有 union / 内联 dim join 的定制逻辑，
+// 由 runDuckdb 硬编码构建，注册表不得介入（spec 全局约束「不做存量重构」）。
+const HARDCODED_VIEW_NAMES = new Set(["retail_detail", "outbound_detail"]);
+```
+
+- [ ] **Step 3: 新增 `loadFactScopes()`（独立请求，绝不并入主查询）**
+
+在 `loadRegistry` 函数定义之前插入：
+
+```js
+// 通用事实视图数据集读取（spec §方案1）。
+// ★ 必须独立请求 + 独立 try/catch：PostgREST 对 select= 里的未知列返 400，
+//   若并入 loadRegistry 的主 datasets 查询，一次 400 会让整个注册表走 fallback
+//   → pgTables 退回硬编码 3 张报表表 → 现有 report_*_gen 查询误路由到 DuckDB 而失败。
+//   独立后：列缺失/请求失败只让「新数据集不可用」（fail-close），不碰存量。
+async function loadFactScopes() {
+  const out = [];
+  let rows = [];
+  try {
+    const headers = { Authorization: "Bearer " + (await serviceJwt()), "Content-Type": "application/json" };
+    const r = await fetch(
+      POSTGREST_URL +
+        "/datasets?select=name,source,scope_key_expr&engine=eq.duckdb_view&kind=eq.fact&exposed=is.true&scope_key_expr=not.is.null",
+      { headers },
+    );
+    if (!r.ok) {
+      console.error("[agent-query] loadFactScopes datasets http " + r.status);
+      return out;
+    }
+    rows = await r.json();
+  } catch (e) {
+    console.error("[agent-query] loadFactScopes datasets failed:", String(e));
+    return out;
+  }
+  const headers = { Authorization: "Bearer " + (await serviceJwt()), "Content-Type": "application/json" };
+  for (const d of rows || []) {
+    if (!d.name || !d.source || HARDCODED_VIEW_NAMES.has(d.name)) continue;
+    // 列清单（含敏感标记）逐数据集读；读失败 → 该数据集 fail-close（不构建）
+    let columns = [];
+    try {
+      const cr = await fetch(
+        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive&dataset_name=eq." +
+          encodeURIComponent(d.name) + "&order=ordinal.asc",
+        { headers },
+      );
+      if (cr.ok) columns = (await cr.json()).map((c) => ({ name: c.name, sensitive: !!c.is_sensitive }));
+    } catch (e) {
+      console.error("[agent-query] loadFactScopes columns failed " + d.name + ":", String(e));
+    }
+    if (columns.length === 0) {
+      console.error("[agent-query] fact dataset " + d.name + " 无注册列，跳过（fail-close）");
+      continue;
+    }
+    try {
+      validateScopeKeyExpr(d.scope_key_expr, columns.map((c) => c.name));
+    } catch (e) {
+      console.error("[agent-query] fact dataset " + d.name + " scope_key_expr 非法（" + e.message + "），跳过");
+      continue;
+    }
+    out.push({ name: d.name, glob: d.source, scopeKeyExpr: d.scope_key_expr, columns });
+  }
+  return out;
+}
+```
+
+- [ ] **Step 4: 把 `factViews` 挂进 `loadRegistry`**
+
+在 `loadRegistry` 中，`let dimCarry = [];` 下面加一行：
+
+```js
+  let dimCarry = [];
+  let factViews = [];
+```
+
+在函数体末尾（`REG_CACHE = { retailGlob, costColumns, pgTables, dimCarry };` 处）改为：
+
+```js
+  // 通用事实视图：独立 try/catch，失败只影响新数据集（见 loadFactScopes 注释）
+  try {
+    factViews = await loadFactScopes();
+  } catch (e) {
+    console.error("[agent-query] loadFactScopes 未捕获异常:", String(e));
+    factViews = [];
+  }
+  REG_CACHE = { retailGlob, costColumns, pgTables, dimCarry, factViews };
+```
+
+> 注意：`factViews` 的读取要放在 `try { ... } catch (e) { ... }` 的**外面**（即 `loadRegistry` 现有那个大 `try` 块之后），
+> 否则它抛错会被外层 catch 吞掉并让整个注册表走 fallback —— 正是我们要避免的。
+
+- [ ] **Step 5: `runDuckdb` 里构建通用事实视图**
+
+在 `runDuckdb` 中，`viewSql` 拼完 `retail_detail` 与 `outbound_detail` 之后、`const combined = viewSql + "\n" + userSelect;` 之前，插入：
+
+```js
+  // 通用事实视图（注册表声明，spec §方案1）：列投影 + 行级权限裁剪
+  // authKeys/allBranches 复用上面的门店授权解析结果（与 retail_detail 同一套归一）
+  for (const f of (reg.factViews || [])) {
+    try {
+      viewSql += buildFactViewSql({
+        name: f.name,
+        glob: f.glob,
+        scopeKeyExpr: f.scopeKeyExpr,
+        columns: f.columns,
+        authKeys,
+        allBranches,
+        canSeeCost: !!perms.fields?.cost,
+      });
+    } catch (e) {
+      console.error("[agent-query] 构建 fact 视图失败 " + f.name + ":", String(e));
+    }
+  }
+```
+
+- [ ] **Step 6: 白名单派生**
+
+在入口处，把现有这一行：
+
+```js
+  const allowedTables = ["retail_detail", "outbound_detail", ...regPre.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
+```
+
+替换为：
+
+```js
+  const allowedTables = [
+    "retail_detail",
+    "outbound_detail",
+    ...regPre.pgTables,
+    ...(regPre.dimCarry || []).map((d) => d.name),
+    ...(regPre.factViews || []).map((d) => d.name),
+  ];
+```
+
+- [ ] **Step 7: 语法检查**
+
+Run: `node --check functions/agent-query/index.js`
+Expected: 无输出（语法通过）
+
+- [ ] **Step 8: 全量既有单测不回归**
+
+Run: `cd web && npm test`
+Expected: PASS（与改动前同样全绿；本任务不新增 web 测试）
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add functions/agent-query/index.js
+git commit -m "feat(agent-query): 通用事实视图接线——注册表隔离读取 + 白名单派生
+
+- loadFactScopes 独立请求 + 独立 try/catch：未知列 400 不得拖垮主查询
+  （否则 pgTables 回退 → report_*_gen 误路由 DuckDB）
+- HARDCODED_VIEW_NAMES 跳过 retail_detail/outbound_detail，存量不重构"
+```
+
+---
+
+### Task 4: 迁移 212 —— `datasets.scope_key_expr` 列
+
+**Files:**
+- Create: `database/migrations/212_registry_fact_scope.sql`
+
+**Interfaces:**
+- Consumes: 无
+- Produces: `datasets.scope_key_expr TEXT`（供 Task 3 读取、Task 5 写入）
+
+- [ ] **Step 1: 写迁移**
+
+创建 `database/migrations/212_registry_fact_scope.sql`：
+
+```sql
+-- 212_registry_fact_scope.sql
+-- spec: docs/superpowers/specs/2026-09-11-replenishment-detail-query-onboarding-design.md
+-- 数据注册中心：事实数据集的「门店复合键表达式」声明列。
+-- 用途：agent-query 网关据此对 kind=fact 的数据集通用构建权限视图（行级裁剪）。
+-- 为空 = 不可通用构建 → 网关不建视图且不进 SQL 白名单（fail-close）。
+-- 幂等：ADD COLUMN IF NOT EXISTS。
+BEGIN;
+
+ALTER TABLE datasets ADD COLUMN IF NOT EXISTS scope_key_expr TEXT;
+
+COMMENT ON COLUMN datasets.scope_key_expr IS
+  '事实数据集的门店复合键 SQL 表达式（对本数据集注册列求值，产出归一形态 sbc-branch_num，用于行级权限裁剪）；为空=不可通用构建→ deny';
+
+COMMIT;
+```
+
+- [ ] **Step 2: 本地起栈并跑迁移（验证幂等）**
+
+按 `docs/testing-handbook.md` §3.1 起本地栈后：
+
+```bash
+cd /opt/data-analytics-platform/deploy 2>/dev/null || cd deploy
+bash ../scripts/migrate.sh
+bash ../scripts/migrate.sh   # 第二次：幂等重跑必须同样成功
+```
+
+Expected: 两次都成功结束；第二次无 `ERROR`。若本地栈不可用，改用生产前的 staging 或直接跳到 Step 3 并在生产部署时（Task 10）观察 GHA 迁移步骤。
+
+- [ ] **Step 3: 确认列已存在**
+
+```bash
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c "\d datasets" | grep scope_key_expr
+```
+
+Expected: 输出 `scope_key_expr | text |` 一行
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add database/migrations/212_registry_fact_scope.sql
+git commit -m "feat(migration): 212 数据注册中心加 scope_key_expr——事实数据集门店复合键声明"
+```
+
+---
+
+### Task 5: 迁移 213 —— 补货数据集注册 + 守护规则
+
+**Files:**
+- Create: `database/migrations/213_replenishment_detail_registry.sql`
+
+**Interfaces:**
+- Consumes: `datasets.scope_key_expr`（Task 4）
+- Produces: `replenishment_detail` 数据集行 + 20 条列注册 + 4 条 `monitor_rules`（供 Task 7/8 的 evaluator 消费）
+
+- [ ] **Step 1: 写迁移**
+
+创建 `database/migrations/213_replenishment_detail_registry.sql`：
+
+```sql
+-- 213_replenishment_detail_registry.sql
+-- spec: docs/superpowers/specs/2026-09-11-replenishment-detail-query-onboarding-design.md
+-- 补货（要货单）明细接入问数：数据集注册 + 到达/完整性守护规则。
+-- 数据来源：其他系统的 duckle 管线写入
+--   s3://lemeng-datasource/duckle/lemeng/replenishment_detail/<账套>/<YYYY-MM-DD>/all.parquet
+-- ★ total_money 有意不注册：它是单头金额、逐行重复（实测恒等于该单 sum(subtotal)），
+--   行级 SUM 会整单翻倍。视图按注册列投影 → 不注册即不可见。单头金额请按 order_no 分组 SUM(subtotal)。
+-- 行级权限：scope_key_expr = 账套||'-'||门店号 归一（门店号跨账套重复，必须复合）。
+-- 幂等：ON CONFLICT DO NOTHING / WHERE NOT EXISTS。
+BEGIN;
+
+-- ===== 1. 数据集行 =====
+INSERT INTO datasets (name, display_name, engine, source, kind, is_realtime, columns_typed,
+                      date_column, date_format, carry_enabled, exposed, scope_key_expr, description)
+VALUES (
+  'replenishment_detail',
+  '补货明细(要货单)',
+  'duckdb_view',
+  's3://lemeng-datasource/duckle/lemeng/replenishment_detail/*/*/all.parquet',
+  'fact',
+  TRUE, TRUE,
+  'business_date', 'YYYY-MM-DD HH:MM:SS', FALSE, TRUE,
+  'regexp_replace(system_book_code || ''-'' || branch_num, ''^([0-9]+)-0+([0-9]+)$'', ''\1-\2'')',
+  '补货单(要货单)商品行；一行=一单一商品。口径：默认只算已审核生效单(state_name=''制单|审核'')，作废/未审核默认排除。金额用 SUM(subtotal)，单头金额按 order_no 分组 SUM(subtotal)。门店键必须 system_book_code+branch_num 复合（跨账套重号）'
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- ===== 2. 列注册（视图暴露列 = 本清单；total_money intentionally absent）=====
+INSERT INTO dataset_columns (dataset_name, name, data_type, semantic_group, is_sensitive, join_to, description, ordinal)
+SELECT v.dataset_name, v.name, v.data_type, v.semantic_group, v.is_sensitive, v.join_to, v.description, v.ordinal
+FROM (VALUES
+  ('replenishment_detail','system_book_code','TEXT','维度',FALSE,'dim_branch(system_book_code,branch_num)','品牌账套：3120=熊喵鲜生 / 64188=品品甜。门店键必须与 branch_num 复合使用',1),
+  ('replenishment_detail','branch_num','TEXT','门店',FALSE,'dim_branch(system_book_code,branch_num)','要货门店号（跨账套重号，禁止单独作 join 键）',2),
+  ('replenishment_detail','branch_name','TEXT','门店',FALSE,NULL,'要货门店名',3),
+  ('replenishment_detail','out_branch_num','TEXT','门店',FALSE,NULL,'出货方号（=99 管理中心/配送中心）',4),
+  ('replenishment_detail','out_branch_name','TEXT','门店',FALSE,NULL,'出货方名',5),
+  ('replenishment_detail','order_no','TEXT','单据',FALSE,NULL,'要货单号（带账套前缀 YH3120…/YH64188…，两账套不撞）',6),
+  ('replenishment_detail','order_type','TEXT','单据',FALSE,NULL,'单据类型（要货单）',7),
+  ('replenishment_detail','state_name','TEXT','单据',FALSE,NULL,'单据状态：制单 / 制单|审核 / 制单|作废 / 制单|审核|作废。默认口径只看 ''制单|审核''',8),
+  ('replenishment_detail','business_date','TEXT','日期',FALSE,NULL,'业务日（全时间戳）。按日过滤用 substr(business_date,1,10)；与分区目录名恒等（实测 0 例外）',9),
+  ('replenishment_detail','create_time','TEXT','日期',FALSE,NULL,'制单时间',10),
+  ('replenishment_detail','audit_time','TEXT','日期',FALSE,NULL,'审核时间（未审核单为空）',11),
+  ('replenishment_detail','item_num','TEXT','商品',FALSE,'dim_item(system_book_code,item_num)','账套内商品编号（跨账套重号）。与 dim_item 关联必须配 system_book_code 复合成键',12),
+  ('replenishment_detail','item_code','TEXT','商品',FALSE,'dim_item.item_code','货来源编码（跨账套全局唯一），可单独作键',13),
+  ('replenishment_detail','item_name','TEXT','商品',FALSE,NULL,'商品展示名。⚠禁止用 item_name 做 join 键（双账套同名不同货）',14),
+  ('replenishment_detail','item_spec','TEXT','商品',FALSE,NULL,'规格',15),
+  ('replenishment_detail','item_unit','TEXT','商品',FALSE,NULL,'基本单位',16),
+  ('replenishment_detail','quantity','DOUBLE','数量',FALSE,NULL,'要货数量（基本单位口径）',17),
+  ('replenishment_detail','use_quantity','DOUBLE','数量',FALSE,NULL,'要货数量（件数口径，配 use_unit）',18),
+  ('replenishment_detail','use_unit','TEXT','数量',FALSE,NULL,'件单位',19),
+  ('replenishment_detail','subtotal','DOUBLE','金额',FALSE,NULL,'行金额（行级求和的唯一正确列）。单头金额 = 按 order_no 分组 SUM(subtotal)',20)
+) AS v(dataset_name, name, data_type, semantic_group, is_sensitive, join_to, description, ordinal)
+WHERE NOT EXISTS (
+  SELECT 1 FROM dataset_columns WHERE dataset_name='replenishment_detail' AND name=v.name
+);
+
+-- ===== 3. 到达守护（data_freshness，runHourlyBucket 每小时）=====
+-- 按账套各配一行：合计会被另一账套掩盖，必须分开看（spec §方案3）。
+INSERT INTO monitor_rules (name, check_type, target, threshold, severity, template, suppress_window_seconds, enabled)
+VALUES
+ ('补货到达·3120','data_freshness','replenishment_detail:3120',
+  '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1}'::jsonb,
+  'high','补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE),
+ ('补货到达·64188','data_freshness','replenishment_detail:64188',
+  '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1}'::jsonb,
+  'high','补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE)
+ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
+  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template, enabled=TRUE;
+
+-- ===== 4. 行数异常守护（data_integrity，runDailyBucket 每日 03:00）=====
+INSERT INTO monitor_rules (name, check_type, target, threshold, severity, template, suppress_window_seconds, enabled)
+VALUES
+ ('补货行数异常·3120','data_integrity','replenishment_detail:3120',
+  '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
+  'high','补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE),
+ ('补货行数异常·64188','data_integrity','replenishment_detail:64188',
+  '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
+  'high','补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE)
+ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
+  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template, enabled=TRUE;
+
+COMMIT;
+```
+
+- [ ] **Step 2: 跑迁移（幂等验证）**
+
+```bash
+bash scripts/migrate.sh
+bash scripts/migrate.sh   # 第二次必须同样成功
+```
+
+Expected: 两次成功，无 `ERROR`
+
+- [ ] **Step 3: 确认数据集与规则落库**
+
+```bash
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
+  "SELECT name, kind, engine, scope_key_expr FROM datasets WHERE name='replenishment_detail';"
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
+  "SELECT count(*) FROM dataset_columns WHERE dataset_name='replenishment_detail';"
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
+  "SELECT check_type, target, enabled FROM monitor_rules WHERE target LIKE 'replenishment_detail:%' ORDER BY 1,2;"
+```
+
+Expected: 1 行数据集（`scope_key_expr` 非空）；列数 `20`；规则 4 行（2×data_freshness + 2×data_integrity，全 `t`）
+
+- [ ] **Step 4: 确认字典能看见（且 total_money 不在）**
+
+```bash
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
+  "SELECT jsonb_path_exists(get_data_dictionary(), '\$.**.name ? (@ == \"replenishment_detail\")');"
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
+  "SELECT count(*) FROM get_data_dictionary() AS d, jsonb_array_elements(d->'columns') c WHERE c->>'dataset_name'='replenishment_detail' AND c->>'name'='total_money';"
+```
+
+Expected: 第一条 `t`；第二条 `0`（`total_money` 未注册）
+
+- [ ] **Step 5: 刷 PostgREST schema 缓存**
+
+```bash
+docker compose restart postgrest
+```
+
+Expected: 重启成功（否则新列经 PostgREST 不可见 → 通用路径静默降级）
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add database/migrations/213_replenishment_detail_registry.sql
+git commit -m "feat(migration): 213 补货明细数据集注册 + 到达/完整性守护规则
+
+- datasets 行含 scope_key_expr（账套||'-'||门店号 归一）
+- 20 列注册；total_money 有意不注册（行级 SUM 会整单翻倍）
+- 4 条 monitor_rules：data_freshness×2 + data_integrity×2（按账套各配）"
+```
+
+---
+
+### Task 6: `EvalDeps` 加 `duckdbQuery` + 修补存量 deps fake
+
+**Files:**
+- Modify: `web/lib/monitor/types.ts`（`EvalDeps` 接口）
+- Modify: `web/lib/monitor/runtime.ts`（`buildDeps`）
+- Modify: `web/lib/monitor/evaluators/__tests__/service-down.test.ts`
+- Modify: `web/lib/monitor/evaluators/__tests__/collect-fail.test.ts`
+- Modify: `web/lib/monitor/evaluators/__tests__/token-expire.test.ts`
+- Modify: `web/lib/monitor/__tests__/engine.test.ts`
+- Modify: `web/lib/monitor/__tests__/novu-probe.test.ts`
+
+**Interfaces:**
+- Consumes: 无
+- Produces: `EvalDeps.duckdbQuery: (sql: string) => Promise<Array<Record<string, any>>>`（Task 7/8 消费）
+
+> ⚠️ `vitest run` 用 esbuild 转译，**不做类型检查**——缺字段的 fake 在 `npm test` 里不会报错，只有 `npm run build`（tsc）才会。
+> 所以本任务的验证必须是 `npm run build`。
+
+- [ ] **Step 1: 在 `types.ts` 的 `EvalDeps` 加字段**
+
+`web/lib/monitor/types.ts`，在 `EvalDeps` 的 `getCollectTasks` 之后追加：
+
+```ts
+  // data_freshness / data_integrity 用：直接跑 DuckDB 查询（web 容器无 boto3，DuckDB 服务即现成的 OSS 出口）。
+  // 返回 data 数组；非 2xx 或 success=false 时抛错（由 evaluator 决定「探测异常不报警」）。
+  duckdbQuery: (sql: string) => Promise<Array<Record<string, any>>>;
+```
+
+- [ ] **Step 2: 跑 `npm run build` 确认它现在编译失败**
+
+Run: `cd web && npm run build`
+Expected: FAIL —— `Type ... is missing the following properties ...: duckdbQuery`（5 个测试文件处）
+
+- [ ] **Step 3: 在 `runtime.ts` 顶部加 env 常量**
+
+`web/lib/monitor/runtime.ts` 顶部现有：
+
+```ts
+const INSFORGE_API_BASE = process.env.INSFORGE_API_BASE!;
+const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
+```
+
+在其后追加：
+
+```ts
+// 通用事实视图守护探测用（不经 jobs/env，避免 monitor → jobs 反向依赖）
+const DUCKDB_URL = process.env.DUCKDB_URL || "http://duckdb:9000";
+const AGENT_API_KEY = process.env.AGENT_API_KEY!;
+```
+
+- [ ] **Step 4: 在 `buildDeps()` 实现 `duckdbQuery`**
+
+在 `buildDeps()` 返回对象的 `getCollectTasks` 之后追加：
+
+```ts
+    duckdbQuery: async (sql: string) => {
+      const r = await fetch(`${DUCKDB_URL}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY },
+        body: JSON.stringify({ sql }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.success) throw new Error(`duckdb: ${d?.error || r.status}`);
+      return (d.data ?? []) as Array<Record<string, any>>;
+    },
+```
+
+- [ ] **Step 5: 给 5 个存量测试的 deps fake 补字段**
+
+在每个文件的 deps 工厂对象里，`getCollectTasks: async () => [],` 之后加一行：
+
+```ts
+  duckdbQuery: async () => [],
+```
+
+涉及的 5 个文件（用 grep 定位每个文件里 deps 对象的位置）：
+- `web/lib/monitor/evaluators/__tests__/service-down.test.ts`
+- `web/lib/monitor/evaluators/__tests__/collect-fail.test.ts`
+- `web/lib/monitor/evaluators/__tests__/token-expire.test.ts`
+- `web/lib/monitor/__tests__/engine.test.ts`
+- `web/lib/monitor/__tests__/novu-probe.test.ts`
+
+定位命令：
+
+```bash
+grep -n "getCollectTasks" web/lib/monitor/evaluators/__tests__/*.test.ts web/lib/monitor/__tests__/*.test.ts
+```
+
+- [ ] **Step 6: 跑 build 确认类型通过**
+
+Run: `cd web && npm run build`
+Expected: PASS（构建成功，无 TS 报错）
+
+- [ ] **Step 7: 跑单测确认无行为回归**
+
+Run: `cd web && npm test`
+Expected: PASS（全绿）
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add web/lib/monitor/types.ts web/lib/monitor/runtime.ts web/lib/monitor/evaluators/__tests__ web/lib/monitor/__tests__
+git commit -m "feat(monitor): EvalDeps 加 duckdbQuery 依赖并注入 runtime，补齐存量 deps fake"
+```
+
+---
+
+### Task 7: `data_freshness` evaluator —— 分区到达守护
+
+**Files:**
+- Modify: `web/lib/collect.ts`（抽出可注入 `now` 的纯日期助手）
+- Create: `web/lib/monitor/evaluators/data-freshness.ts`
+- Test: `web/lib/monitor/evaluators/__tests__/data-freshness.test.ts`
+- Modify: `web/lib/monitor/evaluators/index.ts`
+
+**Interfaces:**
+- Consumes: `EvalDeps.duckdbQuery`（Task 6）
+- Produces:
+  - `export function chinaDateAt(base: Date, offsetDays: number): string`（新增于 `web/lib/collect.ts`，Task 8 也消费）
+  - `export const evalDataFreshness: Evaluator`
+
+- [ ] **Step 1: Write the failing test**
+
+创建 `web/lib/monitor/evaluators/__tests__/data-freshness.test.ts`：
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { evalDataFreshness } from '../data-freshness';
+import type { MonitorRule, EvalDeps } from '../../types';
+
+const GLOB = 's3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet';
+
+const rule = (target: string, lookback = 1): MonitorRule => ({
+  id: 1,
+  name: `补货到达·${target}`,
+  check_type: 'data_freshness',
+  target,
+  threshold: { dataset: 'replenishment_detail', glob_template: GLOB, lookback_days: lookback },
+  severity: 'high',
+  touser: null,
+  template: '缺 {expect_date}',
+  suppress_window_seconds: 1800,
+  enabled: true,
+});
+
+// now = 2026-09-11 10:00 UTC → 中国时间 2026-09-11 18:00 → 昨日(中国) = 2026-09-10
+const deps = (rows: Array<{ d: string }>, throwErr?: string): EvalDeps => ({
+  now: new Date('2026-09-11T10:00:00Z'),
+  probe: async () => ({ ok: true, latencyMs: 1 }),
+  getCredentialToken: async () => null,
+  getCollectLogs: async () => [],
+  getCollectTasks: async () => [],
+  duckdbQuery: async () => {
+    if (throwErr) throw new Error(throwErr);
+    return rows;
+  },
+});
+
+describe('evalDataFreshness', () => {
+  it('昨日分区存在 → 不 firing', async () => {
+    const r = await evalDataFreshness(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10' }, { d: '2026-09-09' }]));
+    expect(r.firing).toBe(false);
+    expect(r.alert_key).toBe('data_freshness:replenishment_detail:3120');
+  });
+
+  it('昨日分区缺失 → firing + context', async () => {
+    const r = await evalDataFreshness(rule('replenishment_detail:3120'), deps([{ d: '2026-09-05' }, { d: '2026-09-04' }]));
+    expect(r.firing).toBe(true);
+    expect(r.context).toMatchObject({
+      dataset: 'replenishment_detail',
+      account: '3120',
+      expect_date: '2026-09-10',
+      have_latest: '2026-09-05',
+    });
+  });
+
+  it('一个分区都没有 → firing，have_latest=none', async () => {
+    const r = await evalDataFreshness(rule('replenishment_detail:64188'), deps([]));
+    expect(r.firing).toBe(true);
+    expect(r.context.have_latest).toBe('none');
+  });
+
+  it('探测异常 → 不 firing（不误报；duckdb 本体故障由 service_down 桶负责）', async () => {
+    const r = await evalDataFreshness(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
+    expect(r.firing).toBe(false);
+  });
+
+  it('target 格式非法 → 不 firing（不瞎报）', async () => {
+    const r = await evalDataFreshness(rule('bogus'), deps([]));
+    expect(r.firing).toBe(false);
+  });
+
+  it('lookback_days=2 时看前天', async () => {
+    const r = await evalDataFreshness(rule('replenishment_detail:3120', 2), deps([{ d: '2026-09-10' }]));
+    expect(r.firing).toBe(true);
+    expect(r.context.expect_date).toBe('2026-09-09');
+  });
+
+  it('账套被代入 glob（不同账套各查各的）', async () => {
+    let seen = '';
+    const d = deps([]);
+    d.duckdbQuery = async (sql: string) => {
+      seen = sql;
+      return [];
+    };
+    await evalDataFreshness(rule('replenishment_detail:64188'), d);
+    expect(seen).toContain('replenishment_detail/64188/');
+    expect(seen).not.toContain('{account}');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-freshness.test.ts`
+Expected: FAIL —— `Failed to resolve import "../data-freshness"`
+
+- [ ] **Step 3: Write minimal implementation**
+
+**两步。先抽出可注入的纯日期助手**——`web/lib/collect.ts` 已有的 `getDateOffsetChina(offsetDays)` 内部调 `new Date()`，无法用 `deps.now` 注入，单测不可确定。把它重构成「纯函数 + 保持原函数行为不变的包装」：
+
+`web/lib/collect.ts` 中找到：
+
+```ts
+export function getDateOffsetChina(offsetDays: number): string {
+  const now = new Date();
+  const china = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  china.setDate(china.getDate() + offsetDays);
+  return china.toISOString().split('T')[0];
+}
+```
+
+替换为：
+
+```ts
+// 中国时区（UTC+8，无夏令时）下 base 偏移 offsetDays 天的日期，YYYY-MM-DD。
+// 抽成纯函数以便单测注入确定的时间基准（守护 evaluator 用 deps.now）。
+export function chinaDateAt(base: Date, offsetDays: number): string {
+  const china = new Date(base.getTime() + 8 * 60 * 60 * 1000);
+  china.setDate(china.getDate() + offsetDays);
+  return china.toISOString().split('T')[0];
+}
+
+export function getDateOffsetChina(offsetDays: number): string {
+  return chinaDateAt(new Date(), offsetDays);
+}
+```
+
+> 行为等价性：`new Date(now.getTime() + 8h)` 后再 `setDate(getDate() + offset)` 与原实现逐字相同，只是把 `now` 变成入参。
+
+**再创建** `web/lib/monitor/evaluators/data-freshness.ts`：
+
+```ts
+import type { EvalDeps, EvalResult, Evaluator } from '../types';
+import { chinaDateAt } from '../../collect';
+
+// 数据到达守护（spec 2026-09-11-replenishment-detail-query-onboarding-design §方案3）
+// 背景：外部 duckle 管线写入 OSS 的补货数据曾出现 10 天断档，且无人发现——消费侧必须自己发现。
+// rule.target = '<dataset>:<账套>'；threshold = {dataset, glob_template(含 {account}), lookback_days}
+// 判据：期望业务日（中国时区 now - lookback_days）的分区不存在 → firing。
+// 探测异常不报警：duckdb 本体故障由 service_down 桶负责，避免双报。
+// context = {dataset, account, expect_date, have_latest}
+
+function sqlLit(s: string): string {
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+
+export const evalDataFreshness: Evaluator = async (
+  rule,
+  deps: EvalDeps,
+): Promise<EvalResult> => {
+  const t = (rule.threshold ?? {}) as Record<string, any>;
+  const target = String(rule.target ?? '');
+  const alertKey = `data_freshness:${target}`;
+  const [dataset, account] = target.split(':');
+  if (!dataset || !account) {
+    return { firing: false, alert_key: alertKey, context: { reason: 'bad_target' } };
+  }
+  const lookback = Number(t.lookback_days ?? 1);
+  const glob = String(t.glob_template ?? '').replace('{account}', account);
+  const expectDate = chinaDateAt(deps.now, -lookback);
+
+  let rows: Array<{ d: string }>;
+  try {
+    rows = (await deps.duckdbQuery(
+      `SELECT DISTINCT regexp_extract(filename, '/([0-9-]{10})/', 1) AS d ` +
+        `FROM read_parquet(${sqlLit(glob)}, filename=true)`,
+    )) as Array<{ d: string }>;
+  } catch (e) {
+    console.error(`[monitor] data_freshness 探测异常 ${target}:`, (e as Error)?.message ?? e);
+    return { firing: false, alert_key: alertKey, context: { reason: 'probe_error' } };
+  }
+
+  const dates = (rows ?? []).map((r) => r.d).filter(Boolean).sort();
+  const firing = !dates.includes(expectDate);
+  return {
+    firing,
+    alert_key: alertKey,
+    context: {
+      dataset,
+      account,
+      expect_date: expectDate,
+      have_latest: dates.length ? dates[dates.length - 1] : 'none',
+    },
+  };
+};
+```
+
+- [ ] **Step 4: 注册进 `EVALUATORS`**
+
+`web/lib/monitor/evaluators/index.ts`，在 import 区加：
+
+```ts
+import { evalDataFreshness } from './data-freshness';
+```
+
+并在 `EVALUATORS` 对象里加一行：
+
+```ts
+  data_freshness: evalDataFreshness,
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-freshness.test.ts`
+Expected: PASS（8 个用例全绿）
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add web/lib/collect.ts web/lib/monitor/evaluators/data-freshness.ts web/lib/monitor/evaluators/__tests__/data-freshness.test.ts web/lib/monitor/evaluators/index.ts
+git commit -m "feat(monitor): data_freshness evaluator——外部管线数据到达守护（探测异常不误报）
+
+顺带把 collect.ts 的中国时区日期逻辑抽成可注入的纯函数 chinaDateAt（行为等价）"
+```
+
+---
+
+### Task 8: `data_integrity` evaluator —— 行数异常守护
+
+**Files:**
+- Create: `web/lib/monitor/evaluators/data-integrity.ts`
+- Test: `web/lib/monitor/evaluators/__tests__/data-integrity.test.ts`
+- Modify: `web/lib/monitor/evaluators/index.ts`
+
+**Interfaces:**
+- Consumes: `EvalDeps.duckdbQuery`（Task 6）、`chinaDateAt(base, offsetDays)`（Task 7 新增于 `web/lib/collect.ts`）
+- Produces: `export const evalDataIntegrity: Evaluator`
+
+- [ ] **Step 1: Write the failing test**
+
+创建 `web/lib/monitor/evaluators/__tests__/data-integrity.test.ts`：
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { evalDataIntegrity } from '../data-integrity';
+import type { MonitorRule, EvalDeps } from '../../types';
+
+const GLOB = 's3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet';
+
+const rule = (target: string, extra: Record<string, any> = {}): MonitorRule => ({
+  id: 1,
+  name: `补货行数异常·${target}`,
+  check_type: 'data_integrity',
+  target,
+  threshold: {
+    dataset: 'replenishment_detail',
+    glob_template: GLOB,
+    lookback_days: 1,
+    median_window: 7,
+    deviation_pct: 50,
+    min_samples: 3,
+    ...extra,
+  },
+  severity: 'high',
+  touser: null,
+  template: '行数 {rows} vs 中位 {median}',
+  suppress_window_seconds: 1800,
+  enabled: true,
+});
+
+// now = 2026-09-11 10:00 UTC → 中国 2026-09-11 → 昨日 = 2026-09-10
+const deps = (rows: Array<{ d: string; n: number }>, throwErr?: string): EvalDeps => ({
+  now: new Date('2026-09-11T10:00:00Z'),
+  probe: async () => ({ ok: true, latencyMs: 1 }),
+  getCredentialToken: async () => null,
+  getCollectLogs: async () => [],
+  getCollectTasks: async () => [],
+  duckdbQuery: async () => {
+    if (throwErr) throw new Error(throwErr);
+    return rows;
+  },
+});
+
+const WEEK = [
+  { d: '2026-09-09', n: 580 },
+  { d: '2026-09-08', n: 575 },
+  { d: '2026-09-07', n: 520 },
+  { d: '2026-09-06', n: 531 },
+  { d: '2026-09-05', n: 612 },
+];
+
+describe('evalDataIntegrity', () => {
+  it('昨日行数正常 → 不 firing', async () => {
+    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 589 }, ...WEEK]));
+    expect(r.firing).toBe(false);
+    expect(r.alert_key).toBe('data_integrity:replenishment_detail:3120');
+  });
+
+  it('昨日行数骤降（半截数据）→ firing + context', async () => {
+    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 40 }, ...WEEK]));
+    expect(r.firing).toBe(true);
+    expect(r.context).toMatchObject({ account: '3120', date: '2026-09-10', rows: 40 });
+    expect(Number(r.context.deviation_pct)).toBeGreaterThan(50);
+  });
+
+  it('昨日行数暴涨 → firing', async () => {
+    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 5000 }, ...WEEK]));
+    expect(r.firing).toBe(true);
+  });
+
+  it('样本不足（< min_samples）→ 不 firing（冷启动保护）', async () => {
+    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 3 }, { d: '2026-09-09', n: 580 }]));
+    expect(r.firing).toBe(false);
+    expect(r.context).toMatchObject({ reason: 'insufficient_samples' });
+  });
+
+  it('昨日分区不存在 → 不 firing（交由 data_freshness 负责）', async () => {
+    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps(WEEK));
+    expect(r.firing).toBe(false);
+    expect(r.context).toMatchObject({ reason: 'no_data_for_date' });
+  });
+
+  it('中位数为 0 → 不 firing（防除零）', async () => {
+    const r = await evalDataIntegrity(
+      rule('replenishment_detail:3120'),
+      deps([{ d: '2026-09-10', n: 10 }, { d: '2026-09-09', n: 0 }, { d: '2026-09-08', n: 0 }, { d: '2026-09-07', n: 0 }]),
+    );
+    expect(r.firing).toBe(false);
+    expect(r.context).toMatchObject({ reason: 'zero_median' });
+  });
+
+  it('探测异常 → 不 firing', async () => {
+    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
+    expect(r.firing).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-integrity.test.ts`
+Expected: FAIL —— `Failed to resolve import "../data-integrity"`
+
+- [ ] **Step 3: Write minimal implementation**
+
+创建 `web/lib/monitor/evaluators/data-integrity.ts`：
+
+```ts
+import type { EvalDeps, EvalResult, Evaluator } from '../types';
+import { chinaDateAt } from '../../collect';
+
+// 数据行数完整性守护（spec 2026-09-11-replenishment-detail-query-onboarding-design §方案3）
+// 目的：抓「半截数据静默入库」——分区到了但行数骤降（如分页中断只写了一部分）。
+// rule.target = '<dataset>:<账套>'；threshold = {dataset, glob_template, lookback_days,
+//   median_window, deviation_pct, min_samples}
+// 判据：期望业务日行数 vs 之前 median_window 个有数日的中位数，偏离 > deviation_pct% → firing。
+// 冷启动：样本 < min_samples → 不判（防历史回补期误报）。
+// 探测异常不报警（同 data_freshness：duckdb 本体故障归 service_down 桶）。
+// context = {dataset, account, date, rows, median, window, deviation_pct}
+
+function sqlLit(s: string): string {
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+
+function median(nums: number[]): number {
+  const a = [...nums].sort((x, y) => x - y);
+  const mid = Math.floor(a.length / 2);
+  return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+}
+
+export const evalDataIntegrity: Evaluator = async (
+  rule,
+  deps: EvalDeps,
+): Promise<EvalResult> => {
+  const t = (rule.threshold ?? {}) as Record<string, any>;
+  const target = String(rule.target ?? '');
+  const alertKey = `data_integrity:${target}`;
+  const [dataset, account] = target.split(':');
+  if (!dataset || !account) {
+    return { firing: false, alert_key: alertKey, context: { reason: 'bad_target' } };
+  }
+  const lookback = Number(t.lookback_days ?? 1);
+  const windowSize = Number(t.median_window ?? 7);
+  const deviationPct = Number(t.deviation_pct ?? 50);
+  const minSamples = Number(t.min_samples ?? 3);
+  const glob = String(t.glob_template ?? '').replace('{account}', account);
+  const expectDate = chinaDateAt(deps.now, -lookback);
+
+  let rows: Array<{ d: string; n: number }>;
+  try {
+    rows = (await deps.duckdbQuery(
+      `SELECT regexp_extract(filename, '/([0-9-]{10})/', 1) AS d, count(*) AS n ` +
+        `FROM read_parquet(${sqlLit(glob)}, filename=true) GROUP BY 1`,
+    )) as Array<{ d: string; n: number }>;
+  } catch (e) {
+    console.error(`[monitor] data_integrity 探测异常 ${target}:`, (e as Error)?.message ?? e);
+    return { firing: false, alert_key: alertKey, context: { reason: 'probe_error' } };
+  }
+
+  const byDate = new Map((rows ?? []).map((r) => [String(r.d), Number(r.n)]));
+  const todayRows = byDate.get(expectDate);
+  if (todayRows === undefined) {
+    return { firing: false, alert_key: alertKey, context: { reason: 'no_data_for_date', date: expectDate } };
+  }
+  const history = [...byDate.entries()]
+    .filter(([d]) => d < expectDate)
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .slice(0, windowSize)
+    .map(([, n]) => n);
+  if (history.length < minSamples) {
+    return {
+      firing: false,
+      alert_key: alertKey,
+      context: { reason: 'insufficient_samples', date: expectDate, samples: history.length },
+    };
+  }
+  const med = median(history);
+  if (med <= 0) {
+    return { firing: false, alert_key: alertKey, context: { reason: 'zero_median', date: expectDate } };
+  }
+  const dev = Math.round((Math.abs(todayRows - med) / med) * 100);
+  return {
+    firing: dev > deviationPct,
+    alert_key: alertKey,
+    context: {
+      dataset,
+      account,
+      date: expectDate,
+      rows: todayRows,
+      median: med,
+      window: history.length,
+      deviation_pct: dev,
+    },
+  };
+};
+```
+
+- [ ] **Step 4: 注册进 `EVALUATORS`**
+
+`web/lib/monitor/evaluators/index.ts`，import 区加：
+
+```ts
+import { evalDataIntegrity } from './data-integrity';
+```
+
+`EVALUATORS` 对象里加一行：
+
+```ts
+  data_integrity: evalDataIntegrity,
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-integrity.test.ts`
+Expected: PASS（7 个用例全绿）
+
+- [ ] **Step 6: 全量单测 + 类型检查**
+
+Run: `cd web && npm test && npm run build`
+Expected: 都 PASS
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add web/lib/monitor/evaluators/data-integrity.ts web/lib/monitor/evaluators/__tests__/data-integrity.test.ts web/lib/monitor/evaluators/index.ts
+git commit -m "feat(monitor): data_integrity evaluator——外部管线行数骤降守护（含冷启动保护）"
+```
+
+---
+
+### Task 9: SKILL.md 补货模板
+
+**Files:**
+- Modify: `openclaw/data-query-plugin/skills/retail-query/SKILL.md`
+
+**Interfaces:**
+- Consumes: Task 5 注册的 `replenishment_detail` 数据集
+- Produces: 无（模型侧提示词）
+
+- [ ] **Step 1: 读现有模板库末尾，确定插入位置**
+
+Run: `grep -n "^\*\*[⑨⑩⑪⑫]" openclaw/data-query-plugin/skills/retail-query/SKILL.md`
+Expected: 看到⑨⑩⑪ 的现有编号（若最高编号不是⑪，用实际的下一个编号，不要跳号）
+
+- [ ] **Step 2: 在模板库末尾追加补货模板**
+
+在 SKILL.md 模板库最后一条模板之后追加（编号按 Step 1 的实际下一个）：
+
+```markdown
+**⑫ 补货/要货单明细（replenishment_detail）**
+口径（**模板硬编码，勿改**）：默认只算**已审核生效**的要货单 → `WHERE state_name='制单|审核'`；
+作废单（`含作废`）与未审核单（仅 `制单`）默认排除。用户明确问「要货需求/未审要货」时才放开过滤。
+写法要点：金额一律 `SUM(subtotal)`；**没有 `total_money` 这一列**（单头金额按 order_no 分组 SUM(subtotal)）；
+`business_date` 是时间戳 → 按日过滤用 `substr(business_date,1,10)`；
+门店键必须 `system_book_code + branch_num` 复合（跨账套重号）；商品 join 必须 `dim_item.system_book_code + item_num` 复合。
+> 数据覆盖：自 2026-08-25 起（9/5 之后连续）。**问跨期问题前先说明可用范围**，不要对缺数区间给出结论。
+
+```sql
+-- 门店补货额排行
+SELECT branch_name, SUM(subtotal) amt, COUNT(DISTINCT order_no) orders
+FROM replenishment_detail
+WHERE state_name='制单|审核' AND substr(business_date,1,10) >= '2026-09-05'
+GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+
+-- 单品补货量（配商品档案；必须复合键 join）
+SELECT di.item_name, SUM(r.quantity) qty, SUM(r.subtotal) amt
+FROM replenishment_detail r
+JOIN dim_item di ON di.system_book_code = r.system_book_code AND di.item_num = r.item_num
+WHERE r.state_name='制单|审核' AND substr(r.business_date,1,10) >= '2026-09-05'
+GROUP BY 1 ORDER BY 3 DESC LIMIT 10;
+
+-- 品牌对比
+SELECT system_book_code, SUM(subtotal) amt
+FROM replenishment_detail
+WHERE state_name='制单|审核' AND substr(business_date,1,10) >= '2026-09-05'
+GROUP BY 1 ORDER BY 2 DESC;
+```
+```
+
+- [ ] **Step 3: 校验模板编号不重复、SQL 与网关守卫相容**
+
+Run: `grep -c "replenishment_detail" openclaw/data-query-plugin/skills/retail-query/SKILL.md`
+Expected: ≥ 4（模板标题 + 3 条 SQL 各一次）
+
+人工核对：模板里的 JOIN 子句必须同时含 `system_book_code` 与 `item_num`（否则会被 `assertItemJoin` 拒）；模板里不得出现 `total_money`。
+
+Run: `grep -c "total_money" openclaw/data-query-plugin/skills/retail-query/SKILL.md`
+Expected: `0`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add openclaw/data-query-plugin/skills/retail-query/SKILL.md
+git commit -m "feat(skill): 补货/要货单明细查询模板⑫（口径硬编码 + 复合键 + 禁用 total_money）"
+```
+
+---
+
+### Task 10: 部署（严格按 Global Constraints 的次序）
+
+**Files:** 无（部署动作）
+
+**Interfaces:**
+- Consumes: Task 1-9 的全部产物
+- Produces: 生产环境可用的 `replenishment_detail`
+
+> ⚠️ 本任务次序不可调换。第 2 步必须早于第 5 步：注册行一落地，字典立刻对模型可见，
+> 此时 function 必须已能建视图，否则模型会「看得见查不了」→ 撞 `forbidden_table` → 转而自由发挥。
+
+- [ ] **Step 1: 合并 PR 并部署架构文档**
+
+```bash
+git push origin HEAD
+gh pr create --fill
+gh pr merge --squash --delete-branch
+```
+
+Expected: PR 合并触发 GHA 完整部署（含迁移 212/213）
+
+> 若按仓库惯例 function 与前端分开部署：`functions/` 改动走 GHA，`openclaw/` **不走 GHA**（手动 SSH，见 Step 6）。
+
+- [ ] **Step 2: 确认 function 已上新（先于注册行生效）**
+
+```bash
+curl -s https://data.shanhaiyiguo.com/api/health
+curl -s -X POST https://data.shanhaiyiguo.com/functions/agent-query \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"dictionary"}'
+```
+
+Expected: health OK；dictionary 返回 200。此步**只看 function 是否在跑**，不看 `replenishment_detail` 是否已出现——
+注册行可能还没落库（迁移尚未跑），这不影响本步通过。
+
+- [ ] **Step 3: 等 GHA 绿，确认迁移 212/213 已执行**
+
+```bash
+gh run list --limit 3
+gh run watch <run-id>
+```
+
+Expected: 5 个 step 全绿
+
+- [ ] **Step 4: 清 Deno 缓存（function 改动生效的关键步，否则跑旧代码）**
+
+```bash
+ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
+  "cd /opt/data-analytics-platform/deploy && docker exec deploy-deno-1 rm -rf /deno-dir/* && docker compose restart deno"
+```
+
+- [ ] **Step 5: 刷 PostgREST schema 缓存（新列可见的关键步）**
+
+```bash
+ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
+  "cd /opt/data-analytics-platform/deploy && docker compose restart postgrest"
+```
+
+- [ ] **Step 6: 部署 SKILL.md（openclaw 是手动 SSH 部署面）**
+
+```bash
+scp -r openclaw/data-query-plugin \
+  root@data.shanhaiyiguo.com:/opt/data-analytics-platform/openclaw/state/plugins/
+ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com "docker restart deploy-openclaw-1"
+```
+
+Expected: 容器重启成功
+
+- [ ] **Step 7: 确认守护规则已被拾取（evaluator 上线后首个整点）**
+
+```bash
+ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
+  "docker logs deploy-web-1 --since 70m 2>&1 | grep -i 'monitor' | tail -20"
+```
+
+Expected: **不再出现** `[monitor] 无 data_freshness evaluator，跳过规则 补货到达·3120`。
+若仍出现 → evaluator 未生效，回到 Step 1 检查 web 镜像是否更新。
+
+---
+
+### Task 11: 生产冒烟 —— 权限断言 + 准确性对账
+
+**Files:** 无（验收动作）
+
+**Interfaces:**
+- Consumes: Task 10 的部署结果
+- Produces: 验收结论（记录到 PR 评论或 changelog 行）
+
+> 这是「准确」的最终判据。**不通过就不算完成。**
+
+- [ ] **Step 1: 基本可用性冒烟**
+
+```bash
+curl -s -X POST https://data.shanhaiyiguo.com/functions/agent-query \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"ZhangDuo","agent_api_key":"<deploy/.env 的 AGENT_API_KEY>","sql":"SELECT system_book_code, COUNT(*) AS n, ROUND(SUM(subtotal),2) AS amt FROM replenishment_detail GROUP BY 1 ORDER BY 1"}'
+```
+
+Expected: 返回 2 行（3120 / 64188），且 `n` 与 OSS 实况一致（2026-09-11 实测：3120=3772、64188=1094；注意当日分区为部分数据，行数会随时间增长）。
+
+- [ ] **Step 2: 断言「未注册列不可见」（total_money 已被拿掉）**
+
+```bash
+curl -s -X POST https://data.shanhaiyiguo.com/functions/agent-query \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"ZhangDuo","agent_api_key":"<AGENT_API_KEY>","sql":"SELECT total_money FROM replenishment_detail LIMIT 1"}'
+```
+
+Expected: HTTP 500 + `error` 含 `Binder Error` / `total_money`（列不存在）——即「拿掉」生效
+
+- [ ] **Step 3: 断言「注册表故障不退化路由」**
+
+```bash
+curl -s -X POST https://data.shanhaiyiguo.com/functions/agent-query \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"ZhangDuo","agent_api_key":"<AGENT_API_KEY>","sql":"SELECT COUNT(*) FROM report_daily_sales"}'
+```
+
+Expected: 返回成功且 `engine` 为 `"pg"`（证明 `pgTables` 未退化为 3 张表）
+
+- [ ] **Step 4: 权限断言 —— 窄授权行集严格 ⊂ 全量行集**
+
+按 `docs/testing-handbook.md` §3.4「直接 POST `{sql, userId, agent_api_key}` 模拟不同 userId」：
+
+选两个授权范围不同的真实用户（A = 全量，B = 窄单店/单部门），分别执行同一查询：
+
+```bash
+# 对 A、B 各跑一次，记录行数与门店集合
+curl -s -X POST https://data.shanhaiyiguo.com/functions/agent-query \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"<A_全量>","agent_api_key":"<AGENT_API_KEY>","sql":"SELECT system_book_code, branch_num, COUNT(*) AS n FROM replenishment_detail GROUP BY 1,2 ORDER BY 1,2"}'
+```
+
+断言：
+1. B 的门店集合 **严格 ⊂** A 的门店集合（**不等**、**非空**）
+2. B 里**不同时出现**两个账套的同号 `branch_num`（跨账套不串）
+3. 若 B 的行数与 A 完全相同 → **立即停止**：说明 `scope_key_expr` 塌缩（越权），回 Task 5 检查表达式
+
+- [ ] **Step 5: 空授权 fail-close 断言**
+
+找一个无任何门店授权的账号（或临时构造），执行 Step 4 的查询。
+
+Expected: 0 行（`WHERE 1=0`），**不是**全量 —— 这是 fail-close 的实证
+
+- [ ] **Step 6: 准确性对账 —— 与 Lemeng 要货单页面比数**
+
+在 Lemeng 后台打开要货单查询（同口径：已审核、非作废），选一个确定日期（如 2026-09-10）+ 单账套：
+
+```
+对账 SQL（账套 × 日期 × 金额）：
+SELECT COUNT(DISTINCT order_no) AS orders, ROUND(SUM(subtotal),2) AS amt
+FROM replenishment_detail
+WHERE system_book_code='3120' AND state_name='制单|审核' AND substr(business_date,1,10)='2026-09-10';
+```
+
+Expected: `orders` 与 `amt` 与 Lemeng 页面**分毫一致**。
+
+按 spec 的验收标准：**任一维度不一致即视为未通过**，须定位到口径差异（作废/未审/单位）后重跑。差异若来自口径定义，回 Task 5 改模板/字典，不要改视图绕过。
+
+- [ ] **Step 7: 守护可用性冒烟（人工触发一次缺失场景）**
+
+在确认 `data_freshness` evaluator 已注册后，临时把某条规则的 `target` 改成一个不存在的账套（如 `replenishment_detail:9999`），等下一个整点：
+
+```bash
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
+  "UPDATE monitor_rules SET target='replenishment_detail:9999' WHERE name='补货到达·3120';"
+```
+
+Expected: 企微收到 `补货数据未到达：replenishment_detail 账套 9999 缺 <日期> 分区`。验证后改回：
+
+```bash
+docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
+  "UPDATE monitor_rules SET target='replenishment_detail:3120' WHERE name='补货到达·3120';"
+```
+
+- [ ] **Step 8: 记录验收结论**
+
+在 PR 评论里记录：Step 1 行数、Step 4 的 A/B 行数、Step 6 的对账数字。若走 changelog，加一行：
+
+```
+【新增】补货(要货单)明细接入智能问数：注册表通用事实视图（datasets.scope_key_expr）+ 到达/行数守护（data_freshness/data_integrity）
+```
+
+---
+
+## 依赖与阻塞
+
+- ⏳ **其他系统回补历史到 2026-07-01** —— 这是数据契约侧的前置项（spec 第 1 节），**不阻塞本计划的代码实施**，但阻塞「跨期问答准确」这一目标。
+  回补完成前，Task 9 写入的 SKILL.md 已标注可用范围 `2026-08-25 起（9/5 后连续）`，模型会主动声明覆盖范围。
+- ⏳ `quantity` ↔ `use_quantity` 换算说明 —— 影响「补货量」默认列的口径表述（当前字典把 `quantity` 描述为基本单位口径）。拿到说明后按需更新 `dataset_columns.description`。
+- 📌 关联调出单号（要货 vs 实发满足率）—— 属增量能力，不在本计划范围。
