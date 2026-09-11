@@ -199,6 +199,24 @@ describe("validateScopeKeyExpr", () => {
     ).toThrowError(/scope_expr_no_column/);
   });
 
+  it("注释 / 方言字面量里的列名 → 仍拒绝（同一绕过类的其余形态）", () => {
+    // 块注释（复审运行时实证）
+    expect(() => validateScopeKeyExpr("/* branch_num */ '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    // DuckDB dollar-quoted（$$…$$ 与 $tag$…$tag$）
+    expect(() => validateScopeKeyExpr("$$branch_num$$ || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    expect(() => validateScopeKeyExpr("$t$branch_num$t$ || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    // E'…' 反斜杠转义字符串
+    expect(() => validateScopeKeyExpr("E'\\'branch_num' || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+  });
+
   it("字面量里含禁词不误拒（关键字扫描同样先剥字面量）", () => {
     expect(() =>
       validateScopeKeyExpr("regexp_replace(branch_name, 'delete', '')", COLS)
@@ -365,8 +383,12 @@ const EXPR_FORBIDDEN_KEYWORDS = [
 //   fail-close 方向：剥完若不再含任何列名 → scope_expr_no_column 拒绝。
 function stripSqlLiterals(expr: string): string {
   return String(expr)
-    .replace(/'(?:[^']|'')*'/g, "''") // 字符串字面量 → 空串占位
-    .replace(/--[^\n]*/g, " "); // 行注释
+    .replace(/\/\*[\s\S]*?\*\//g, " ") // 块注释（2026-09-11 复审实证：/* branch_num */ '3120-7' 曾绕过）
+    .replace(/--[^\n]*/g, " ") // 行注释
+    // DuckDB 方言字面量：dollar-quoted（$$…$$ / $tag$…$tag$）；组 1 未参与匹配时 \1 匹配空串，故 $$…$$ 亦覆盖
+    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\1\$/g, "''")
+    .replace(/E'(?:[^'\\]|\\.|'')*'/gi, "''") // E'…' 反斜杠转义字符串
+    .replace(/'(?:[^']|'')*'/g, "''"); // 普通字符串字面量
 }
 
 // 门店复合键表达式校验。非法抛错（message = 错误码），调用方据此 fail-close（不建视图 + 不进白名单）。
@@ -416,7 +438,7 @@ export function buildFactViewSql(spec: FactViewSpec): string {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd web && npx vitest run lib/agent-query/__tests__/fact-view.test.ts`
-Expected: PASS（18 个用例全绿：2 sqlLit + 8 validateScopeKeyExpr + 8 buildFactViewSql）
+Expected: PASS（19 个用例全绿：2 sqlLit + 9 validateScopeKeyExpr + 8 buildFactViewSql）
 
 - [ ] **Step 5: 确认没有破坏既有守卫单测**
 
