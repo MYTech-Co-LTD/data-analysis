@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# data-analysis — 项目级 pre-commit 检查
+#
+# 由全局调度器调用（~/.config/dev-workflow/hooks/pre-commit，来自 dev-workflow-infra）。
+# 不要在全局 hooks 目录里直接放这些检查——那会破坏其他仓库的提交。
+#
+# 安装：本文件随仓库走，新克隆即有；机器侧只需确保全局调度器已装
+#       （dev-workflow-infra: ./install.sh）。
+
+set -e
+
+echo "🔍 Running lint-staged..."
+(cd web && npx lint-staged)
+
+echo "🔍 Checking edge functions..."
+bash scripts/check-functions.sh
+
+echo "🔍 Guard: contract drift (jobs ⇄ boards 禁止互 import)..."
+bash scripts/guard-contract-drift.sh
+
+echo "🔍 Guard: plugin registry (新插件必须注册)..."
+bash scripts/guard-plugin-registry.sh
+
+# 说明：旧版全局 hook **无条件**调用 scripts/guard-migration-spec.sh；该脚本只存在于 main，
+# 在落后 main 的分支/工作树上提交会失败。这里改为「存在才跑」，脚本补上即自动生效。
+if [ -f scripts/guard-migration-spec.sh ]; then
+  echo "🔍 Guard: 迁移 spec 关联（破坏性 SQL 须关联 docs/superpowers/specs）..."
+  bash scripts/guard-migration-spec.sh
+fi
+
+echo "✅ Pre-commit checks passed"
