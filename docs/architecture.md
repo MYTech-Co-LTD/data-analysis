@@ -456,11 +456,18 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
 - **🆕 通用事实视图（迁移 212，2026-09-11）**：上述「插一行即见」原先只对维表（`kind=dim AND carry_enabled`）与 `pg_table` 成立；
   **事实表（`kind=fact`）此前无通用路径**——`retail_detail` / `outbound_detail` 的视图是硬编码在 `functions/agent-query/index.js` 的。
   现新增声明式契约：`datasets.scope_key_expr`（事实数据集的**门店复合键 SQL 表达式**，对注册列求值，产出归一形态 `sbc-branch_num`）。
+  ⚠️ **边界**：该表达式**只能引用注册列**——对**账套只存在于文件路径里**的数据集（如 `retail_detail` 的 sbc 靠 `regexp_extract(filename, 'retail_detail/([0-9]+)/', 1)` 派生，不是列）这条契约不适用；那类数据集若要接入通用路径，须先把路径派生的键**显式注册成列**（或保留硬编码视图）。
   网关对 `engine='duckdb_view' AND kind='fact' AND scope_key_expr IS NOT NULL AND exposed` 的数据集统一构建：
   ① 列投影 = `dataset_columns` 注册列（**显式投影，非 `SELECT *`**；敏感列套 `CASE WHEN can_see_cost THEN col ELSE NULL END`）→
   未注册的列（如逐行重复的单头金额）天然不出现；② 行级权限 = `WHERE <scope_key_expr> IN (<授权复合键>)`，授权空集 → `WHERE 1=0`。
   `scope_key_expr` 空/非法 / 注册列为空 → **不构建视图且不进 SQL 白名单（fail-close）**。
   两个存量硬编码视图**不重构**（它们有 union / 内联 dim join 的定制逻辑），通用路径显式跳过其名字。
+  ⚠️ **注意「跳过」≠「零影响」**：DuckDB 侧 `runDuckdb` 把 `viewSql + userSelect` 拼成**一条** SQL 一次提交、
+  整串执行，而 `CREATE OR REPLACE TEMP VIEW` 是**连接级**的——所以**任一** fact 视图在 DuckDB 执行期失败
+  （如某次注册写了 parquet 里不存在的列、源前缀消失），会让**每一条** DuckDB 查询 500，**包括** `retail_detail` / `outbound_detail`。
+  构建期的 JS `try/catch` 只覆盖 JS 抛错，盖不住 DuckDB 执行期错误。
+  **故「每条新注册必须过真实 parquet 干跑」是永久门禁**（用真实 OSS 数据验证视图能建、行过滤真的收窄），
+  纯单测/JS 层校验不足以证明。
   **注册表的通用事实扩展必须独立请求读取**（不得并入主 `datasets?select=`）——PostgREST 对未知列返 400，
   主查询失败会使 `pgTables` 回退到硬编码兜底值，导致 `report_*_gen` 查询误路由到 DuckDB。
 - 退役臆想占位 `data_sources_meta`（REVOKE 写，同 `lemeng_items` 教训）。报表聚合定义仍归 `report_definitions`（B 不重建，只在字典曝光 summary 类）。维表 `carry_enabled=false`（直接查询 OK；JOIN 进明细待 C 子系统接小表搬运后翻 true）。
@@ -975,7 +982,7 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 
 ### 8.1 监控告警体系（2026-07-08 设计，详见 `docs/superpowers/specs/2026-07-08-monitoring-system-design.md`）
 
-**引擎拓扑**：复用 web 端 node-cron（`web/lib/scheduler.ts`），新增「监控扫描」调度，不新增容器/function。扫描按 check_type 自然节奏分桶：每分钟 `service_down` / 每 5 分钟 `collect_fail`·`request_fail`·`token_expire` / 每小时 `data_freshness`·`contact_sync` / 每日 `data_integrity`·`data_volume`。防重入复用 scheduler 现有 globalThis 锁。
+**引擎拓扑**：复用 web 端 node-cron（`web/lib/scheduler.ts`），新增「监控扫描」调度，不新增容器/function。扫描按 check_type 自然节奏分桶（**以下与 `web/lib/monitor/runtime.ts` 各桶的 `checkTypes` 逐一对齐**）：每分钟 `service_down`·`novu_health`（`SERVICE_DOWN_BUCKET_TYPES`）/ 每 5 分钟 `collect_stall`·`collect_fail`·`request_fail`·`token_expire` / 每小时 `data_freshness`·`contact_sync` / 每日 `data_integrity`·`data_volume`。防重入复用 scheduler 现有 globalThis 锁。
 
 **数据模型**（新表）：
 - `monitor_rules`：规则定义（check_type 枚举 + target + threshold(jsonb) + severity + touser + template + suppress_window + enabled）。
@@ -1001,6 +1008,7 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 现用于守护**外部管线**写入 OSS 的数据集（如 `replenishment_detail`）：`data_freshness` 走 `runHourlyBucket`（每小时）检查昨日分区是否到达；
 `data_volume` 走 `runDailyBucket`（每日 03:00）检查昨日行数 vs 近 7 日中位数偏离。**按账套各配一行规则**（禁止看合计，会被另一账套掩盖）。
 探测走 DuckDB 服务（web 容器无 boto3）；探测异常**不报警**（duckdb 本体故障由 `service_down` 桶负责，避免双报）。
+⚠️ 例外：DuckDB 的 `No files found that match the pattern` **不是探测故障而是分区确实不存在**，`data_freshness` 对它 **firing**（否则唯一必须响的场景会静默）；其余异常才归 `probe_error` 不报。
 `runScan` 的双层隔离（无 evaluator 规则 `warn + continue`、每规则独立 `try/catch`）保证**规则可先于 evaluator 落库**。
 
 **告警生命周期**：firing → upsert `monitor_alerts`(active) + `occurrence_count++`；`suppress_window`（默认 30min）内不重复发；问题消失 → 转 resolved + 发「已恢复」。规则改阈值/收件人/模板/级别/开关走表，不发版。
@@ -1434,7 +1442,7 @@ spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.m
 | carry 维表物化（C3） | ✅ 已实现 | /carry-dims（cron 04:33 兜底 + 变更回调），agent-query 查询侧读 dim parquet |
 | 美团数据源接入 | ⏳ 待讨论 | 架构待确认 |
 | 饿了么数据源接入 | ⏳ 待讨论 | 架构待确认 |
-| 监控告警体系 v1 | 🔶 部分实现 | 已实现 7/10：token_expire/collect_fail/service_down/collect_stall/novu_health/data_freshness/data_volume；未实现：request_fail/data_integrity/contact_sync（§8.1 状态表） |
+| 监控告警体系 v1 | 🔶 部分实现 | 已实现 7/10：token_expire/collect_fail/service_down/collect_stall/novu_health/data_freshness/data_volume；未实现：request_fail/data_integrity/contact_sync（§8.1 状态表）。**口径注**：此处按「evaluator 已启用」计数，故 `data_freshness` 计入；**其中 `data_freshness` 为部分实现**（仅②外部管线分区到达，①通用陈旧度未实现），见 §8.1 表 ——两处口径不同，不矛盾 |
 | 监控待实现 3 项 evaluator | ⏳ 待排期 | §8.1；data_integrity 部分职能已由 QA 体系承担（§10.10 L4） |
 | 模块化+插件化重构 | 🔶 进行中 | A+B-lite，P0–P5；P1（jobs/collectors 目录化+注册表）已落地，P3（function _shared 共享打包）已落地 |
 | 语义层 Cube 全替代 | ⏳ spec 已确认待实施 | §九 2026-08-15；生成器退役清单见 §10.10 |

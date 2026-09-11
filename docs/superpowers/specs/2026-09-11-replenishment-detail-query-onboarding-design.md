@@ -215,7 +215,12 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 **部署次序安全**：`runScan` 对「无 evaluator 的规则」是 `console.warn` + `continue`（per-rule `try/catch` 双层隔离），
 所以**规则可以先于 evaluator 落库**——只会 warn 跳过它自己，不会拖垮同轮的 `contact_sync` 等既有规则。**不动调度**。
 
-`monitor_rules.threshold` 示例：`{"dataset":"replenishment_detail","source_glob":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/*/*/all.parquet","accounts":["3120","64188"],"lookback_days":1,"median_window":7,"deviation_pct":50}`
+`monitor_rules.threshold` 示例（**键名以迁移 `213` 实际落地的为准**；`target` = `'<dataset>:<账套>'`，
+账套经 `{account}` 代入 glob——**没有** `accounts` 数组，每账套一条规则）：
+
+```json
+{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}
+```
 
 实现要点：
 - **分区存在性 = 用 DuckDB 读该路径**（`services/server.js` 的 `/query`，现成 S3 凭证）：`SELECT count(*) FROM read_parquet('<source 代入日期>')` —— 抛错或 0 = 缺失。web 容器无 boto3，DuckDB 服务即现成的 OSS 出口（`web/lib/jobs/reconcile/manifest.ts` 的 `duckdbParquetSum` 同款手法）。
@@ -229,7 +234,8 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 | 面 | 影响 | 依据 |
 |---|---|---|
 | OSS 数据 / 其他系统的管线 | **零影响**（全程只读，不写不删，无物化） | 视图查询时实时构建 |
-| `retail_detail` / `outbound_detail` | **零影响** | 通用路径显式跳过这两个名字，仍走原硬编码分支 |
+| `retail_detail` / `outbound_detail` | ⚠️ **条件性零影响**（见下方说明）：仅当**全部新注册数据集的源都能正常解析**时才零影响；任一 fact 视图在 DuckDB 侧失败（如将来某次注册写了 parquet 里不存在的列，或源前缀消失）→ **会连带打挂全部 DuckDB 查询，包括 `retail_detail` / `outbound_detail`** | 通用路径显式跳过这两个名字、仍走原硬编码分支，**只保证不改这两条视图的 SQL 文本**；但 `runDuckdb` 把 `viewSql + userSelect` 拼成**一条** SQL 一次提交（`functions/agent-query/index.js`，DuckDB 侧也是整串执行 `services/server.js` `/query`），而 `CREATE OR REPLACE TEMP VIEW` 是**连接级**的。JS 侧 `try/catch`（构建期 `buildFactViewSql` 抛错）只覆盖 JS 抛错，**盖不住 DuckDB 执行期失败**——后者让整个请求 500，`userSelect` 根本没机会跑 |
+| ↳ 配套门禁（**永久约束**） | **每条新注册必须过「真实 parquet 干跑」**：在注册生效前，用真实 OSS 数据在当前代码上验证视图能建、行过滤真的收窄。纯单测/JS 层校验**不足以**证明 DuckDB 执行期可用 | 上一条的爆炸半径是「全部 DuckDB 查询」，不允许用「没报错」当通过 |
 | 监控既有告警（`collect_fail` / `token_expire` / `service_down` …） | **零影响** | `engine.ts` `runScan` 双层隔离：无 evaluator 的规则 `warn + continue`；每条规则独立 `try/catch`。规则先于 evaluator 落库也安全 |
 | 监控调度（4 个桶的 cron） | **不动** | `data_freshness`/`data_integrity` 的桶早已接线在跑，只是桶内无规则 |
 | `get_data_dictionary()` | **零影响** | 显式列清单，加列不影响 |
@@ -272,7 +278,7 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 
 1. **`docs/architecture.md` §4.3 / §8.1 更新**（架构先行，先落地）
 2. 迁移 `212_registry_fact_scope.sql`：`datasets.scope_key_expr` 列 + 注释
-3. 迁移 `213_replenishment_detail_registry.sql`：`datasets` 行 + `dataset_columns` 列描述 + 两条 `monitor_rules`
+3. 迁移 `213_replenishment_detail_registry.sql`：`datasets` 行 + `dataset_columns` 列描述 + **四条** `monitor_rules`（`data_freshness` 与 `data_volume` 各 2 条 = 每账套各一条，3120/64188）
 4. `functions/_shared/fact-view.ts`（新增纯函数，供单测锁定）+ `functions/agent-query/index.js` 接线：`loadRegistry` **以独立请求 + 独立 try/catch** 读 `scope_key_expr` 与逐数据集列（**不得并入主 `datasets?select=`**）；`runDuckdb` 通用 fact 视图构建（含表达式三条校验、按注册列投影、硬编码视图名跳过）；`allowedTables` 由注册表派生
 5. `web/lib/monitor/`：`evaluators/data-freshness.ts` + `data-volume.ts`（**不是 `data-integrity`**，见 §方案3 语义裁定），注册进 `EVALUATORS`；`CheckType` 联合新增 `data_volume` 并挂进 `runDailyBucket`；`EvalDeps` 加必填 `duckdbQuery` 并在 `runtime.ts` `buildDeps` 注入 —— ⚠️ 存量 evaluator 测试 fake 需同步补该字段（机械，3~4 文件）
 6. `openclaw/data-query-plugin/skills/retail-query/SKILL.md`：⑫补货模板

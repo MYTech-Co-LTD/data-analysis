@@ -71,6 +71,28 @@ describe('evalDataFreshness', () => {
     }
   });
 
+  it('glob 无匹配文件（No files found）→ firing（分区确实不存在，不能静默）', async () => {
+    // ★ 这是本守护最该响的场景：DuckDB 对「glob 一个文件都没匹配到」抛的是异常而非空集。
+    //   若把它当 probe_error 归到「不报」，唯一必须响的场景就静默了——正是要消灭的失败模式。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await evalDataFreshness(
+        rule('replenishment_detail:3120'),
+        deps([], 'IO Error: No files found that match the pattern "s3://lemeng-datasource/duckle/lemeng/replenishment_detail/3120/*/all.parquet"'),
+      );
+      expect(r.firing).toBe(true);
+      expect(r.context.have_latest).toBe('none');
+      expect(r.context.expect_date).toBe('2026-09-10');
+      expect(r.context.severity).toBe('high');
+      expect(warn).toHaveBeenCalled();
+      expect(err).not.toHaveBeenCalled(); // 不是故障，不该报 error
+    } finally {
+      warn.mockRestore();
+      err.mockRestore();
+    }
+  });
+
   it('target 格式非法 → 不 firing（不瞎报）', async () => {
     const r = await evalDataFreshness(rule('bogus'), deps([]));
     expect(r.firing).toBe(false);

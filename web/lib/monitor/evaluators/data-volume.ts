@@ -27,6 +27,9 @@ export const evalDataVolume: Evaluator = async (
   const alertKey = `data_volume:${target}`;
   const [dataset, account] = target.split(':');
   if (!dataset || !account) {
+    // 同 data_freshness：engine 丢弃非 firing/非 recovery 的 context，配置少个冒号 = 规则
+    // 永远静默空转。留痕（返回值不变）。
+    console.warn(`[monitor] data_volume target 解析失败（期望 '<dataset>:<账套>'）：${target || '(空)'}`);
     return { firing: false, alert_key: alertKey, context: { reason: 'bad_target' } };
   }
   const lookback = Number(t.lookback_days ?? 1);
