@@ -991,7 +991,7 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 | `service_down` | 主动探活 web/duckdb/insforge/postgres/deno/openclaw（应用级，5s 超时） | 任一不可达 | ✅ 已实现 |
 | `collect_stall`（🆕 迁移 165，设计清单外新增） | `collect_tasks.last_run_at`（rule.target = task_id） | enabled=true 且 now - last_run_at > 阈值（采集卡死/未跑） | ✅ 已实现 |
 | `request_fail` | `external_request_logs` | 窗口失败率 > failure_rate | ⏳ 未实现 |
-| `data_freshness` | ①（通用）PG 汇总表 + DuckDB parquet 最新日期；②（外部管线数据集）OSS 分区是否存在 | ①距今 > stale_hours；②期望业务日分区缺失 | ✅ 已实现 |
+| `data_freshness` | ①（通用）PG 汇总表 + DuckDB parquet 最新日期；②（外部管线数据集）OSS 分区是否存在 | ①距今 > stale_hours；②期望业务日分区缺失 | 🔶 部分实现（② 外部管线分区到达已实现；① 通用陈旧度未实现） |
 | `data_integrity` | DuckDB 明细 count vs PG 汇总 | 差异率 > diff_rate | ⏳ 未实现（部分职能由 QA 体系承担，§10.10 L4） |
 | `data_volume` | 外部管线数据集 OSS 分区行数 | vs 近 N 个有数日中位数偏离 > deviation_pct | ⏳ 未实现 |
 | `contact_sync` | `org_users.updated_at` + 回调最近时间 | 距上次同步 > max_age_hours | ⏳ 未实现 |
