@@ -234,10 +234,16 @@ async function loadFactScopes() {
     let columns = [];
     try {
       const cr = await fetch(
-        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive&dataset_name=eq." + encodeURIComponent(d.name) + "&order=ordinal.asc",
+        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive,source_name&dataset_name=eq." + encodeURIComponent(d.name) + "&order=ordinal.asc",
         { headers }
       );
-      if (cr.ok) columns = (await cr.json()).map((c) => ({ name: c.name, sensitive: !!c.is_sensitive }));
+      if (cr.ok) {
+        columns = (await cr.json()).map((c) => ({
+          name: c.name,
+          sensitive: !!c.is_sensitive,
+          ...c.source_name ? { sourceName: c.source_name } : {}
+        }));
+      }
     } catch (e) {
       console.error("[agent-query] loadFactScopes columns failed " + d.name + ":", String(e));
     }

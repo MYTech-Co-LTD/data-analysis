@@ -66,11 +66,22 @@ async function loadFactScopes() {
     let columns = [];
     try {
       const cr = await fetch(
-        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive&dataset_name=eq." +
+        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive,source_name&dataset_name=eq." +
           encodeURIComponent(d.name) + "&order=ordinal.asc",
         { headers },
       );
-      if (cr.ok) columns = (await cr.json()).map((c) => ({ name: c.name, sensitive: !!c.is_sensitive }));
+      if (cr.ok) {
+        // source_name：源列名 → 视图列名映射（为空表示同名）。例：system_book_code ← company_id
+        // ★ 这里必须用**真值判断**（不是 `??` / `!== null`）：注册列被写成 `''` 是很现实的情形
+        //   （迁移作者习惯空串而非 NULL），而 `''` 传下去会让 buildFactViewSql 生成
+        //   `"" AS "x"` —— 零长度定界标识符 → DuckDB 建视图报错 → 该数据集整体不可用。
+        //   空串在这里被归一为「不传 sourceName」= 退回同名，正是我们要的语义。**勿"简化"成 ??。**
+        columns = (await cr.json()).map((c) => ({
+          name: c.name,
+          sensitive: !!c.is_sensitive,
+          ...(c.source_name ? { sourceName: c.source_name } : {}),
+        }));
+      }
     } catch (e) {
       console.error("[agent-query] loadFactScopes columns failed " + d.name + ":", String(e));
     }
