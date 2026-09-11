@@ -1168,6 +1168,10 @@ import { evalDataFreshness } from './data-freshness';
   data_freshness: evalDataFreshness,
 ```
 
+**顺带收口文档状态（Task 1 交接项）**：`docs/architecture.md` §8.1 的 `check_type` 清单表格里，`data_freshness`
+一行现标着「⏳ 未实现」。本任务让它真正实现，**把该行的状态列改为已实现**（Task 1 当时未改是正确的——那时它确实还没实现）。
+改前先 `grep -n "data_freshness" docs/architecture.md` 定位；只改状态单元格，不动表格结构。
+
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-freshness.test.ts`
@@ -1409,6 +1413,11 @@ import { evalDataIntegrity } from './data-integrity';
 
 Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-integrity.test.ts`
 Expected: PASS（7 个用例全绿）
+
+- [ ] **Step 5b: 收口 §8.1 表格里 `data_integrity` 的「⏳ 未实现」状态（Task 1 交接项）**
+
+`grep -n "data_integrity" docs/architecture.md` 定位 §8.1 `check_type` 清单表格，把该行状态列改为已实现。
+只改状态单元格，不动表格结构。
 
 - [ ] **Step 6: 全量单测 + 类型检查**
 
