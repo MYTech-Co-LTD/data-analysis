@@ -1200,7 +1200,7 @@ git commit -m "feat(monitor): EvalDeps 加 duckdbQuery 依赖并注入 runtime�
 创建 `web/lib/monitor/evaluators/__tests__/data-freshness.test.ts`：
 
 ```ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { evalDataFreshness } from '../data-freshness';
 import type { MonitorRule, EvalDeps } from '../../types';
 
@@ -1248,6 +1248,9 @@ describe('evalDataFreshness', () => {
       expect_date: '2026-09-10',
       have_latest: '2026-09-05',
     });
+    // ★ 必须钉住：模板是 `🔴 [{severity}] …`，而 renderTemplate 只在 `key in context` 时替换。
+    //   少了这条断言，删掉 evaluator 里的 severity 注入**全部用例仍绿**，而告警正文会显示字面量 `[{severity}]`。
+    expect(r.context.severity).toBe('high');
   });
 
   it('一个分区都没有 → firing，have_latest=none', async () => {
@@ -1256,9 +1259,18 @@ describe('evalDataFreshness', () => {
     expect(r.context.have_latest).toBe('none');
   });
 
-  it('探测异常 → 不 firing（不误报；duckdb 本体故障由 service_down 桶负责）', async () => {
-    const r = await evalDataFreshness(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
-    expect(r.firing).toBe(false);
+  it('探测异常 → 不 firing（不误报；duckdb 本体故障由 service_down 桶负责）且必须留下日志', async () => {
+    // ★ 只断言 firing===false 是不够的：删掉 evaluator 里的 console.error，该用例仍绿，
+    //   而「探测坏了」会变成无痕静默——正是本任务要消灭的失败模式。
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await evalDataFreshness(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
+      expect(r.firing).toBe(false);
+      expect(r.context).toMatchObject({ reason: 'probe_error' });
+      expect(spy).toHaveBeenCalled(); // 删掉 evaluator 的 console.error → 这条变红
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('target 格式非法 → 不 firing（不瞎报）', async () => {
