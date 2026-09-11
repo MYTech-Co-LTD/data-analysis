@@ -1413,8 +1413,11 @@ import { evalDataFreshness } from './data-freshness';
 ```
 
 **顺带收口文档状态（Task 1 交接项）**：Task 1 的修复轮已把 §8.1 表格里 `data_freshness` 行的「数据源/触发」
-**拓宽**为兼容两种含义（①通用陈旧度 ②外部数据集分区到达），状态仍是 ⏳ 未实现。本任务让它真正实现，
-**把该行的状态列改为已实现**。改前先 `grep -n "data_freshness" docs/architecture.md` 定位；只改状态单元格，不动表格结构。
+**拓宽**为兼容两种含义（①通用陈旧度 `stale_hours` ②外部数据集分区到达），状态仍是 ⏳ 未实现。
+
+本任务只让 **②** 真正实现。因此状态列**不能写 `✅ 已实现`**（那会掩盖 ① 仍未实现的事实），
+写 **`🔶 部分实现（② 外部管线分区到达已实现；① 通用陈旧度未实现）`**。
+改前先 `grep -n "data_freshness" docs/architecture.md` 定位；只改状态单元格，不动表格结构。
 
 > ⚠️ **本任务不要动 §8.1 引擎拓扑行与 §十一 的汇总计数行**（「已实现 4/8」「监控待实现 4 项」）。
 > 那些是聚合口径，`data_volume` 落地后才成立，统一由 **Task 8 Step 5b** 收口——避免同一行被改两次、
@@ -1423,7 +1426,8 @@ import { evalDataFreshness } from './data-freshness';
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-freshness.test.ts`
-Expected: PASS（8 个用例全绿）
+Expected: PASS（**7 个用例**全绿：存在 / 缺失 / 全空 / 探测异常 / target 非法 / lookback=2 / 账套代入 glob）
+> ⚠️ 数`用例数`时**数 `it(` 块**，不要凭印象——本计划的期望值已因此错过两次（Task 2 写「13」实际 16、此处写「8」实际 7）。
 
 - [ ] **Step 6: Commit**
 
@@ -1677,9 +1681,12 @@ Expected: PASS（7 个用例全绿）
 grep -n "data_volume\|data_freshness\|已实现 4/8\|待实现" docs/architecture.md
 ```
 
-1. **§8.1 `check_type` 清单表格**：Task 1 修复轮已新增 `data_volume` 行（初始 ⏳ 未实现），
-   本任务让它真正实现 → **把该行状态列改为 ✅ 已实现**。只改状态单元格。
-   同时确认 `data_integrity` 行仍是 ⏳ 未实现（它本就没实现，**不要顺手改**）。
+1. **§8.1 `check_type` 清单表格**，两个状态单元格：
+   - `data_volume` 行：Task 1 修复轮已新增该行（初始 ⏳ 未实现），本任务让它真正实现 → **改为 `✅ 已实现`**。
+   - `data_freshness` 行：Task 7 按当时的计划写成了 `✅ 已实现`，但该行「数据源/触发」含**两种含义**，
+     而 ① 通用陈旧度 `stale_hours` **仍未实现** → **改为 `🔶 部分实现（② 外部管线分区到达已实现；① 通用陈旧度未实现）`**。
+     （这是 Task 7 交付后才更正的措辞，属本任务的收口范围。）
+   - 同时确认 `data_integrity` 行仍是 `⏳ 未实现`（它本就没实现，**不要顺手改**）。
 2. **§8.1 引擎拓扑行**（约 978 行）现为「… / 每日 `data_integrity`。」→ 改为「… / 每日 `data_integrity`·`data_volume`。」。
 3. **§十一 实现状态汇总**（约 1436-1437 行）两行：
    - 「监控告警体系 v1 | 🔶 部分实现 | 已实现 **4/8**：…；未实现：request_fail/**data_freshness**/**data_integrity**/contact_sync」
