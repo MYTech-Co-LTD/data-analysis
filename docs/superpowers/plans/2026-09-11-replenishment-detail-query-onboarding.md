@@ -1377,6 +1377,10 @@ export const evalDataFreshness: Evaluator = async (
       account,
       expect_date: expectDate,
       have_latest: dates.length ? dates[dates.length - 1] : 'none',
+      // ★ severity 必须注入：模板里的 `🔴 [{severity}]` 只在 `key in context` 时才会被替换
+      //   （web/lib/monitor/lifecycle.ts renderTemplate），否则告警正文会出现**字面量** `[{severity}]`。
+      //   既有那 8 条种子规则（020/022）就带着这个字面量——不要跟着坏，我们的规则自己注入。
+      severity: rule.severity,
     },
   };
 };
@@ -1626,6 +1630,9 @@ export const evalDataVolume: Evaluator = async (
       median: med,
       window: history.length,
       deviation_pct: dev,
+      // ★ 同 data_freshness：模板里 `🔴 [{severity}]` 需要 context 提供 severity 才会被替换，
+      //   否则告警正文出现字面量 `[{severity}]`。
+      severity: rule.severity,
     },
   };
 };
