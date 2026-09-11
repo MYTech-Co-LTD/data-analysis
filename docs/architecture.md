@@ -991,13 +991,14 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 | `service_down` | 主动探活 web/duckdb/insforge/postgres/deno/openclaw（应用级，5s 超时） | 任一不可达 | ✅ 已实现 |
 | `collect_stall`（🆕 迁移 165，设计清单外新增） | `collect_tasks.last_run_at`（rule.target = task_id） | enabled=true 且 now - last_run_at > 阈值（采集卡死/未跑） | ✅ 已实现 |
 | `request_fail` | `external_request_logs` | 窗口失败率 > failure_rate | ⏳ 未实现 |
-| `data_freshness` | PG 汇总表 + DuckDB parquet 最新日期 | 距今 > stale_hours | ⏳ 未实现 |
+| `data_freshness` | ①（通用）PG 汇总表 + DuckDB parquet 最新日期；②（外部管线数据集）OSS 分区是否存在 | ①距今 > stale_hours；②期望业务日分区缺失 | ⏳ 未实现 |
 | `data_integrity` | DuckDB 明细 count vs PG 汇总 | 差异率 > diff_rate | ⏳ 未实现（部分职能由 QA 体系承担，§10.10 L4） |
+| `data_volume` | 外部管线数据集 OSS 分区行数 | vs 近 N 个有数日中位数偏离 > deviation_pct | ⏳ 未实现 |
 | `contact_sync` | `org_users.updated_at` + 回调最近时间 | 距上次同步 > max_age_hours | ⏳ 未实现 |
 
-**数据到达/完整性守护（2026-09-11 落地）**：`CheckType` 早已声明 `data_freshness` / `data_integrity` 两个类型但一直无 evaluator（空跑）。
+**数据到达/完整性守护（2026-09-11 落地）**：`CheckType` 早已声明 `data_freshness` / `data_integrity` 两个类型但一直无 evaluator（空跑）；本次启用前者，并新增 `data_volume`（见上表）。
 现用于守护**外部管线**写入 OSS 的数据集（如 `replenishment_detail`）：`data_freshness` 走 `runHourlyBucket`（每小时）检查昨日分区是否到达；
-`data_integrity` 走 `runDailyBucket`（每日 03:00）检查昨日行数 vs 近 7 日中位数偏离。**按账套各配一行规则**（禁止看合计，会被另一账套掩盖）。
+`data_volume` 走 `runDailyBucket`（每日 03:00）检查昨日行数 vs 近 7 日中位数偏离。**按账套各配一行规则**（禁止看合计，会被另一账套掩盖）。
 探测走 DuckDB 服务（web 容器无 boto3）；探测异常**不报警**（duckdb 本体故障由 `service_down` 桶负责，避免双报）。
 `runScan` 的双层隔离（无 evaluator 规则 `warn + continue`、每规则独立 `try/catch`）保证**规则可先于 evaluator 落库**。
 
