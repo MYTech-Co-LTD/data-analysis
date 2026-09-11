@@ -453,6 +453,16 @@ DuckDB /query〔改造：每请求独立连接 + AGENT_API_KEY〕
 - `datasets`（name/engine[kind duckdb_view|pg_table]/source/kind[fact|summary|dim]/is_realtime/columns_typed/date_column/carry_enabled/exposed）+ `dataset_columns`（列 + `is_sensitive` 成本组 + `join_to` 关联提示）+ RPC `get_data_dictionary()`。
 - **双侧运行时实时消费**（取代原先 SKILL.md + agent-query 两处硬编码）：① **引擎侧** `agent-query` 的 glob/成本列/PG 路由表改读注册表（60s 缓存，读失败回退旧硬编码值兜底，绝不线下）；路由按 `engine`（pg_table→PG）。② **LLM 侧** `list_datasets` 工具每轮拉活字典。
 - **自动感知**：新增维表/报表 = `datasets` 插一行 → 两侧下一轮即见，**不改 markdown、内容变更不重部署**（插件/function 各只一次性改动）。
+- **🆕 通用事实视图（迁移 212，2026-09-11）**：上述「插一行即见」原先只对维表（`kind=dim AND carry_enabled`）与 `pg_table` 成立；
+  **事实表（`kind=fact`）此前无通用路径**——`retail_detail` / `outbound_detail` 的视图是硬编码在 `functions/agent-query/index.js` 的。
+  现新增声明式契约：`datasets.scope_key_expr`（事实数据集的**门店复合键 SQL 表达式**，对注册列求值，产出归一形态 `sbc-branch_num`）。
+  网关对 `engine='duckdb_view' AND kind='fact' AND scope_key_expr IS NOT NULL AND exposed` 的数据集统一构建：
+  ① 列投影 = `dataset_columns` 注册列（**显式投影，非 `SELECT *`**；敏感列套 `CASE WHEN can_see_cost THEN col ELSE NULL END`）→
+  未注册的列（如逐行重复的单头金额）天然不出现；② 行级权限 = `WHERE <scope_key_expr> IN (<授权复合键>)`，授权空集 → `WHERE 1=0`。
+  `scope_key_expr` 空/非法 / 注册列为空 → **不构建视图且不进 SQL 白名单（fail-close）**。
+  两个存量硬编码视图**不重构**（它们有 union / 内联 dim join 的定制逻辑），通用路径显式跳过其名字。
+  **注册表的通用事实扩展必须独立请求读取**（不得并入主 `datasets?select=`）——PostgREST 对未知列返 400，
+  主查询失败会使 `pgTables` 回退到硬编码兜底值，导致 `report_*_gen` 查询误路由到 DuckDB。
 - 退役臆想占位 `data_sources_meta`（REVOKE 写，同 `lemeng_items` 教训）。报表聚合定义仍归 `report_definitions`（B 不重建，只在字典曝光 summary 类）。维表 `carry_enabled=false`（直接查询 OK；JOIN 进明细待 C 子系统接小表搬运后翻 true）。
 
 **可信 userid 流（全局 + 后端按人鉴权）：**
@@ -984,6 +994,12 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 | `data_freshness` | PG 汇总表 + DuckDB parquet 最新日期 | 距今 > stale_hours | ⏳ 未实现 |
 | `data_integrity` | DuckDB 明细 count vs PG 汇总 | 差异率 > diff_rate | ⏳ 未实现（部分职能由 QA 体系承担，§10.10 L4） |
 | `contact_sync` | `org_users.updated_at` + 回调最近时间 | 距上次同步 > max_age_hours | ⏳ 未实现 |
+
+**数据到达/完整性守护（2026-09-11 落地）**：`CheckType` 早已声明 `data_freshness` / `data_integrity` 两个类型但一直无 evaluator（空跑）。
+现用于守护**外部管线**写入 OSS 的数据集（如 `replenishment_detail`）：`data_freshness` 走 `runHourlyBucket`（每小时）检查昨日分区是否到达；
+`data_integrity` 走 `runDailyBucket`（每日 03:00）检查昨日行数 vs 近 7 日中位数偏离。**按账套各配一行规则**（禁止看合计，会被另一账套掩盖）。
+探测走 DuckDB 服务（web 容器无 boto3）；探测异常**不报警**（duckdb 本体故障由 `service_down` 桶负责，避免双报）。
+`runScan` 的双层隔离（无 evaluator 规则 `warn + continue`、每规则独立 `try/catch`）保证**规则可先于 evaluator 落库**。
 
 **告警生命周期**：firing → upsert `monitor_alerts`(active) + `occurrence_count++`；`suppress_window`（默认 30min）内不重复发；问题消失 → 转 resolved + 发「已恢复」。规则改阈值/收件人/模板/级别/开关走表，不发版。
 
