@@ -67,12 +67,13 @@
 | `web/lib/monitor/types.ts` | `EvalDeps` 加 `duckdbQuery` | Modify |
 | `web/lib/monitor/runtime.ts` | `buildDeps` 注入 `duckdbQuery` | Modify |
 | `web/lib/monitor/evaluators/data-freshness.ts` | 分区到达守护 | Create |
-| `web/lib/monitor/evaluators/data-integrity.ts` | 行数异常守护 | Create |
+| `web/lib/monitor/evaluators/data-volume.ts` | 行数异常守护（**不是 `data-integrity`**——该名原义已被 QA 体系占用） | Create |
+| `web/lib/monitor/evaluators/sql.ts` | 两个 evaluator 共用的 `sqlLit` | Create |
 | `web/lib/monitor/evaluators/index.ts` | `EVALUATORS` 注册两个新 evaluator | Modify |
 | `web/lib/monitor/evaluators/__tests__/data-freshness.test.ts` | 到达守护单测 | Create |
-| `web/lib/monitor/evaluators/__tests__/data-integrity.test.ts` | 行数守护单测 | Create |
-| `web/lib/monitor/**/__tests__/*.test.ts`（5 个存量） | 补 `duckdbQuery` 到 deps fake | Modify |
-| `openclaw/data-query-plugin/skills/retail-query/SKILL.md` | ⑫补货模板 | Modify |
+| `web/lib/monitor/evaluators/__tests__/data-volume.test.ts` | 行数守护单测 | Create |
+| `web/lib/monitor/**/__tests__/*.test.ts` + `web/lib/__tests__/collect-stall.test.ts`（**6 个存量**） | 补 `duckdbQuery` 到 deps fake | Modify |
+| `openclaw/data-query-plugin/skills/retail-query/SKILL.md` | **⑪**补货模板 | Modify |
 
 ---
 
@@ -1273,6 +1274,18 @@ describe('evalDataFreshness', () => {
     }
   });
 
+  it('★ glob 无匹配文件（分区确实不存在）→ 必须 firing，不得归为探测异常', async () => {
+    // 整支评审实证：DuckDB 对「glob 一个文件都没匹配到」抛 "No files found that match the pattern"，
+    // 而**那正是本守护要报的情形**。归入 probe_error → firing:false 会让守护在最该响时静默。
+    const r = await evalDataFreshness(
+      rule('replenishment_detail:3120'),
+      deps([], 'IO Error: No files found that match the pattern "s3://…/3120/*/all.parquet"'),
+    );
+    expect(r.firing).toBe(true);
+    expect(r.context).toMatchObject({ expect_date: '2026-09-10', have_latest: 'none' });
+    expect(r.context.severity).toBe('high');
+  });
+
   it('target 格式非法 → 不 firing（不瞎报）', async () => {
     const r = await evalDataFreshness(rule('bogus'), deps([]));
     expect(r.firing).toBe(false);
@@ -1387,7 +1400,21 @@ export const evalDataFreshness: Evaluator = async (
         `FROM read_parquet(${sqlLit(glob)}, filename=true)`,
     )) as Array<{ d: string }>;
   } catch (e) {
-    console.error(`[monitor] data_freshness 探测异常 ${target}:`, (e as Error)?.message ?? e);
+    const msg = String((e as Error)?.message ?? e);
+    // ★★ 关键分支（2026-09-11 整支评审实证）：**glob 一个文件都没匹配到**（= 分区确实不存在）
+    //    不是「探测坏了」，而**正是本守护要报的情形**。DuckDB 对此抛
+    //    "No files found that match the pattern"。若把它归入 probe_error → firing:false，
+    //    守护会在**唯一必须响的场景里静默** —— 直接违反本分支的立论（「消费侧必须自己发现」）。
+    //    仓库既有约定同此：web/lib/qa/c0-runner.ts、c1-runner.ts、item-master.ts 都把该串当「数据未到」。
+    if (/no files found that match the pattern/i.test(msg)) {
+      console.warn(`[monitor] data_freshness 分区缺失（glob 无匹配文件） ${target}: ${msg}`);
+      return {
+        firing: true,
+        alert_key: alertKey,
+        context: { dataset, account, expect_date: expectDate, have_latest: 'none', severity: rule.severity },
+      };
+    }
+    console.error(`[monitor] data_freshness 探测异常 ${target}: ${msg}`);
     return { firing: false, alert_key: alertKey, context: { reason: 'probe_error' } };
   }
 
@@ -1438,7 +1465,7 @@ import { evalDataFreshness } from './data-freshness';
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-freshness.test.ts`
-Expected: PASS（**7 个用例**全绿：存在 / 缺失 / 全空 / 探测异常 / target 非法 / lookback=2 / 账套代入 glob）
+Expected: PASS（**8 个用例**全绿：存在 / 缺失 / 全空 / **glob 无匹配文件（必须 firing）** / 探测异常 / target 非法 / lookback=2 / 账套代入 glob）
 > ⚠️ 数`用例数`时**数 `it(` 块**，不要凭印象——本计划的期望值已因此错过两次（Task 2 写「13」实际 16、此处写「8」实际 7）。
 
 - [ ] **Step 6: Commit**
@@ -1929,7 +1956,45 @@ rm -f /tmp/fv.js /tmp/dryrun.js /tmp/dryrun.sql
 **不通过就不许部署。** 回看 `task-9b-report.md`，四条（视图建得起来 / 能查 / 行过滤真的收窄 / 键形态正确）
 必须有**实测输出原文**。这是本项目唯一能在部署前发现「列名/类型对不上」的关卡——本机没有 OSS 访问，测不出。
 
-- [ ] **Step 1: 合并 PR 并部署架构文档**
+- [ ] **Step 0b: ★ 先部署 function，再合并（次序不可颠倒）**
+
+**为什么必须先上 function**：GHA 的步骤次序是「先迁移(1-3)、后 function(4)」。若直接合并：
+① 迁移 213 先落库；② 而 `get_data_dictionary()`（031 只选既有列）**立刻**暴露 `replenishment_detail`；
+③ 此时网关**还读不到** `scope_key_expr`（postgrest 未重启 → 400 → `factViews=[]` → fail-close）；
+⇒ 出现 **「模型看得见、查不了 → 撞 `forbidden_table` → 转而自由发挥」** 的中间态——
+**正是 spec 写明「本设计不留」、且 206 迁移记录过的失败模式**。
+
+先上 function 恰好是设计意图（`loadFactScopes` 对缺列**容错**：列不存在 → 400 → 返回 `[]` → 不建视图、不进白名单，**不碰** `pgTables`）。
+
+按项目 CLAUDE.md 记录的 **function-only 部署流程**（SSH 直调 InsForge API PUT 已提交的 bundle，再清 Deno 缓存）：
+
+```bash
+# 用工作树里已提交的 index.bundle.js 直调生产（与 scripts/deploy-functions.sh 的 deploy_one 同款）
+scp functions/agent-query/index.bundle.js \
+  root@data.shanhaiyiguo.com:/tmp/agent-query.bundle.js
+ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com '
+cd /opt/data-analytics-platform/deploy && set -a && . ./.env && set +a
+body=$(jq -n --arg slug "agent-query" --arg name "agent-query" --arg desc "agent-query" \
+  --rawfile code /tmp/agent-query.bundle.js \
+  "{slug:\$slug,name:\$name,description:\$desc,code:\$code,status:\"active\"}")
+curl -sf -X PUT -H "Authorization: Bearer $INSFORGE_API_KEY" -H "Content-Type: application/json" \
+  -d "$body" http://localhost:7130/api/functions/agent-query
+# 清 Deno 缓存（关键，否则跑旧代码）
+docker exec deploy-deno-1 rm -rf /deno-dir/* && docker compose restart deno
+rm -f /tmp/agent-query.bundle.js'
+```
+
+验证 function 已上新（此时注册表还没这行，属于正常）：
+
+```bash
+curl -s -X POST https://data.shanhaiyiguo.com/functions/agent-query \
+  -H 'Content-Type: application/json' -d '{"mode":"dictionary"}'
+```
+
+Expected: 200。（若你不愿在合并前动生产，**替代方案**：让 213 以 `exposed=FALSE` 插入数据集，
+再用一条后续迁移在 postgrest 重启后翻成 TRUE——代价是多一次部署，且要多维护一条迁移。）
+
+- [ ] **Step 1: 合并 PR（此时 function 已在生产，迁移这才落库）**
 
 ```bash
 git push origin HEAD
@@ -1937,23 +2002,11 @@ gh pr create --fill
 gh pr merge --squash --delete-branch
 ```
 
-Expected: PR 合并触发 GHA 完整部署（含迁移 212/213）
+Expected: PR 合并触发 GHA 完整部署（含迁移 212/213；function 会被再部署一次，无害）
 
-> 若按仓库惯例 function 与前端分开部署：`functions/` 改动走 GHA，`openclaw/` **不走 GHA**（手动 SSH，见 Step 6）。
+> `functions/` 改动走 GHA；`openclaw/` **不走 GHA**（手动 SSH，见 Step 4）。
 
-- [ ] **Step 2: 确认 function 已上新（先于注册行生效）**
-
-```bash
-curl -s https://data.shanhaiyiguo.com/api/health
-curl -s -X POST https://data.shanhaiyiguo.com/functions/agent-query \
-  -H 'Content-Type: application/json' \
-  -d '{"mode":"dictionary"}'
-```
-
-Expected: health OK；dictionary 返回 200。此步**只看 function 是否在跑**，不看 `replenishment_detail` 是否已出现——
-注册行可能还没落库（迁移尚未跑），这不影响本步通过。
-
-- [ ] **Step 3: 等 GHA 绿，确认迁移 212/213 已执行**
+- [ ] **Step 2: 等 GHA 绿，确认迁移 212/213 已执行**
 
 ```bash
 gh run list --limit 3
@@ -1962,21 +2015,21 @@ gh run watch <run-id>
 
 Expected: 5 个 step 全绿
 
-- [ ] **Step 4: 清 Deno 缓存（function 改动生效的关键步，否则跑旧代码）**
+- [ ] **Step 3: 清 Deno 缓存（function 改动生效的关键步，否则跑旧代码）**
 
 ```bash
 ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
   "cd /opt/data-analytics-platform/deploy && docker exec deploy-deno-1 rm -rf /deno-dir/* && docker compose restart deno"
 ```
 
-- [ ] **Step 5: 刷 PostgREST schema 缓存（新列可见的关键步）**
+- [ ] **Step 4: 刷 PostgREST schema 缓存（新列可见的关键步）**
 
 ```bash
 ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
   "cd /opt/data-analytics-platform/deploy && docker compose restart postgrest"
 ```
 
-- [ ] **Step 6: 部署 SKILL.md（openclaw 是手动 SSH 部署面）**
+- [ ] **Step 5: 部署 SKILL.md（openclaw 是手动 SSH 部署面）**
 
 ```bash
 scp -r openclaw/data-query-plugin \
@@ -1986,7 +2039,7 @@ ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com "docker restart deploy-
 
 Expected: 容器重启成功
 
-- [ ] **Step 6b: 确认 web 容器有 `AGENT_API_KEY`（守护的命门）**
+- [ ] **Step 5b: 确认 web 容器有 `AGENT_API_KEY`（守护的命门）**
 
 守护的 `duckdbQuery` 用 `process.env.AGENT_API_KEY` 调 DuckDB 服务。**若该 env 为空**：
 请求被拒 → `duckdbQuery` 抛错 → evaluator 按设计静默 `firing:false` → **守护静默失效**
@@ -1999,7 +2052,7 @@ ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
 
 Expected: 输出**远大于 1** 的数字（非空）。若为 `1`（仅换行）→ 停，去补 `deploy/.env` 的 `AGENT_API_KEY` 再继续。
 
-- [ ] **Step 7: 确认守护规则已被拾取（evaluator 上线后首个整点）**
+- [ ] **Step 6: 确认守护规则已被拾取（evaluator 上线后首个整点）**
 
 ```bash
 ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
