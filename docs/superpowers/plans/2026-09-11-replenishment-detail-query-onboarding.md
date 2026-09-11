@@ -2175,3 +2175,56 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
   回补完成前，Task 9 写入的 SKILL.md 已标注可用范围 `2026-08-25 起（9/5 后连续）`，模型会主动声明覆盖范围。
 - ⏳ `quantity` ↔ `use_quantity` 换算说明 —— 影响「补货量」默认列的口径表述（当前字典把 `quantity` 描述为基本单位口径）。拿到说明后按需更新 `dataset_columns.description`。
 - 📌 关联调出单号（要货 vs 实发满足率）—— 属增量能力，不在本计划范围。
+
+---
+
+## 附：交付与遗留（PR 评审须知，2026-09-11）
+
+### 已交付（Task 1–9 + 9b，agent 执行完毕，逐个经独立评审）
+
+链路：`parquet(company_id) → registry(source_name 映射) → 网关视图("company_id" AS "system_book_code") → 行级权限 → 模型模板⑪`
+
+**关键证据**：Task 9b 在**生产服务器**用**真实函数**生成视图 SQL 并**对真实 OSS 干跑**通过——
+视图建成、窄授权 1063 行 vs 全量 41036 行（严格收窄）、键形态 `3120-7`。其后所有修复均为 web 侧/文档，
+`git status --porcelain -- functions database/migrations` 为空，**该证据未作废**。
+
+### Task 10–11（人工执行，未做）
+
+部署（**Step 0b：先 SSH 部署 function，再合并**——次序理由见该步）与生产冒烟。
+冒烟需两个授权范围不同的真实账号 + 能登 Lemeng 要货单页面比数的人。
+
+### 部署注意
+
+- **`migrate.sh` 的既有次序脆弱点**：迁移 204 的断言依赖 `_gen` 视图，而 `_gen` 由**迁移之后**的生成器段创建
+  → 全新空库首跑必卡 204；生产因每轮已有上轮产物而不暴露。若某次 `_gen` 刷新失败，迁移会在 **204（早于 212）** 中止
+  → 212/213 不应用。失败是响亮的（GHA 步红），不是半迁移库。
+- `openclaw/` **不走 GHA**，SKILL.md 需手动 SSH 部署（Task 10 Step 5）。
+
+### 转交人的独立议题（超出本计划范围，均已核实）
+
+| # | 议题 | 证据 |
+|---|---|---|
+| 1 | 监控框架：**任何非 firing 结果都会触发「✅ 已恢复」通知** → 探测抖动时告警抖动 | `lifecycle.ts` 的 `isRecovery = !!active && status==='active' && !result.firing`；对所有 evaluator 一视同仁 |
+| 2 | 监控框架：`[{severity}]` 在告警正文渲染成**字面量**（`renderTemplate` 只在 `key in context` 时替换） | 8 条既有种子规则（`020`/`022`）同样带该字面量；一次性修法在 `renderTemplate` 或 `dispatchAlert` |
+| 3 | `migrate.sh`：204 的断言排在其所断言的产物之前 → **全新环境/新客户首次部署必失败** | `scripts/migrate.sh:36-42`（迁移）vs `:47-59`（生成器）；`204:95-101` 的 RAISE |
+| 4 | 建议加守卫：**§8.1 表格 ⟷ `CheckType` 双向全等**（本次漂移正源于无人守） | Task 8 已把两者做成集合相等（10 行 ⟷ 10 成员），但无自动检查 |
+| 5 | 建议加守卫：**引擎拓扑行 ⟷ `runtime.ts` 各桶 checkTypes** 逐一对齐 | Task 9b 修复波已把该行锚定为「逐一对齐」，同样是人工同步义务 |
+
+### 转交其他系统的数据契约（见 spec §数据契约表）
+
+要求**全量回补到 2026-07-01**、旧分区不删、保留原始 `state_name`、保留 `company_id`（**不需要改名**），
+并给出 `quantity` ↔ `use_quantity` 换算说明；*（建议）*暴露关联调出单号。
+
+> **回补落地时要一并做的事**：把「数据可用范围」写进 `datasets.description`/字典，并**重跑一次真实 parquet 干跑**
+> （那次会改迁移，干跑证据需刷新）。当前该信息由 SKILL.md 模板⑪ 承载。
+
+### 遗留 nit（不阻断合并，供顺手清理）
+
+- `web/lib/monitor/evaluators/data-freshness.ts:27` 的注释声称一致性检查「顺带拦住 `'a:b:c'` 静默截断」——**不成立**：
+  首段与 `threshold.dataset` 同名时检查通过，`':c'` 仍被丢弃。改注释或补 `target.split(':').length !== 2` 校验。
+- 同文件：`threshold.glob_template` 为空时 `read_parquet('')` 会抛同款 `No files found …` 文案 →
+  被 A1 分支当成 high「数据未到达」上报（实为配置写漏）。可选加固：校验 `glob_template` 非空。
+- `sqlLit` 有 3 份副本（`functions/_shared/fact-view.ts`、`web/lib/monitor/evaluators/sql.ts`，另 `agent-query/index.js` 用前者）——
+  跨 Deno/Next 运行时的**有意**分离，已注释说明，不动。
+- `spec.name` 未做标识符转义（仅迁移可写该值，无用户/LLM 路径）；`scope_key_expr` 的「塌缩成单值」残留越权面
+  （机械校验挡不住，靠窄授权冒烟断言 + 登记时人工核）。两者均已裁定接受。
