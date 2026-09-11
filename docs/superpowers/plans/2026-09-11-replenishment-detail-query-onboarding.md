@@ -1711,11 +1711,19 @@ grep -n "data_volume\|data_freshness\|已实现 4/8\|待实现" docs/architectur
      本任务**只需确认**它已是这个措辞，**不要再改**（避免同一格被改两次）。
    - 同时确认 `data_integrity` 行仍是 `⏳ 未实现`（它本就没实现，**不要顺手改**）。
 2. **§8.1 引擎拓扑行**（约 978 行）现为「… / 每日 `data_integrity`。」→ 改为「… / 每日 `data_integrity`·`data_volume`。」。
-3. **§十一 实现状态汇总**（约 1436-1437 行）两行：
-   - 「监控告警体系 v1 | 🔶 部分实现 | 已实现 **4/8**：…；未实现：request_fail/**data_freshness**/**data_integrity**/contact_sync」
-     → 改为「已实现 **6/9**：token_expire/collect_fail/service_down/collect_stall/**data_freshness**/**data_volume**；
-     未实现：request_fail/data_integrity/contact_sync」（分母 8→9 因为新增了 `data_volume`）。
-   - 「监控待实现 **4 项** evaluator」→ 改为「**3 项**」。
+3. **补上 `novu_health` 行（既存缺口）**：`CheckType` 实际有 **10** 个成员，而 §8.1 表格只有 9 行 ——
+   `novu_health` **有 evaluator（`EVALUATORS:14`）却从未进表**，也不会被任何一格计数。
+   在 `service_down` 之后补一行（它同属「服务探活桶」，见 runtime.ts 的 `SERVICE_DOWN_BUCKET_TYPES`）：
+
+   | `novu_health` | Novu 控制面探活（`NOVU_API_URL` 空=禁用）（spec §5.5） | 探活失败 | ✅ 已实现 |
+
+4. **§十一 实现状态汇总**（约 1436-1437 行）两行 —— 数字按**补上 novu_health 后的真实口径**算：
+   - 已实现 = token_expire / collect_fail / service_down / collect_stall / **novu_health** / **data_freshness** / **data_volume** = **7**
+   - 总数 = 10；未实现 = request_fail / data_integrity / contact_sync = **3**
+   - 「监控告警体系 v1 | 🔶 部分实现 | 已实现 **4/8**：…；未实现：…」
+     → 「已实现 **7/10**：token_expire/collect_fail/service_down/collect_stall/novu_health/data_freshness/data_volume；
+     未实现：request_fail/data_integrity/contact_sync」
+   - 「监控待实现 **4 项** evaluator」→ 「**3 项**」。
 
 > **为什么全放在本任务**：这三处的聚合口径（清单数量/总数）只有在两个 evaluator 都落地后才成立。
 > 若 Task 7 也动汇总行，同一行会被改两次且中途数字必然有一处不对。故 Task 7 **只翻自己那一行表格状态**，
