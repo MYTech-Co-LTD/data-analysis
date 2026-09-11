@@ -170,9 +170,20 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 
 | 规则 | check_type | 桶（节奏） | 判据 | 严重度 |
 |---|---|---|---|---|
-| 分区到达 | `data_freshness` | `runHourlyBucket`（**每小时**） | 昨日 `<账套>/<昨日>/all.parquet` 不存在 | high |
-| 行数异常 | `data_integrity` | `runDailyBucket`（**每日 03:00**） | 昨日行数 vs 近 7 日中位数偏离 > 50% | high |
+| 分区到达 | `data_freshness`（**复用**） | `runHourlyBucket`（**每小时**） | 昨日 `<账套>/<昨日>/all.parquet` 不存在 | high |
+| 行数异常 | `data_volume`（**新增**） | `runDailyBucket`（**每日 03:00**） | 昨日行数 vs 近 7 日中位数偏离 > 50% | high |
 | 覆盖完整性 | 两条规则均须**按账套各配一行** | — | 禁止看合计——会被另一账套掩盖 | — |
+
+**check_type 语义裁定（2026-09-11，人决策）**：§8.1 的 `check_type` 清单表格里，`data_freshness` / `data_integrity`
+两行**早已声明但从未实现，且声明的是与我们不同的机制**——`data_freshness` = 「距今 > `stale_hours`」、
+`data_integrity` = 「明细 count vs PG 汇总 差异率」（后者并注明「部分职能由 QA 体系承担」，
+`web/lib/qa/config/detail-sources.json` + C1 链在真实承担）。裁定：
+
+- `data_freshness` **复用** —— 它本就意为「数据够不够新」，我们的分区到达检查是它的一个具体实例。
+  须把表格该行的「数据源/触发」**拓宽**为兼容两种含义。
+- 行数异常**新增 `data_volume`** —— 它相对中位数偏离是另一根轴（数据量异常），
+  用 `data_integrity` 的名字会**覆盖一个已有归属的架构槽位**。`data_integrity` 保持 ⏳ 未实现不动。
+- 新类型必须挂进 `runDailyBucket`（`runScan` 只加载桶内 `checkTypes` 的规则，不挂桶 = 规则永不被评估 = 静默失效）。
 
 **部署次序安全**：`runScan` 对「无 evaluator 的规则」是 `console.warn` + `continue`（per-rule `try/catch` 双层隔离），
 所以**规则可以先于 evaluator 落库**——只会 warn 跳过它自己，不会拖垮同轮的 `contact_sync` 等既有规则。**不动调度**。
@@ -236,7 +247,7 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 2. 迁移 `212_registry_fact_scope.sql`：`datasets.scope_key_expr` 列 + 注释
 3. 迁移 `213_replenishment_detail_registry.sql`：`datasets` 行 + `dataset_columns` 列描述 + 两条 `monitor_rules`
 4. `functions/_shared/fact-view.ts`（新增纯函数，供单测锁定）+ `functions/agent-query/index.js` 接线：`loadRegistry` **以独立请求 + 独立 try/catch** 读 `scope_key_expr` 与逐数据集列（**不得并入主 `datasets?select=`**）；`runDuckdb` 通用 fact 视图构建（含表达式三条校验、按注册列投影、硬编码视图名跳过）；`allowedTables` 由注册表派生
-5. `web/lib/monitor/`：`evaluators/data-freshness.ts` + `data-integrity.ts`，注册进 `EVALUATORS`；`EvalDeps` 加必填 `duckdbQuery` 并在 `runtime.ts` `buildDeps` 注入 —— ⚠️ 存量 evaluator 测试 fake 需同步补该字段（机械，3~4 文件）
+5. `web/lib/monitor/`：`evaluators/data-freshness.ts` + `data-volume.ts`（**不是 `data-integrity`**，见 §方案3 语义裁定），注册进 `EVALUATORS`；`CheckType` 联合新增 `data_volume` 并挂进 `runDailyBucket`；`EvalDeps` 加必填 `duckdbQuery` 并在 `runtime.ts` `buildDeps` 注入 —— ⚠️ 存量 evaluator 测试 fake 需同步补该字段（机械，3~4 文件）
 6. `openclaw/data-query-plugin/skills/retail-query/SKILL.md`：⑫补货模板
 7. 测试：`web/lib/agent-query/__tests__/` 扩 `validateSql`/表达式校验单测；`web/lib/monitor/evaluators/__tests__/` 加两个 evaluator 单测；三类身份权限冒烟；分毫级准确性冒烟
 8. 部署后 `docker compose restart postgrest` 刷 schema 缓存（新增列，仓库已知坑）
@@ -245,7 +256,7 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 
 - **字典**：`DELETE FROM datasets WHERE name='replenishment_detail'`（级联删列描述）
 - **网关**：`scope_key_expr` 列保留无害（对 `IS NULL` 即不建视图）；如需完全回退，还原 `allowedTables` 写死版本
-- **守护**：`UPDATE monitor_rules SET enabled=false WHERE check_type IN ('data_freshness','data_integrity')`
+- **守护**：`UPDATE monitor_rules SET enabled=false WHERE check_type IN ('data_freshness','data_volume')`
 - **数据本身零改动**（视图为查询时实时构建，无物化存储）
 
 ## 依赖与待办

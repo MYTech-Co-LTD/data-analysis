@@ -27,7 +27,11 @@
   现场 esbuild 产物 ≠ 已提交产物 → pre-commit 直接失败）。生产服务器**无 node/npx**，部署的就是这个提交的 bundle，
   漏提交 = 生产静默跑旧代码。凡动 `functions/agent-query/index.js` 或 `functions/_shared/*`，都要跑：
   `npx --yes esbuild functions/agent-query/index.js --bundle --format=cjs --outfile=functions/agent-query/index.bundle.js`
-- 回滚：字典 `DELETE FROM datasets WHERE name='replenishment_detail'`；守护 `UPDATE monitor_rules SET enabled=false WHERE check_type IN ('data_freshness','data_integrity')`。
+- 回滚：字典 `DELETE FROM datasets WHERE name='replenishment_detail'`；守护 `UPDATE monitor_rules SET enabled=false WHERE check_type IN ('data_freshness','data_volume')`。
+- **check_type 语义裁定（2026-09-11，人决策）**：`data_freshness` **复用**（它本就意为「数据够不够新」，我们的分区到达检查是它的一个具体实例），
+  但须把 §8.1 表格该行的「数据源/触发」**拓宽**以覆盖两种含义；行数异常**新增类型 `data_volume`**（不走 `data_integrity`）——
+  `data_integrity` 文档原义是「DuckDB 明细 count vs PG 汇总 差异率」且已注明「部分职能由 QA 体系承担」（`web/lib/qa/config/detail-sources.json` + C1 链在真实承担），
+  用该名字装行数异常会覆盖一个已有归属的架构槽位。**`data_integrity` 保持 ⏳ 未实现不动**。
 
 ## File Structure
 
@@ -777,13 +781,15 @@ VALUES
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
   threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template, enabled=TRUE;
 
--- ===== 4. 行数异常守护（data_integrity，runDailyBucket 每日 03:00）=====
+-- ===== 4. 行数异常守护（data_volume，runDailyBucket 每日 03:00）=====
+-- 类型名用 data_volume 而非 data_integrity：后者的文档原义是「明细 count vs PG 汇总 差异率」（且已被 QA 体系承担），
+-- 行数相对中位数偏离是另一根轴（数据量异常），不该占用那个槽位。见 spec §方案3。
 INSERT INTO monitor_rules (name, check_type, target, threshold, severity, template, suppress_window_seconds, enabled)
 VALUES
- ('补货行数异常·3120','data_integrity','replenishment_detail:3120',
+ ('补货行数异常·3120','data_volume','replenishment_detail:3120',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
   'high','补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE),
- ('补货行数异常·64188','data_integrity','replenishment_detail:64188',
+ ('补货行数异常·64188','data_volume','replenishment_detail:64188',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
   'high','补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE)
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
@@ -864,12 +870,39 @@ git commit -m "feat(migration): 213 补货明细数据集注册 + 到达/完整�
 > ⚠️ `vitest run` 用 esbuild 转译，**不做类型检查**——缺字段的 fake 在 `npm test` 里不会报错，只有 `npm run build`（tsc）才会。
 > 所以本任务的验证必须是 `npm run build`。
 
-- [ ] **Step 1: 在 `types.ts` 的 `EvalDeps` 加字段**
+- [ ] **Step 1: 在 `types.ts` 的 `CheckType` 联合里新增 `data_volume`**
+
+`web/lib/monitor/types.ts` 顶部现有：
+
+```ts
+export type CheckType =
+  | 'service_down'
+  | 'novu_health'
+  | 'token_expire'
+  | 'collect_fail'
+  | 'collect_stall'
+  | 'request_fail'
+  | 'data_freshness'
+  | 'data_integrity'
+  | 'contact_sync';
+```
+
+改为在 `'data_integrity'` 之后新增一行：
+
+```ts
+  | 'data_integrity'
+  | 'data_volume'
+```
+
+> 为什么不复用 `data_integrity`：该类型的文档原义是「DuckDB 明细 count vs PG 汇总 差异率」，且已注明由 QA 体系承担；
+> 行数相对中位数偏离是另一根轴。**`data_integrity` 保持不动**。详见 Global Constraints 的 check_type 语义裁定。
+
+- [ ] **Step 1b: 在 `types.ts` 的 `EvalDeps` 加字段**
 
 `web/lib/monitor/types.ts`，在 `EvalDeps` 的 `getCollectTasks` 之后追加：
 
 ```ts
-  // data_freshness / data_integrity 用：直接跑 DuckDB 查询（web 容器无 boto3，DuckDB 服务即现成的 OSS 出口）。
+  // data_freshness / data_volume 用：直接跑 DuckDB 查询（web 容器无 boto3，DuckDB 服务即现成的 OSS 出口）。
   // 返回 data 数组；非 2xx 或 success=false 时抛错（由 evaluator 决定「探测异常不报警」）。
   duckdbQuery: (sql: string) => Promise<Array<Record<string, any>>>;
 ```
@@ -878,6 +911,26 @@ git commit -m "feat(migration): 213 补货明细数据集注册 + 到达/完整�
 
 Run: `cd web && npm run build`
 Expected: FAIL —— `Type ... is missing the following properties ...: duckdbQuery`（5 个测试文件处）
+
+- [ ] **Step 2b: 把 `data_volume` 挂进 `runDailyBucket`（否则规则永远不会被扫到）**
+
+`web/lib/monitor/runtime.ts` 的 `runDailyBucket` 现为：
+
+```ts
+export async function runDailyBucket() {
+  try {
+    await runScan(new SdkStore(newClient()), ['data_integrity'] as CheckType[], buildDeps(), EVALUATORS);
+```
+
+改为：
+
+```ts
+export async function runDailyBucket() {
+  try {
+    await runScan(new SdkStore(newClient()), ['data_integrity', 'data_volume'] as CheckType[], buildDeps(), EVALUATORS);
+```
+
+> `runScan` 只加载 `checkTypes` 列表内的规则——新类型不挂桶 = 规则落库也永不被评估（静默失效）。
 
 - [ ] **Step 3: 在 `runtime.ts` 顶部加 env 常量**
 
@@ -1180,9 +1233,9 @@ import { evalDataFreshness } from './data-freshness';
   data_freshness: evalDataFreshness,
 ```
 
-**顺带收口文档状态（Task 1 交接项）**：`docs/architecture.md` §8.1 的 `check_type` 清单表格里，`data_freshness`
-一行现标着「⏳ 未实现」。本任务让它真正实现，**把该行的状态列改为已实现**（Task 1 当时未改是正确的——那时它确实还没实现）。
-改前先 `grep -n "data_freshness" docs/architecture.md` 定位；只改状态单元格，不动表格结构。
+**顺带收口文档状态（Task 1 交接项）**：Task 1 的修复轮已把 §8.1 表格里 `data_freshness` 行的「数据源/触发」
+**拓宽**为兼容两种含义（①通用陈旧度 ②外部数据集分区到达），状态仍是 ⏳ 未实现。本任务让它真正实现，
+**把该行的状态列改为已实现**。改前先 `grep -n "data_freshness" docs/architecture.md` 定位；只改状态单元格，不动表格结构。
 
 - [ ] **Step 5: Run test to verify it passes**
 
@@ -1192,7 +1245,7 @@ Expected: PASS（8 个用例全绿）
 - [ ] **Step 6: Commit**
 
 ```bash
-git add web/lib/collect.ts web/lib/monitor/evaluators/sql.ts web/lib/monitor/evaluators/data-freshness.ts web/lib/monitor/evaluators/__tests__/data-freshness.test.ts web/lib/monitor/evaluators/index.ts
+git add web/lib/collect.ts web/lib/monitor/evaluators/sql.ts web/lib/monitor/evaluators/data-freshness.ts web/lib/monitor/evaluators/__tests__/data-freshness.test.ts web/lib/monitor/evaluators/index.ts docs/architecture.md
 git commit -m "feat(monitor): data_freshness evaluator——外部管线数据到达守护（探测异常不误报）
 
 顺带把 collect.ts 的中国时区日期逻辑抽成可注入的纯函数 chinaDateAt（行为等价）"
@@ -1200,24 +1253,27 @@ git commit -m "feat(monitor): data_freshness evaluator——外部管线数据�
 
 ---
 
-### Task 8: `data_integrity` evaluator —— 行数异常守护
+### Task 8: `data_volume` evaluator —— 行数异常守护
 
 **Files:**
-- Create: `web/lib/monitor/evaluators/data-integrity.ts`
-- Test: `web/lib/monitor/evaluators/__tests__/data-integrity.test.ts`
+- Create: `web/lib/monitor/evaluators/data-volume.ts`
+- Test: `web/lib/monitor/evaluators/__tests__/data-volume.test.ts`
 - Modify: `web/lib/monitor/evaluators/index.ts`
 
 **Interfaces:**
 - Consumes: `EvalDeps.duckdbQuery`（Task 6）、`chinaDateAt(base, offsetDays)`（Task 7 新增于 `web/lib/collect.ts`）、`sqlLit`（`./sql`，Task 7 新建）
-- Produces: `export const evalDataIntegrity: Evaluator`
+- Produces: `export const evalDataVolume: Evaluator`
+
+> **类型名是 `data_volume` 不是 `data_integrity`**：后者文档原义为「明细 count vs PG 汇总 差异率」（已被 QA 体系承担），
+> 行数相对中位数偏离是另一根轴。见 Global Constraints 的 check_type 语义裁定。不要"顺手"改回去。
 
 - [ ] **Step 1: Write the failing test**
 
-创建 `web/lib/monitor/evaluators/__tests__/data-integrity.test.ts`：
+创建 `web/lib/monitor/evaluators/__tests__/data-volume.test.ts`：
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { evalDataIntegrity } from '../data-integrity';
+import { evalDataVolume } from '../data-volume';
 import type { MonitorRule, EvalDeps } from '../../types';
 
 const GLOB = 's3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet';
@@ -1225,7 +1281,7 @@ const GLOB = 's3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account
 const rule = (target: string, extra: Record<string, any> = {}): MonitorRule => ({
   id: 1,
   name: `补货行数异常·${target}`,
-  check_type: 'data_integrity',
+  check_type: 'data_volume',
   target,
   threshold: {
     dataset: 'replenishment_detail',
@@ -1264,39 +1320,39 @@ const WEEK = [
   { d: '2026-09-05', n: 612 },
 ];
 
-describe('evalDataIntegrity', () => {
+describe('evalDataVolume', () => {
   it('昨日行数正常 → 不 firing', async () => {
-    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 589 }, ...WEEK]));
+    const r = await evalDataVolume(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 589 }, ...WEEK]));
     expect(r.firing).toBe(false);
-    expect(r.alert_key).toBe('data_integrity:replenishment_detail:3120');
+    expect(r.alert_key).toBe('data_volume:replenishment_detail:3120');
   });
 
   it('昨日行数骤降（半截数据）→ firing + context', async () => {
-    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 40 }, ...WEEK]));
+    const r = await evalDataVolume(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 40 }, ...WEEK]));
     expect(r.firing).toBe(true);
     expect(r.context).toMatchObject({ account: '3120', date: '2026-09-10', rows: 40 });
     expect(Number(r.context.deviation_pct)).toBeGreaterThan(50);
   });
 
   it('昨日行数暴涨 → firing', async () => {
-    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 5000 }, ...WEEK]));
+    const r = await evalDataVolume(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 5000 }, ...WEEK]));
     expect(r.firing).toBe(true);
   });
 
   it('样本不足（< min_samples）→ 不 firing（冷启动保护）', async () => {
-    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 3 }, { d: '2026-09-09', n: 580 }]));
+    const r = await evalDataVolume(rule('replenishment_detail:3120'), deps([{ d: '2026-09-10', n: 3 }, { d: '2026-09-09', n: 580 }]));
     expect(r.firing).toBe(false);
     expect(r.context).toMatchObject({ reason: 'insufficient_samples' });
   });
 
   it('昨日分区不存在 → 不 firing（交由 data_freshness 负责）', async () => {
-    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps(WEEK));
+    const r = await evalDataVolume(rule('replenishment_detail:3120'), deps(WEEK));
     expect(r.firing).toBe(false);
     expect(r.context).toMatchObject({ reason: 'no_data_for_date' });
   });
 
   it('中位数为 0 → 不 firing（防除零）', async () => {
-    const r = await evalDataIntegrity(
+    const r = await evalDataVolume(
       rule('replenishment_detail:3120'),
       deps([{ d: '2026-09-10', n: 10 }, { d: '2026-09-09', n: 0 }, { d: '2026-09-08', n: 0 }, { d: '2026-09-07', n: 0 }]),
     );
@@ -1305,7 +1361,7 @@ describe('evalDataIntegrity', () => {
   });
 
   it('探测异常 → 不 firing', async () => {
-    const r = await evalDataIntegrity(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
+    const r = await evalDataVolume(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
     expect(r.firing).toBe(false);
   });
 });
@@ -1313,19 +1369,20 @@ describe('evalDataIntegrity', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-integrity.test.ts`
-Expected: FAIL —— `Failed to resolve import "../data-integrity"`
+Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-volume.test.ts`
+Expected: FAIL —— `Failed to resolve import "../data-volume"`
 
 - [ ] **Step 3: Write minimal implementation**
 
-创建 `web/lib/monitor/evaluators/data-integrity.ts`：
+创建 `web/lib/monitor/evaluators/data-volume.ts`：
 
 ```ts
 import type { EvalDeps, EvalResult, Evaluator } from '../types';
 import { chinaDateAt } from '../../collect';
 import { sqlLit } from './sql';
 
-// 数据行数完整性守护（spec 2026-09-11-replenishment-detail-query-onboarding-design §方案3）
+// 数据量异常守护（spec 2026-09-11-replenishment-detail-query-onboarding-design §方案3）
+// 类型名 data_volume：与 data_integrity（明细 vs 汇总差异率，已被 QA 体系承担）是不同轴，不要混用。
 // 目的：抓「半截数据静默入库」——分区到了但行数骤降（如分页中断只写了一部分）。
 // rule.target = '<dataset>:<账套>'；threshold = {dataset, glob_template, lookback_days,
 //   median_window, deviation_pct, min_samples}
@@ -1340,13 +1397,13 @@ function median(nums: number[]): number {
   return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
 }
 
-export const evalDataIntegrity: Evaluator = async (
+export const evalDataVolume: Evaluator = async (
   rule,
   deps: EvalDeps,
 ): Promise<EvalResult> => {
   const t = (rule.threshold ?? {}) as Record<string, any>;
   const target = String(rule.target ?? '');
-  const alertKey = `data_integrity:${target}`;
+  const alertKey = `data_volume:${target}`;
   const [dataset, account] = target.split(':');
   if (!dataset || !account) {
     return { firing: false, alert_key: alertKey, context: { reason: 'bad_target' } };
@@ -1365,7 +1422,7 @@ export const evalDataIntegrity: Evaluator = async (
         `FROM read_parquet(${sqlLit(glob)}, filename=true) GROUP BY 1`,
     )) as Array<{ d: string; n: number }>;
   } catch (e) {
-    console.error(`[monitor] data_integrity 探测异常 ${target}:`, (e as Error)?.message ?? e);
+    console.error(`[monitor] data_volume 探测异常 ${target}:`, (e as Error)?.message ?? e);
     return { firing: false, alert_key: alertKey, context: { reason: 'probe_error' } };
   }
 
@@ -1412,24 +1469,29 @@ export const evalDataIntegrity: Evaluator = async (
 `web/lib/monitor/evaluators/index.ts`，import 区加：
 
 ```ts
-import { evalDataIntegrity } from './data-integrity';
+import { evalDataVolume } from './data-volume';
 ```
 
 `EVALUATORS` 对象里加一行：
 
 ```ts
-  data_integrity: evalDataIntegrity,
+  data_volume: evalDataVolume,
 ```
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-integrity.test.ts`
+Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-volume.test.ts`
 Expected: PASS（7 个用例全绿）
 
-- [ ] **Step 5b: 收口 §8.1 表格里 `data_integrity` 的「⏳ 未实现」状态（Task 1 交接项）**
+- [ ] **Step 5b: 把 §8.1 表格里 `data_volume` 行的状态改为已实现**
 
-`grep -n "data_integrity" docs/architecture.md` 定位 §8.1 `check_type` 清单表格，把该行状态列改为已实现。
-只改状态单元格，不动表格结构。
+Task 1 的修复轮已在 §8.1 表格中新增 `data_volume` 一行（初始标 ⏳ 未实现）。本任务让它真正实现，翻转该行状态。
+
+```bash
+grep -n "data_volume" docs/architecture.md
+```
+
+只改状态单元格，不动表格结构。**同时确认 `data_integrity` 行仍是 ⏳ 未实现**（它本就没实现，不要顺手改）。
 
 - [ ] **Step 6: 全量单测 + 类型检查**
 
@@ -1439,8 +1501,11 @@ Expected: 都 PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add web/lib/monitor/evaluators/data-integrity.ts web/lib/monitor/evaluators/__tests__/data-integrity.test.ts web/lib/monitor/evaluators/index.ts
-git commit -m "feat(monitor): data_integrity evaluator——外部管线行数骤降守护（含冷启动保护）"
+git add web/lib/monitor/evaluators/data-volume.ts web/lib/monitor/evaluators/__tests__/data-volume.test.ts web/lib/monitor/evaluators/index.ts docs/architecture.md
+git commit -m "feat(monitor): data_volume evaluator——外部管线行数骤降守护（含冷启动保护）
+
+新增 CheckType data_volume 并挂进 runDailyBucket；data_integrity 保持未实现不动
+（其原义为明细 vs 汇总差异率，已由 QA 体系承担）"
 ```
 
 ---
