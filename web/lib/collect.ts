@@ -188,12 +188,17 @@ export function getTodayChina(): string {
   return chinaTime.toISOString().split('T')[0];
 }
 
-// 中国时区，相对今天偏移 offsetDays 天的日期（YYYY-MM-DD）。用于滚动回溯窗口 [今天-N, 今天]
-export function getDateOffsetChina(offsetDays: number): string {
-  const now = new Date();
-  const china = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+// 中国时区（UTC+8，无夏令时）下 base 偏移 offsetDays 天的日期，YYYY-MM-DD。
+// 抽成纯函数以便单测注入确定的时间基准（守护 evaluator 用 deps.now）。
+export function chinaDateAt(base: Date, offsetDays: number): string {
+  const china = new Date(base.getTime() + 8 * 60 * 60 * 1000);
   china.setDate(china.getDate() + offsetDays);
   return china.toISOString().split('T')[0];
+}
+
+// 中国时区，相对今天偏移 offsetDays 天的日期（YYYY-MM-DD）。用于滚动回溯窗口 [今天-N, 今天]
+export function getDateOffsetChina(offsetDays: number): string {
+  return chinaDateAt(new Date(), offsetDays);
 }
 
 // 仅查 count（不采集），scheduler 对账驱动用：返 API 指定 dates 的总数
