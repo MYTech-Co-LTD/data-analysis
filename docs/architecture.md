@@ -975,7 +975,7 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 
 ### 8.1 监控告警体系（2026-07-08 设计，详见 `docs/superpowers/specs/2026-07-08-monitoring-system-design.md`）
 
-**引擎拓扑**：复用 web 端 node-cron（`web/lib/scheduler.ts`），新增「监控扫描」调度，不新增容器/function。扫描按 check_type 自然节奏分桶：每分钟 `service_down` / 每 5 分钟 `collect_fail`·`request_fail`·`token_expire` / 每小时 `data_freshness`·`contact_sync` / 每日 `data_integrity`。防重入复用 scheduler 现有 globalThis 锁。
+**引擎拓扑**：复用 web 端 node-cron（`web/lib/scheduler.ts`），新增「监控扫描」调度，不新增容器/function。扫描按 check_type 自然节奏分桶：每分钟 `service_down` / 每 5 分钟 `collect_fail`·`request_fail`·`token_expire` / 每小时 `data_freshness`·`contact_sync` / 每日 `data_integrity`·`data_volume`。防重入复用 scheduler 现有 globalThis 锁。
 
 **数据模型**（新表）：
 - `monitor_rules`：规则定义（check_type 枚举 + target + threshold(jsonb) + severity + touser + template + suppress_window + enabled）。
@@ -993,7 +993,7 @@ spec：`docs/superpowers/specs/2026-08-15-novu-push-platform-design.md` + IAM �
 | `request_fail` | `external_request_logs` | 窗口失败率 > failure_rate | ⏳ 未实现 |
 | `data_freshness` | ①（通用）PG 汇总表 + DuckDB parquet 最新日期；②（外部管线数据集）OSS 分区是否存在 | ①距今 > stale_hours；②期望业务日分区缺失 | 🔶 部分实现（② 外部管线分区到达已实现；① 通用陈旧度未实现） |
 | `data_integrity` | DuckDB 明细 count vs PG 汇总 | 差异率 > diff_rate | ⏳ 未实现（部分职能由 QA 体系承担，§10.10 L4） |
-| `data_volume` | 外部管线数据集 OSS 分区行数 | vs 近 N 个有数日中位数偏离 > deviation_pct | ⏳ 未实现 |
+| `data_volume` | 外部管线数据集 OSS 分区行数 | vs 近 N 个有数日中位数偏离 > deviation_pct | ✅ 已实现 |
 | `contact_sync` | `org_users.updated_at` + 回调最近时间 | 距上次同步 > max_age_hours | ⏳ 未实现 |
 
 **数据到达/完整性守护（2026-09-11 落地）**：`CheckType` 早已声明 `data_freshness` / `data_integrity` 两个类型但一直无 evaluator（空跑）；本次启用前者，并新增 `data_volume`（见上表）。
@@ -1433,8 +1433,8 @@ spec：`docs/superpowers/specs/2026-08-02-report-phase2-frontend-boards-design.m
 | carry 维表物化（C3） | ✅ 已实现 | /carry-dims（cron 04:33 兜底 + 变更回调），agent-query 查询侧读 dim parquet |
 | 美团数据源接入 | ⏳ 待讨论 | 架构待确认 |
 | 饿了么数据源接入 | ⏳ 待讨论 | 架构待确认 |
-| 监控告警体系 v1 | 🔶 部分实现 | 已实现 4/8：token_expire/collect_fail/service_down/collect_stall；未实现：request_fail/data_freshness/data_integrity/contact_sync（§8.1 状态表） |
-| 监控待实现 4 项 evaluator | ⏳ 待排期 | §8.1；data_integrity 部分职能已由 QA 体系承担（§10.10 L4） |
+| 监控告警体系 v1 | 🔶 部分实现 | 已实现 6/9：token_expire/collect_fail/service_down/collect_stall/data_freshness/data_volume；未实现：request_fail/data_integrity/contact_sync（§8.1 状态表） |
+| 监控待实现 3 项 evaluator | ⏳ 待排期 | §8.1；data_integrity 部分职能已由 QA 体系承担（§10.10 L4） |
 | 模块化+插件化重构 | 🔶 进行中 | A+B-lite，P0–P5；P1（jobs/collectors 目录化+注册表）已落地，P3（function _shared 共享打包）已落地 |
 | 语义层 Cube 全替代 | ⏳ spec 已确认待实施 | §九 2026-08-15；生成器退役清单见 §10.10 |
 
