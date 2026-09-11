@@ -933,7 +933,7 @@ VALUES
   'high','🔴 [{severity}] 补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE),
  ('补货到达·64188','data_freshness','replenishment_detail:64188',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1}'::jsonb,
-  'high','补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE)
+  'high','🔴 [{severity}] 补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE)
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
   threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template;
 -- ↑ 有意**不**写 `enabled=TRUE`：migrate.sh 每次部署全量重跑全部迁移，若这里强制回 TRUE，
@@ -950,7 +950,7 @@ VALUES
   'high','🔴 [{severity}] 补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE),
  ('补货行数异常·64188','data_volume','replenishment_detail:64188',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
-  'high','补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE)
+  'high','🔴 [{severity}] 补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE)
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
   threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template;
 -- ↑ 有意**不**写 `enabled=TRUE`：migrate.sh 每次部署全量重跑全部迁移，若这里强制回 TRUE，
