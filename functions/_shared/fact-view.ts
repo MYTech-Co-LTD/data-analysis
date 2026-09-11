@@ -38,18 +38,31 @@ const EXPR_FORBIDDEN_KEYWORDS = [
   "ATTACH", "DETACH", "COPY", "PRAGMA", "GRANT", "REVOKE", "TRUNCATE", "CALL",
 ];
 
+// 剥掉 SQL 字符串字面量（单引号，'' 为转义）与行注释，再做关键字/列名扫描。
+// ★ 必须先去字面量，否则：
+//   ① 列名检查可被常量折叠绕过——`'branch_num' || '3120-7'` 文本里含列名却折叠成常量，
+//      `WHERE <常量> IN ('3120-7')` 恒真 → 行过滤失效 → 被授权单店者看见整账套（2026-09-11 评审实证）；
+//   ② 关键字检查会误拒 `regexp_replace(branch_name, 'delete', '')` 这类含禁词字面量的合法表达式。
+//   fail-close 方向：剥完若不再含任何列名 → scope_expr_no_column 拒绝。
+function stripSqlLiterals(expr: string): string {
+  return String(expr)
+    .replace(/'(?:[^']|'')*'/g, "''") // 字符串字面量 → 空串占位
+    .replace(/--[^\n]*/g, " "); // 行注释
+}
+
 // 门店复合键表达式校验。非法抛错（message = 错误码），调用方据此 fail-close（不建视图 + 不进白名单）。
 export function validateScopeKeyExpr(expr: string, columnNames: string[]): void {
   const t = String(expr ?? "").trim();
   if (!t) throw new Error("empty_scope_expr");
-  if (t.includes(";")) throw new Error("scope_expr_semicolon");
-  const u = t.toUpperCase();
+  if (t.includes(";")) throw new Error("scope_expr_semicolon"); // 分号在字面量里也无害，但拒绝更安全
+  const bare = stripSqlLiterals(t); // ← 关键字/列名扫描一律在剥离字面量后的文本上做
+  const u = bare.toUpperCase();
   for (const kw of EXPR_FORBIDDEN_KEYWORDS) {
     if (new RegExp("\\b" + kw + "\\b").test(u)) throw new Error("scope_expr_forbidden_keyword");
   }
-  // 必须引用本数据集至少一列（挡纯常量，如 '3120-7'）
+  // 必须引用本数据集至少一列（**字面量里的列名不算**，挡常量折叠）
   const hit = columnNames.some((c) =>
-    new RegExp("\\b" + String(c).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(t)
+    new RegExp("\\b" + String(c).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(bare)
   );
   if (!hit) throw new Error("scope_expr_no_column");
 }

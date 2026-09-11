@@ -52,6 +52,26 @@ describe("validateScopeKeyExpr", () => {
     expect(() => validateScopeKeyExpr("'3120-7'", COLS)).toThrowError(/scope_expr_no_column/);
   });
 
+  // ★ 常量折叠绕过（2026-09-11 评审实证）：列名只出现在字符串字面量里 → 必须同样拒绝，
+  //   否则 WHERE <常量> IN ('3120-7') 恒真 = 行过滤失效 = 越权。
+  it("列名只在字面量里 → 仍拒绝（防常量折叠越权）", () => {
+    expect(() => validateScopeKeyExpr("'branch_num' || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    expect(() => validateScopeKeyExpr("left('branch_num', 0) || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    expect(() =>
+      validateScopeKeyExpr("regexp_replace('branch_num', '.*', '3120-7')", COLS)
+    ).toThrowError(/scope_expr_no_column/);
+  });
+
+  it("字面量里含禁词不误拒（关键字扫描同样先剥字面量）", () => {
+    expect(() =>
+      validateScopeKeyExpr("regexp_replace(branch_name, 'delete', '')", COLS)
+    ).not.toThrow();
+  });
+
   it("引用列名但大小写不同视为合法（SQL 标识符不区分大小写）", () => {
     expect(() => validateScopeKeyExpr("SYSTEM_BOOK_CODE || '-' || branch_num", COLS)).not.toThrow();
   });
@@ -122,7 +142,7 @@ describe("buildFactViewSql：列投影 = 注册列", () => {
     expect(sql).not.toContain("WHERE");
   });
 
-  it("窄授权 → IN 列表 + 单引号转义", () => {
+  it("窄授权 → IN 列表 + 单引号转义 + WHERE 用 scopeKeyExpr 本尊", () => {
     const sql = buildFactViewSql({
       ...base,
       columns: [{ name: "branch_num", sensitive: false }],
@@ -130,6 +150,9 @@ describe("buildFactViewSql：列投影 = 注册列", () => {
       allBranches: false,
     });
     expect(sql).toContain(`IN ('3120-7', '3120-8')`);
+    // ★ 钉住核心契约：WHERE 左值必须是传入的 scopeKeyExpr 本尊——
+    //   否则「丢掉表达式、只留 IN 列表」的实现能通过其余全部用例（行过滤实质失效）。
+    expect(sql).toContain(`WHERE ${base.scopeKeyExpr} IN ('3120-7', '3120-8')`);
   });
 
   it("始终读 parquet 全列（union_by_name）并按名字取注册列", () => {
