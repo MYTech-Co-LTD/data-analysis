@@ -34,6 +34,16 @@
 - **沿用「全量构建」模式**：每查询无条件构建全部权限视图（保持现状，不引入懒构建）。
 - **迁移必须幂等**：`ADD COLUMN IF NOT EXISTS` / `ON CONFLICT` / `WHERE NOT EXISTS`；迁移头注释须写 `-- spec: docs/superpowers/specs/2026-09-11-replenishment-detail-query-onboarding-design.md`（pre-commit 迁移↔spec 关联守卫）。
 - **测试命令**：`cd web && npm test`（vitest，**不做类型检查**）；类型检查必须跑 `cd web && npm run build`。
+- **⚠️ pre-commit 的 lint 硬门禁 vs 仓库 lint 存量债**（2026-09-11 人裁定：维持现状 + 走既定绕过）：
+  仓库 CI 把 lint 当**警告**（`deploy.yml:9`「lint(警告…)」、`:63` `npm run lint || echo "::warning::…"`、
+  `:82` 注释「避开存量 lint error（多为 no-explicit-any）」），但 pre-commit 的 `lint-staged`
+  （`web/package.json` 的 `"*.{ts,tsx}": ["eslint --fix"]`）把同一批错误当**硬拒**，且 15 个报错里
+  **14 个在 HEAD 里就存在**。后果：**任何触碰这些 .ts 文件的提交都会被挡**（含新增的 evaluator 文件）。
+  **既定做法**：用
+  `git -c core.hooksPath=<只含 commit-msg 的临时目录> commit`
+  **只跳过 pre-commit，保留 commit-msg 溯源 hook**，并在报告里标注绕过原因。
+  **不要用 `--no-verify`**——那会把溯源 hook（`X-Orca-*` trailer）一起跳过。
+  同时：**新增代码尽量用 `unknown` 而非 `any`**，别再往存量债上加。
 - **⚠️ `index.bundle.js` 是入仓产物，必须随源码同步重生成并提交**（`scripts/check-functions.sh` 有漂移门禁：
   现场 esbuild 产物 ≠ 已提交产物 → pre-commit 直接失败）。生产服务器**无 node/npx**，部署的就是这个提交的 bundle，
   漏提交 = 生产静默跑旧代码。凡动 `functions/agent-query/index.js` 或 `functions/_shared/*`，都要跑：
@@ -1144,10 +1154,12 @@ const AGENT_API_KEY = process.env.AGENT_API_KEY!;
 - `web/lib/monitor/__tests__/engine.test.ts`
 - `web/lib/monitor/__tests__/novu-probe.test.ts`
 
-定位命令：
+定位命令（**必须扫整个 `web/lib`，不要只扫 `web/lib/monitor/`**——否则会漏掉
+`web/lib/__tests__/collect-stall.test.ts` 里的 `makeDeps()`，它是第 6 个构造 `EvalDeps` 的地方，
+不补则 `npm run build` 不可能通过）：
 
 ```bash
-grep -n "getCollectTasks" web/lib/monitor/evaluators/__tests__/*.test.ts web/lib/monitor/__tests__/*.test.ts
+grep -rn "EvalDeps" web/lib --include="*.ts" | grep -v "types.ts"
 ```
 
 - [ ] **Step 6: 跑 build 确认类型通过**
