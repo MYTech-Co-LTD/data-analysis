@@ -129,9 +129,23 @@ git commit -m "docs(architecture): 注册表通用事实视图（scope_key_expr�
 //            ② 行过滤 fail-close（授权空集 → WHERE 1=0，非「不过滤」）
 //            ③ 表达式校验挡住常量/多语句（防行过滤失效 → 越权）
 import { describe, it, expect } from "vitest";
-import { validateScopeKeyExpr, buildFactViewSql } from "../../../../functions/_shared/fact-view";
+import {
+  validateScopeKeyExpr,
+  buildFactViewSql,
+  sqlLit,
+} from "../../../../functions/_shared/fact-view";
 
 const COLS = ["system_book_code", "branch_num", "branch_name", "subtotal", "total_money"];
+
+describe("sqlLit（共享转义，agent-query 亦复用）", () => {
+  it("普通串加引号", () => {
+    expect(sqlLit("3120-7")).toBe("'3120-7'");
+  });
+
+  it("单引号翻倍（防注入）", () => {
+    expect(sqlLit("a'b")).toBe("'a''b'");
+  });
+});
 
 describe("validateScopeKeyExpr", () => {
   it("合法表达式通过", () => {
@@ -297,8 +311,8 @@ export interface FactViewSpec {
   canSeeCost: boolean;
 }
 
-// SQL 字符串字面量转义（与 agent-query/index.js 的 sqlLit 同语义）
-function sqlLit(s: string): string {
+// SQL 字符串字面量转义（单引号翻倍）。导出供 agent-query/index.js 复用，避免两份实现漂移。
+export function sqlLit(s: string): string {
   return "'" + String(s).replace(/'/g, "''") + "'";
 }
 
@@ -403,8 +417,26 @@ const { assertCompositeKeyJoins } = require("../_shared/sql-guards");
 在其后追加一行：
 
 ```js
-const { validateScopeKeyExpr, buildFactViewSql } = require("../_shared/fact-view");
+const { validateScopeKeyExpr, buildFactViewSql, sqlLit } = require("../_shared/fact-view");
 ```
+
+- [ ] **Step 1b: 删掉本文件里的 `sqlLit` 本地定义（改用共享版）**
+
+`functions/agent-query/index.js` 的工具区现有：
+
+```js
+function sqlLit(s) {
+  return "'" + String(s).replace(/'/g, "''") + "'"; // branch_num 等数值字符串
+}
+```
+
+**删除这三行**——改为由 Step 1 引入的 `../_shared/fact-view` 导出提供（语义逐字相同）。删完确认文件里不再有 `function sqlLit` 定义：
+
+```bash
+grep -n "function sqlLit" functions/agent-query/index.js
+```
+
+Expected: 无输出
 
 - [ ] **Step 2: 新增「硬编码视图名」常量**
 
@@ -998,7 +1030,9 @@ Expected: FAIL —— `Failed to resolve import "../data-freshness"`
 
 - [ ] **Step 3: Write minimal implementation**
 
-**两步。先抽出可注入的纯日期助手**——`web/lib/collect.ts` 已有的 `getDateOffsetChina(offsetDays)` 内部调 `new Date()`，无法用 `deps.now` 注入，单测不可确定。把它重构成「纯函数 + 保持原函数行为不变的包装」：
+**三步。**
+
+**第 1 步：抽出可注入的纯日期助手**——`web/lib/collect.ts` 已有的 `getDateOffsetChina(offsetDays)` 内部调 `new Date()`，无法用 `deps.now` 注入，单测不可确定。把它重构成「纯函数 + 保持原函数行为不变的包装」：
 
 `web/lib/collect.ts` 中找到：
 
@@ -1029,11 +1063,25 @@ export function getDateOffsetChina(offsetDays: number): string {
 
 > 行为等价性：`new Date(now.getTime() + 8h)` 后再 `setDate(getDate() + offset)` 与原实现逐字相同，只是把 `now` 变成入参。
 
-**再创建** `web/lib/monitor/evaluators/data-freshness.ts`：
+**第 2 步：新建共享的 SQL 转义助手**（两个 evaluator 共用一份，不各留一份）：
+
+创建 `web/lib/monitor/evaluators/sql.ts`：
+
+```ts
+// monitor evaluator 共享的 SQL 字面量转义。
+// 不跨包复用 functions/_shared/fact-view.ts 的 sqlLit：那是 Deno edge function 运行时的模块，
+// 被 Next.js web 侧 import 会造成错误的运行时耦合；两侧各留一份、各自单测锁定。
+export function sqlLit(s: string): string {
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+```
+
+**第 3 步：创建** `web/lib/monitor/evaluators/data-freshness.ts`：
 
 ```ts
 import type { EvalDeps, EvalResult, Evaluator } from '../types';
 import { chinaDateAt } from '../../collect';
+import { sqlLit } from './sql';
 
 // 数据到达守护（spec 2026-09-11-replenishment-detail-query-onboarding-design §方案3）
 // 背景：外部 duckle 管线写入 OSS 的补货数据曾出现 10 天断档，且无人发现——消费侧必须自己发现。
@@ -1041,10 +1089,6 @@ import { chinaDateAt } from '../../collect';
 // 判据：期望业务日（中国时区 now - lookback_days）的分区不存在 → firing。
 // 探测异常不报警：duckdb 本体故障由 service_down 桶负责，避免双报。
 // context = {dataset, account, expect_date, have_latest}
-
-function sqlLit(s: string): string {
-  return "'" + String(s).replace(/'/g, "''") + "'";
-}
 
 export const evalDataFreshness: Evaluator = async (
   rule,
@@ -1109,7 +1153,7 @@ Expected: PASS（8 个用例全绿）
 - [ ] **Step 6: Commit**
 
 ```bash
-git add web/lib/collect.ts web/lib/monitor/evaluators/data-freshness.ts web/lib/monitor/evaluators/__tests__/data-freshness.test.ts web/lib/monitor/evaluators/index.ts
+git add web/lib/collect.ts web/lib/monitor/evaluators/sql.ts web/lib/monitor/evaluators/data-freshness.ts web/lib/monitor/evaluators/__tests__/data-freshness.test.ts web/lib/monitor/evaluators/index.ts
 git commit -m "feat(monitor): data_freshness evaluator——外部管线数据到达守护（探测异常不误报）
 
 顺带把 collect.ts 的中国时区日期逻辑抽成可注入的纯函数 chinaDateAt（行为等价）"
@@ -1125,7 +1169,7 @@ git commit -m "feat(monitor): data_freshness evaluator——外部管线数据�
 - Modify: `web/lib/monitor/evaluators/index.ts`
 
 **Interfaces:**
-- Consumes: `EvalDeps.duckdbQuery`（Task 6）、`chinaDateAt(base, offsetDays)`（Task 7 新增于 `web/lib/collect.ts`）
+- Consumes: `EvalDeps.duckdbQuery`（Task 6）、`chinaDateAt(base, offsetDays)`（Task 7 新增于 `web/lib/collect.ts`）、`sqlLit`（`./sql`，Task 7 新建）
 - Produces: `export const evalDataIntegrity: Evaluator`
 
 - [ ] **Step 1: Write the failing test**
@@ -1240,6 +1284,7 @@ Expected: FAIL —— `Failed to resolve import "../data-integrity"`
 ```ts
 import type { EvalDeps, EvalResult, Evaluator } from '../types';
 import { chinaDateAt } from '../../collect';
+import { sqlLit } from './sql';
 
 // 数据行数完整性守护（spec 2026-09-11-replenishment-detail-query-onboarding-design §方案3）
 // 目的：抓「半截数据静默入库」——分区到了但行数骤降（如分页中断只写了一部分）。
@@ -1249,10 +1294,6 @@ import { chinaDateAt } from '../../collect';
 // 冷启动：样本 < min_samples → 不判（防历史回补期误报）。
 // 探测异常不报警（同 data_freshness：duckdb 本体故障归 service_down 桶）。
 // context = {dataset, account, date, rows, median, window, deviation_pct}
-
-function sqlLit(s: string): string {
-  return "'" + String(s).replace(/'/g, "''") + "'";
-}
 
 function median(nums: number[]): number {
   const a = [...nums].sort((x, y) => x - y);
