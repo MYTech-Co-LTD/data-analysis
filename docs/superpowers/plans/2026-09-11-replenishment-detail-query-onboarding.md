@@ -1693,11 +1693,10 @@ Expected: PASS（7 个用例全绿）
 grep -n "data_volume\|data_freshness\|已实现 4/8\|待实现" docs/architecture.md
 ```
 
-1. **§8.1 `check_type` 清单表格**，两个状态单元格：
+1. **§8.1 `check_type` 清单表格**：
    - `data_volume` 行：Task 1 修复轮已新增该行（初始 ⏳ 未实现），本任务让它真正实现 → **改为 `✅ 已实现`**。
-   - `data_freshness` 行：Task 7 按当时的计划写成了 `✅ 已实现`，但该行「数据源/触发」含**两种含义**，
-     而 ① 通用陈旧度 `stale_hours` **仍未实现** → **改为 `🔶 部分实现（② 外部管线分区到达已实现；① 通用陈旧度未实现）`**。
-     （这是 Task 7 交付后才更正的措辞，属本任务的收口范围。）
+   - `data_freshness` 行：**已由 Task 7 改为 `🔶 部分实现（② 外部管线分区到达已实现；① 通用陈旧度未实现）`** ——
+     本任务**只需确认**它已是这个措辞，**不要再改**（避免同一格被改两次）。
    - 同时确认 `data_integrity` 行仍是 `⏳ 未实现`（它本就没实现，**不要顺手改**）。
 2. **§8.1 引擎拓扑行**（约 978 行）现为「… / 每日 `data_integrity`。」→ 改为「… / 每日 `data_integrity`·`data_volume`。」。
 3. **§十一 实现状态汇总**（约 1436-1437 行）两行：
@@ -1960,6 +1959,19 @@ ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com "docker restart deploy-
 ```
 
 Expected: 容器重启成功
+
+- [ ] **Step 6b: 确认 web 容器有 `AGENT_API_KEY`（守护的命门）**
+
+守护的 `duckdbQuery` 用 `process.env.AGENT_API_KEY` 调 DuckDB 服务。**若该 env 为空**：
+请求被拒 → `duckdbQuery` 抛错 → evaluator 按设计静默 `firing:false` → **守护静默失效**
+（日志只落容器 stdout，监控页面上**什么都不会显示**）。
+
+```bash
+ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com \
+  "docker exec deploy-web-1 printenv AGENT_API_KEY | wc -c"
+```
+
+Expected: 输出**远大于 1** 的数字（非空）。若为 `1`（仅换行）→ 停，去补 `deploy/.env` 的 `AGENT_API_KEY` 再继续。
 
 - [ ] **Step 7: 确认守护规则已被拾取（evaluator 上线后首个整点）**
 
