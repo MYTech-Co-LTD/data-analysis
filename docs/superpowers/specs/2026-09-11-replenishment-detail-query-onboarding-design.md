@@ -96,14 +96,25 @@ SELECT * FROM (
 WHERE <scope_key_expr> IN (<授权复合键集合>)      -- 未授权 → WHERE 1=0
 ```
 
-配套六点：
+配套七点：
 
+- **⚠️ 注册表读取必须隔离（否则误伤现有服务）**：`scope_key_expr` 与「逐数据集敏感列」走**独立请求 + 独立 try/catch**，
+  **绝不加进 `loadRegistry` 现有 `datasets?select=...` 主查询**。原因：PostgREST 对 `select=` 里的未知列返 400，
+  主查询一挂 → 整个 `loadRegistry` 走 fallback → **`pgTables` 退回只剩 3 张报表表** → 现有 `report_*_gen`
+  查询从 PG **误路由到 DuckDB 而失败**。即「function 先于迁移上线」的窗口会打挂现有报表问答。
+  隔离后：列缺失只让**新数据集**不可用（fail-close），碰不到 `pgTables`/`retailGlob`/`costColumns`。
 - **fail-close**：`kind='fact'` 且 `scope_key_expr IS NULL` → 不建视图、不进白名单（**不是**「不过滤」）。与 CLAUDE.md「空集 = deny」一贯。
 - **`REPLACE()` 空集退化**：敏感列为空时必须退化成 `SELECT *`——`SELECT * REPLACE ()` 是非法 SQL（dimCarry 现有写法同款处理）。
 - **跳过已硬编码的视图名**：`retail_detail` / `outbound_detail` 即使被注册也**不得**由通用路径重建（它们有 union/内联 join 的定制逻辑）。
 - **allowedTables 由注册表派生**（已硬编码的两个仍显式保留），不再手写维护。
-- **表达式校验**：单表达式、禁 `;`/子查询/DDL 关键字，且**必须引用本数据集至少一列**（防被写成常量使行过滤失效）。校验失败 → 不建视图 + 记日志（fail-close）。
-- **敏感列按数据集分别读**：现只读 `retail_detail` 的 `is_sensitive`，改为逐数据集读取。
+- **表达式校验三条**（校验失败 → 不建视图 + 记日志，fail-close）：
+  ① 单表达式，禁 `;` / 子查询 / DDL 关键字；② **必须引用本数据集至少一列**（挡住纯常量）；
+  ③ **窄授权冒烟必须验证「窄授权只见窄行集」**——因为 ② 挡不住「引用了列但把门店塌缩成单值」这类写法
+  （如 `system_book_code || '-7'`），那种表达式会让任何被授权到 `3120-7` 的人看见该账套**全部门店**。这是本设计唯一的越权风险面，只能靠冒烟断言守（见验证节）。
+- **敏感列按数据集分别读**：现只读 `retail_detail` 的 `is_sensitive`，改为逐数据集读取（走上面的独立请求）。
+- **构建仍「全量构建」不改行为**：现有实现每查询无条件构建全部权限视图（含 147 分区的 `retail_detail`），
+  本设计沿用该模式（不做「按 SQL 命中懒构建」的优化，避免改变存量行为）。代价：每查询成本 O(#数据集)，
+  当前 1 个新数据集可忽略；**若将来注册量变大再单独优化**（记为已知扩展性上限）。
 
 **边界**：仅对「注册表声明的通用 fact」生效，本次是**增量能力，不重构存量**。
 
@@ -150,11 +161,16 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 
 **落点**：`web/lib/monitor/` 的 evaluator 体系。`web/lib/monitor/types.ts` 的 `CheckType` **已预声明 `data_freshness` / `data_integrity` 但从未实现**（`evaluators/index.ts` 注释「其余待填」）——本次正是它的用途，不新造类型。
 
-| 规则 | check_type | 判据 | 严重度 |
-|---|---|---|---|
-| 分区到达 | `data_freshness` | 昨日 `<账套>/<昨日>/all.parquet` 不存在 | high |
-| 行数异常 | `data_integrity` | 昨日行数 vs 近 7 日中位数偏离 > 50% | high |
-| 覆盖完整性 | 两条规则均须**按账套各配一行** | 禁止看合计——会被另一账套掩盖 | — |
+**节奏由现成桶决定，不由规则选**（`runtime.ts` / `jobs/monitor/manifest.ts` 已接线）：
+
+| 规则 | check_type | 桶（节奏） | 判据 | 严重度 |
+|---|---|---|---|---|
+| 分区到达 | `data_freshness` | `runHourlyBucket`（**每小时**） | 昨日 `<账套>/<昨日>/all.parquet` 不存在 | high |
+| 行数异常 | `data_integrity` | `runDailyBucket`（**每日 03:00**） | 昨日行数 vs 近 7 日中位数偏离 > 50% | high |
+| 覆盖完整性 | 两条规则均须**按账套各配一行** | — | 禁止看合计——会被另一账套掩盖 | — |
+
+**部署次序安全**：`runScan` 对「无 evaluator 的规则」是 `console.warn` + `continue`（per-rule `try/catch` 双层隔离），
+所以**规则可以先于 evaluator 落库**——只会 warn 跳过它自己，不会拖垮同轮的 `contact_sync` 等既有规则。**不动调度**。
 
 `monitor_rules.threshold` 示例：`{"dataset":"replenishment_detail","source_glob":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/*/*/all.parquet","accounts":["3120","64188"],"lookback_days":1,"median_window":7,"deviation_pct":50}`
 
@@ -165,6 +181,31 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 - 告警走 monitor 现成通道（`web/lib/monitor/notify.ts`，企微），复用抑制窗口。
 - ⚠️ **不要**加进 `web/lib/qa/config/detail-sources.json`：那是「明细 vs 聚合表」对账链（C1），补货没有聚合表，硬套会失败。
 
+## 对现有服务的影响面（blast radius）
+
+| 面 | 影响 | 依据 |
+|---|---|---|
+| OSS 数据 / 其他系统的管线 | **零影响**（全程只读，不写不删，无物化） | 视图查询时实时构建 |
+| `retail_detail` / `outbound_detail` | **零影响** | 通用路径显式跳过这两个名字，仍走原硬编码分支 |
+| 监控既有告警（`collect_fail` / `token_expire` / `service_down` …） | **零影响** | `engine.ts` `runScan` 双层隔离：无 evaluator 的规则 `warn + continue`；每条规则独立 `try/catch`。规则先于 evaluator 落库也安全 |
+| 监控调度（4 个桶的 cron） | **不动** | `data_freshness`/`data_integrity` 的桶早已接线在跑，只是桶内无规则 |
+| `get_data_dictionary()` | **零影响** | 显式列清单，加列不影响 |
+| 权限总面 | **只增不放** | 只新增一张模型可查的表；不放宽任何现有表权限。新表行过滤**失败方向是「少给」**（表达式写坏 → 匹配不上 → 0 行） |
+| **`web/lib/monitor/types.ts` 的 `EvalDeps`** | ⚠️ **有粘性**：新增必填 `duckdbQuery` 依赖 → **现有 evaluator 测试的 fake 会编译报错**，需机械补 3~4 个测试文件 | 唯一触及存量文件的改动面。`AGENT_API_KEY` 已在 `lib/jobs/env.ts`，DuckDB 出口现成 |
+| **SKILL.md 提示词** | ⚠️ 轻微：加⑫补货模板会改变给模型的提示词 | 补货/要货的指标词与现有（销售/配送/出库/毛利）不重叠 → 模板匹配分低，误套风险小 |
+| 查询延迟 | 可忽略 | 沿用现有「每查询无条件构建全部权限视图」模式（已含 147 分区的 `retail_detail`）；新增 1 个小数据集（16 小文件）。**已知扩展性上限**：注册量变大需再优化 |
+
+### 部署次序（必须遵守，否则误伤现有服务）
+
+1. `docs/architecture.md` 更新
+2. **`agent-query` function 先上**（对 `scope_key_expr` 缺失**容错**：独立请求 + fail-close；此步不动任何存量行为）
+3. 迁移 `212`（加列）
+4. **`restart postgrest`** 刷 schema 缓存（否则新列不可见 → 新数据集静默不可用；注意是静默降级，不是报错）
+5. 迁移 `213`（注册行 → 字典立刻可见；此时 function 已能建视图，**不留「能看见但查不了」的窗口**）
+6. monitor evaluator 上线（**可在 213 之前或之后**——`runScan` 对缺 evaluator 的规则是 warn + skip）
+
+> 次序 2→5 是为规避两类真实故障：① function 先上而 `select=` 带未知列 → `pgTables` 走 fallback → **现有报表问答挂**（已用「独立请求」设计消除）；② 注册行先上而 function 未上 → 模型看见表却撞 `forbidden_table` → **转而自由发挥**（206 迁移记录过的失败模式）。
+
 ## 权限验证（冒烟断言）
 
 | 断言 | 期望 |
@@ -172,10 +213,12 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 | 空授权（claims `branch_nums=[]`） | 0 行（`WHERE 1=0`，非「不过滤」） |
 | 单账套单店授权 | 只见该账套该店，**同名 `branch_num` 的另一账套门店不串** |
 | 全量授权（`["*"]`） | 两账套全量 |
+| **窄授权行集严格 ⊂ 全量行集** | **防表达式塌缩成单值越权**（如 `system_book_code || '-7'`）——本设计唯一越权风险面 |
 | `scope_key_expr` 缺失的 fact 数据集 | 不进白名单、SELECT 被拒（fail-close） |
 | 表达式引用不到本数据集列 / 含 `;` | 拒绝构建 |
 | 无敏感列的 fact 数据集 | 视图正常构建（`REPLACE()` 空集退化生效），金额列不受影响 |
 | `retail_detail` / `outbound_detail` | 通用路径不介入，行为与改造前逐字节一致 |
+| 注册表主查询故障（模拟 400） | 走 fallback 且 **`pgTables` 仍为报表表全集**（路由不退化） |
 
 ## 准确性验收（关键判据）
 
@@ -186,8 +229,8 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 1. **`docs/architecture.md` §4.3 / §8.1 更新**（架构先行，先落地）
 2. 迁移 `212_registry_fact_scope.sql`：`datasets.scope_key_expr` 列 + 注释
 3. 迁移 `213_replenishment_detail_registry.sql`：`datasets` 行 + `dataset_columns` 列描述 + 两条 `monitor_rules`
-4. `functions/agent-query/index.js`：`loadRegistry` 读 `scope_key_expr` + 逐数据集敏感列；`runDuckdb` 通用 fact 视图构建（含表达式校验、`REPLACE()` 空集退化、硬编码视图名跳过）；`allowedTables` 由注册表派生
-5. `web/lib/monitor/`：`evaluators/data-freshness.ts` + `data-integrity.ts`，注册进 `EVALUATORS`，`EvalDeps` 加 `duckdbQuery` 并接 runtime
+4. `functions/agent-query/index.js`：`loadRegistry` **以独立请求 + 独立 try/catch** 读 `scope_key_expr` 与逐数据集敏感列（**不得并入主 `datasets?select=`**）；`runDuckdb` 通用 fact 视图构建（含表达式三条校验、`REPLACE()` 空集退化、硬编码视图名跳过）；`allowedTables` 由注册表派生
+5. `web/lib/monitor/`：`evaluators/data-freshness.ts` + `data-integrity.ts`，注册进 `EVALUATORS`；`EvalDeps` 加必填 `duckdbQuery` 并在 `runtime.ts` `buildDeps` 注入 —— ⚠️ 存量 evaluator 测试 fake 需同步补该字段（机械，3~4 文件）
 6. `openclaw/data-query-plugin/skills/retail-query/SKILL.md`：⑫补货模板
 7. 测试：`web/lib/agent-query/__tests__/` 扩 `validateSql`/表达式校验单测；`web/lib/monitor/evaluators/__tests__/` 加两个 evaluator 单测；三类身份权限冒烟；分毫级准确性冒烟
 8. 部署后 `docker compose restart postgrest` 刷 schema 缓存（新增列，仓库已知坑）
