@@ -128,10 +128,75 @@ var init_sql_guards = __esm({
   }
 });
 
+// functions/_shared/fact-view.ts
+var fact_view_exports = {};
+__export(fact_view_exports, {
+  buildFactViewSql: () => buildFactViewSql,
+  sqlLit: () => sqlLit,
+  validateScopeKeyExpr: () => validateScopeKeyExpr
+});
+function sqlLit(s) {
+  return "'" + String(s).replace(/'/g, "''") + "'";
+}
+function sqlIdent(s) {
+  return '"' + String(s).replace(/"/g, '""') + '"';
+}
+function stripSqlLiterals(expr) {
+  return String(expr).replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ").replace(/\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\1\$/g, "''").replace(/E'(?:[^'\\]|\\.|'')*'/gi, "''").replace(/'(?:[^']|'')*'/g, "''");
+}
+function validateScopeKeyExpr(expr, columnNames) {
+  const t = String(expr ?? "").trim();
+  if (!t) throw new Error("empty_scope_expr");
+  if (t.includes(";")) throw new Error("scope_expr_semicolon");
+  const bare = stripSqlLiterals(t);
+  const u = bare.toUpperCase();
+  for (const kw of EXPR_FORBIDDEN_KEYWORDS) {
+    if (new RegExp("\\b" + kw + "\\b").test(u)) throw new Error("scope_expr_forbidden_keyword");
+  }
+  const hit = columnNames.some(
+    (c) => new RegExp("\\b" + String(c).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(bare)
+  );
+  if (!hit) throw new Error("scope_expr_no_column");
+}
+function buildFactViewSql(spec) {
+  const cols = spec.columns || [];
+  if (cols.length === 0) throw new Error("empty_columns");
+  const canSee = spec.canSeeCost ? "TRUE" : "FALSE";
+  const srcIdent = (c) => sqlIdent(c.sourceName ?? c.name);
+  const projection = cols.map(
+    (c) => c.sensitive ? `CASE WHEN ${canSee} THEN ${srcIdent(c)} ELSE NULL END AS ${sqlIdent(c.name)}` : `${srcIdent(c)} AS ${sqlIdent(c.name)}`
+  ).join(", ");
+  const where = spec.allBranches ? "" : spec.authKeys.length === 0 ? " WHERE 1=0" : " WHERE " + spec.scopeKeyExpr + " IN (" + spec.authKeys.map(sqlLit).join(", ") + ")";
+  return "\nCREATE OR REPLACE TEMP VIEW " + spec.name + " AS SELECT * FROM (SELECT " + projection + " FROM read_parquet(" + sqlLit(spec.glob) + ", union_by_name=true)) t" + where + ";";
+}
+var EXPR_FORBIDDEN_KEYWORDS;
+var init_fact_view = __esm({
+  "functions/_shared/fact-view.ts"() {
+    EXPR_FORBIDDEN_KEYWORDS = [
+      "SELECT",
+      "INSERT",
+      "UPDATE",
+      "DELETE",
+      "DROP",
+      "CREATE",
+      "ALTER",
+      "ATTACH",
+      "DETACH",
+      "COPY",
+      "PRAGMA",
+      "GRANT",
+      "REVOKE",
+      "TRUNCATE",
+      "CALL"
+    ];
+  }
+});
+
 // functions/agent-query/index.js
 var { signJwt } = require_jwt();
 var { json: sharedJson } = require_cors();
 var { assertCompositeKeyJoins: assertCompositeKeyJoins2 } = (init_sql_guards(), __toCommonJS(sql_guards_exports));
+var { validateScopeKeyExpr: validateScopeKeyExpr2, buildFactViewSql: buildFactViewSql2, sqlLit: sqlLit2 } = (init_fact_view(), __toCommonJS(fact_view_exports));
 var AGENT_API_KEY = Deno.env.get("AGENT_API_KEY");
 var JWT_SECRET = Deno.env.get("JWT_SIGNING_KEY") || Deno.env.get("JWT_SECRET") || "";
 var DUCKDB_URL = Deno.env.get("DUCKDB_URL") || "http://duckdb:9000";
@@ -139,11 +204,63 @@ var POSTGREST_URL = Deno.env.get("POSTGREST_BASE_URL") || "http://postgrest:3000
 var RETAIL_GLOB_FALLBACK = "s3://lemeng-datasource/lemeng/retail_detail/*/*/all.parquet";
 var COST_COLUMNS_FALLBACK = ["item_cost_price", "order_detail_cost", "order_detail_grade_cost", "cost", "profit", "sale_profit_rate"];
 var REPORT_TABLES_FALLBACK = ["report_daily_sales", "report_daily_category", "report_weekly_trend"];
+var HARDCODED_VIEW_NAMES = /* @__PURE__ */ new Set(["retail_detail", "outbound_detail"]);
 var MAX_ROWS = 1e3;
 var SHORT_JWT_TTL = 300;
 var REG_CACHE = null;
 var REG_CACHE_TS = 0;
 var REG_TTL_MS = 6e4;
+async function loadFactScopes() {
+  const out = [];
+  let rows = [];
+  try {
+    const headers2 = { Authorization: "Bearer " + await serviceJwt(), "Content-Type": "application/json" };
+    const r = await fetch(
+      POSTGREST_URL + "/datasets?select=name,source,scope_key_expr&engine=eq.duckdb_view&kind=eq.fact&exposed=is.true&scope_key_expr=not.is.null",
+      { headers: headers2 }
+    );
+    if (!r.ok) {
+      console.error("[agent-query] loadFactScopes datasets http " + r.status);
+      return out;
+    }
+    rows = await r.json();
+  } catch (e) {
+    console.error("[agent-query] loadFactScopes datasets failed:", String(e));
+    return out;
+  }
+  const headers = { Authorization: "Bearer " + await serviceJwt(), "Content-Type": "application/json" };
+  for (const d of rows || []) {
+    if (!d.name || !d.source || HARDCODED_VIEW_NAMES.has(d.name)) continue;
+    let columns = [];
+    try {
+      const cr = await fetch(
+        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive,source_name&dataset_name=eq." + encodeURIComponent(d.name) + "&order=ordinal.asc",
+        { headers }
+      );
+      if (cr.ok) {
+        columns = (await cr.json()).map((c) => ({
+          name: c.name,
+          sensitive: !!c.is_sensitive,
+          ...c.source_name ? { sourceName: c.source_name } : {}
+        }));
+      }
+    } catch (e) {
+      console.error("[agent-query] loadFactScopes columns failed " + d.name + ":", String(e));
+    }
+    if (columns.length === 0) {
+      console.error("[agent-query] fact dataset " + d.name + " \u65E0\u6CE8\u518C\u5217\uFF0C\u8DF3\u8FC7\uFF08fail-close\uFF09");
+      continue;
+    }
+    try {
+      validateScopeKeyExpr2(d.scope_key_expr, columns.map((c) => c.name));
+    } catch (e) {
+      console.error("[agent-query] fact dataset " + d.name + " scope_key_expr \u975E\u6CD5\uFF08" + e.message + "\uFF09\uFF0C\u8DF3\u8FC7");
+      continue;
+    }
+    out.push({ name: d.name, glob: d.source, scopeKeyExpr: d.scope_key_expr, columns });
+  }
+  return out;
+}
 async function loadRegistry() {
   const now = Date.now();
   if (REG_CACHE && now - REG_CACHE_TS < REG_TTL_MS) return REG_CACHE;
@@ -152,6 +269,7 @@ async function loadRegistry() {
   let costColumns = COST_COLUMNS_FALLBACK.slice();
   let pgTables = REPORT_TABLES_FALLBACK.slice();
   let dimCarry = [];
+  let factViews = [];
   try {
     const dsRes = await fetch(POSTGREST_URL + "/datasets?select=name,engine,source,kind,carry_enabled,exposed", { headers });
     if (dsRes.ok) {
@@ -179,7 +297,13 @@ async function loadRegistry() {
   } catch (e) {
     console.error("[agent-query] loadRegistry failed, using fallback:", String(e));
   }
-  REG_CACHE = { retailGlob, costColumns, pgTables, dimCarry };
+  try {
+    factViews = await loadFactScopes();
+  } catch (e) {
+    console.error("[agent-query] loadFactScopes \u672A\u6355\u83B7\u5F02\u5E38:", String(e));
+    factViews = [];
+  }
+  REG_CACHE = { retailGlob, costColumns, pgTables, dimCarry, factViews };
   REG_CACHE_TS = now;
   return REG_CACHE;
 }
@@ -256,9 +380,6 @@ var AGENT_CORS = {
 function json(data, status) {
   return sharedJson(data, status, AGENT_CORS);
 }
-function sqlLit(s) {
-  return "'" + String(s).replace(/'/g, "''") + "'";
-}
 var isPgQuery = (sql, pgTables) => pgTables.some((t) => new RegExp("\\b" + t + "\\b", "i").test(sql));
 var FORBIDDEN_KEYWORDS = [
   "READ_PARQUET",
@@ -327,7 +448,7 @@ async function runDuckdb(userSelect, perms, reg) {
   const branchNums = perms.data_scope?.branch_nums ?? [];
   const allBranches = !Array.isArray(branchNums) || branchNums.includes("*");
   const authKeys = [...new Set(branchNums.filter((v) => String(v).includes("-")).map(normKey))];
-  const branchFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit).join(", ") + ")";
+  const branchFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE (regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) || '-' || branch_num) IN (" + authKeys.map(sqlLit2).join(", ") + ")";
   const canSee = perms.fields?.cost ? "TRUE" : "FALSE";
   const replaceList = reg.costColumns.map((c) => `CASE WHEN ${canSee} THEN "${c}" ELSE NULL END AS "${c}"`).join(", ");
   let viewSql = "";
@@ -338,9 +459,24 @@ async function runDuckdb(userSelect, perms, reg) {
     viewSql += "\nCREATE OR REPLACE TEMP VIEW " + d.name + " AS " + replaceClause + "FROM read_parquet('" + d.glob + "');";
   }
   viewSql += "\nCREATE OR REPLACE TEMP VIEW retail_detail AS SELECT rd.*, db.region_name, db.first_level_region AS war_zone_name FROM (SELECT *, regexp_extract(filename, 'retail_detail/([0-9]+)/', 1) AS system_book_code FROM (SELECT * REPLACE (" + replaceList + ") FROM read_parquet('" + reg.retailGlob + "', filename=true, union_by_name=true) " + branchFilter + ") t) rd LEFT JOIN dim_branch db ON rd.system_book_code = db.system_book_code AND rd.branch_num = db.branch_num;";
-  const outboundFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE regexp_replace(sbc || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2') IN (" + authKeys.map(sqlLit).join(", ") + ")";
+  const outboundFilter = allBranches ? "" : authKeys.length === 0 ? "WHERE 1=0" : "WHERE regexp_replace(sbc || '-' || branch_num, '^([0-9]+)-0+([0-9]+)$', '\\1-\\2') IN (" + authKeys.map(sqlLit2).join(", ") + ")";
   const outboundProfit = `CASE WHEN ${canSee} THEN t.profit ELSE NULL END AS profit`;
   viewSql += "\nCREATE OR REPLACE TEMP VIEW outbound_detail AS SELECT t.biz_type, t.sbc, t.ledger_sbc, t.branch_num, t.biz_date, t.sale_date, t.amount, " + outboundProfit + ", t.item_name, t.item_num, t.pos_item_code, t.category, di.category_group, di.top_category, di.item_code FROM (SELECT 'delivery' AS biz_type, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS sbc, regexp_extract(filename, 'transfer_detail/([0-9]+)/', 1) AS ledger_sbc, response_branch_num AS branch_num, substr(order_time,1,10) AS biz_date, substr(sale_time,1,10) AS sale_date, CAST(out_money AS DOUBLE) AS amount, CAST(profit_money AS DOUBLE) AS profit, pos_item_name AS item_name, item_num AS item_num, pos_item_code AS pos_item_code, item_category AS category FROM read_parquet('s3://lemeng-datasource/lemeng/transfer_detail/*/*/all.parquet', filename=true) UNION ALL SELECT CASE WHEN db.branch_num IS NULL THEN 'wholesale_ext' ELSE 'wholesale' END AS biz_type, COALESCE(db.system_book_code, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1)) AS sbc, regexp_extract(d.filename, 'wholesale_detail/([0-9]+)/', 1) AS ledger_sbc, COALESCE(db.branch_num, '99') AS branch_num, substr(d.audit_time,1,10) AS biz_date, substr(d.audit_time,1,10) AS sale_date, CAST(d.wholesale_money AS DOUBLE) AS amount, CAST(d.wholesale_profit AS DOUBLE) AS profit, d.pos_item_name AS item_name, d.item_num AS item_num, d.pos_item_code AS pos_item_code, d.pos_item_category_name AS category FROM read_parquet('s3://lemeng-datasource/lemeng/wholesale_detail/*/*/all.parquet', filename=true) d LEFT JOIN dim_branch db ON db.system_book_code='64188' AND db.branch_name = d.client_name ) t LEFT JOIN dim_item di ON di.system_book_code = t.ledger_sbc AND t.item_num = di.item_num " + outboundFilter + ";";
+  for (const f of reg.factViews || []) {
+    try {
+      viewSql += buildFactViewSql2({
+        name: f.name,
+        glob: f.glob,
+        scopeKeyExpr: f.scopeKeyExpr,
+        columns: f.columns,
+        authKeys,
+        allBranches,
+        canSeeCost: !!perms.fields?.cost
+      });
+    } catch (e) {
+      console.error("[agent-query] \u6784\u5EFA fact \u89C6\u56FE\u5931\u8D25 " + f.name + ":", String(e));
+    }
+  }
   const combined = viewSql + "\n" + userSelect;
   const res = await fetch(DUCKDB_URL + "/query", {
     method: "POST",
@@ -536,7 +672,13 @@ module.exports = async function(req) {
     return json({ error: "no_permission", detail: perms && perms.error }, 403);
   }
   const regPre = await loadRegistry();
-  const allowedTables = ["retail_detail", "outbound_detail", ...regPre.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
+  const allowedTables = [
+    "retail_detail",
+    "outbound_detail",
+    ...regPre.pgTables,
+    ...(regPre.dimCarry || []).map((d) => d.name),
+    ...(regPre.factViews || []).map((d) => d.name)
+  ];
   let finalSql;
   try {
     finalSql = validateSql(sql, allowedTables);

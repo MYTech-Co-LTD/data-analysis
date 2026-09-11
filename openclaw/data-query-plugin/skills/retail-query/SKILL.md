@@ -132,6 +132,35 @@ WHERE sale_date >= '2026-08-01' AND biz_type <> 'wholesale_ext'
 GROUP BY 1 ORDER BY 2 DESC;
 ```
 
+**⑪ 补货/要货单明细（replenishment_detail）**
+口径（**模板硬编码，勿改**）：默认只算**已审核生效**的要货单 → `WHERE state_name='制单|审核'`；
+作废单（`含作废`）与未审核单（仅 `制单`）默认排除。用户明确问「要货需求/未审要货」时才放开过滤。
+写法要点：金额一律 `SUM(subtotal)`；**没有 `total_money` 这一列**（单头金额按 order_no 分组 SUM(subtotal)）；
+`business_date` 是时间戳 → 按日过滤用 `substr(business_date,1,10)`；
+门店键必须 `system_book_code + branch_num` 复合（跨账套重号）；商品 join 必须 `dim_item.system_book_code + item_num` 复合。
+> 数据覆盖：自 2026-08-25 起（9/5 之后连续）。**问跨期问题前先说明可用范围**，不要对缺数区间给出结论。
+
+```sql
+-- 门店补货额排行
+SELECT branch_name, SUM(subtotal) amt, COUNT(DISTINCT order_no) orders
+FROM replenishment_detail
+WHERE state_name='制单|审核' AND substr(business_date,1,10) >= '2026-09-05'
+GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+
+-- 单品补货量（配商品档案；必须复合键 join）
+SELECT di.item_name, SUM(r.quantity) qty, SUM(r.subtotal) amt
+FROM replenishment_detail r
+JOIN dim_item di ON di.system_book_code = r.system_book_code AND di.item_num = r.item_num
+WHERE r.state_name='制单|审核' AND substr(r.business_date,1,10) >= '2026-09-05'
+GROUP BY 1 ORDER BY 3 DESC LIMIT 10;
+
+-- 品牌对比
+SELECT system_book_code, SUM(subtotal) amt
+FROM replenishment_detail
+WHERE state_name='制单|审核' AND substr(business_date,1,10) >= '2026-09-05'
+GROUP BY 1 ORDER BY 2 DESC;
+```
+
 **规则**：报表中心有的指标/看板 → 用 ①-⑧ 模板（同口径，禁止明细自行聚合）；只有模板没有的自由维度 → 才用 ⑨。
 
 ## 回答规则（简短，严格遵守）

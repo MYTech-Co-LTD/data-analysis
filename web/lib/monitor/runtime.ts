@@ -7,6 +7,9 @@ import { probe as probeFn } from './probe';
 
 const INSFORGE_API_BASE = process.env.INSFORGE_API_BASE!;
 const INSFORGE_API_KEY = process.env.INSFORGE_API_KEY!;
+// 通用事实视图守护探测用（不经 jobs/env，避免 monitor → jobs 反向依赖）
+const DUCKDB_URL = process.env.DUCKDB_URL || 'http://duckdb:9000';
+const AGENT_API_KEY = process.env.AGENT_API_KEY!;
 
 function newClient() {
   return createClient({ baseUrl: INSFORGE_API_BASE, anonKey: INSFORGE_API_KEY });
@@ -62,6 +65,17 @@ function buildDeps(): EvalDeps {
       if (error) throw new Error(`getCollectTasks: ${error.message}`);
       return (data ?? []) as Array<{ id: string; name: string; schedule_cron: string; enabled: boolean; last_run_at: string | null }>;
     },
+    duckdbQuery: async (sql: string) => {
+      const r = await fetch(`${DUCKDB_URL}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-agent-key': AGENT_API_KEY },
+        body: JSON.stringify({ sql }),
+      });
+      const d = await r.json();
+      // d 可能是非对象 JSON（字符串/数字/null）——`!d.success` 会先抛 TypeError 掩盖真实原因。
+      if (!r.ok || !d?.success) throw new Error(`duckdb: ${d?.error || r.status}`);
+      return (d.data ?? []) as Array<Record<string, unknown>>;
+    },
   };
 }
 
@@ -95,7 +109,7 @@ export async function runHourlyBucket() {
 
 export async function runDailyBucket() {
   try {
-    await runScan(new SdkStore(newClient()), ['data_integrity'] as CheckType[], buildDeps(), EVALUATORS);
+    await runScan(new SdkStore(newClient()), ['data_integrity', 'data_volume'] as CheckType[], buildDeps(), EVALUATORS);
   } catch (e: any) {
     console.error('[monitor] daily bucket 异常:', e?.message ?? e);
   }

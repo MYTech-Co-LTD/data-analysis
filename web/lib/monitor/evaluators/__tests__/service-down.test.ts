@@ -14,6 +14,7 @@ const deps = (ok: boolean, extra: Partial<ProbeOutcome> = {}): EvalDeps => ({
   getCredentialToken: async () => null,
   getCollectLogs: async () => [],
   getCollectTasks: async () => [],
+  duckdbQuery: async () => [],
 });
 
 describe('evalServiceDown', () => {

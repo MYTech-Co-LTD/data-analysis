@@ -40,6 +40,7 @@ function makeDeps(tasks: CollectTask[], now: Date = NOW): EvalDeps {
     getCredentialToken: async () => null,
     getCollectLogs: async () => [],
     getCollectTasks: async () => tasks,
+    duckdbQuery: async () => [],
   };
 }
 
