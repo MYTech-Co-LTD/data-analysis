@@ -1801,16 +1801,21 @@ GROUP BY 1 ORDER BY 2 DESC;
 Run: `grep -c "replenishment_detail" openclaw/data-query-plugin/skills/retail-query/SKILL.md`
 Expected: ≥ 4（模板标题 + 3 条 SQL 各一次）
 
-人工核对：模板里的 JOIN 子句必须同时含 `system_book_code` 与 `item_num`（否则会被 `assertItemJoin` 拒）；模板里不得出现 `total_money`。
+人工核对：模板里的 JOIN 子句必须同时含 `system_book_code` 与 `item_num`（否则会被 `assertItemJoin` 拒）。
+**更强的验法**：用 esbuild 把 `functions/_shared/sql-guards.ts` 打包后**实调** `assertCompositeKeyJoins`，
+把模板里的 3 条 SQL 逐条喂进去 —— 必须全部不抛。
 
 Run: `grep -c "total_money" openclaw/data-query-plugin/skills/retail-query/SKILL.md`
-Expected: `0`
+Expected: **1（不是 0）**——模板里那句否定式警告「没有 `total_money` 这一列」**有意**含该字面量，
+它是拿来**防模型幻觉**的（模型可能知道源数据有单头金额而去试它），必须保留。
+**实质要求是「3 条 SQL 里对该列零引用」**，不是「全文不出现该字符串」——
+（原计划这里写 `0` 是自相矛盾的错误期望值，2026-09-11 修正。）
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add openclaw/data-query-plugin/skills/retail-query/SKILL.md
-git commit -m "feat(skill): 补货/要货单明细查询模板⑫（口径硬编码 + 复合键 + 禁用 total_money）"
+git commit -m "feat(skill): 补货/要货单明细查询模板⑪（口径硬编码 + 复合键 + 禁用 total_money）"
 ```
 
 ---
