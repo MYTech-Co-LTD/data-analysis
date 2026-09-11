@@ -10,6 +10,7 @@
 const { signJwt } = require("../_shared/jwt");
 const { json: sharedJson } = require("../_shared/cors");
 const { assertCompositeKeyJoins } = require("../_shared/sql-guards");
+const { validateScopeKeyExpr, buildFactViewSql, sqlLit } = require("../_shared/fact-view");
 
 // ===== 配置 =====
 const AGENT_API_KEY = Deno.env.get("AGENT_API_KEY");
@@ -23,6 +24,9 @@ const POSTGREST_URL = Deno.env.get("POSTGREST_BASE_URL") || "http://postgrest:30
 const RETAIL_GLOB_FALLBACK = "s3://lemeng-datasource/lemeng/retail_detail/*/*/all.parquet";
 const COST_COLUMNS_FALLBACK = ["item_cost_price", "order_detail_cost", "order_detail_grade_cost", "cost", "profit", "sale_profit_rate"];
 const REPORT_TABLES_FALLBACK = ["report_daily_sales", "report_daily_category", "report_weekly_trend"];
+// 通用事实视图必须跳过的名字：这两个视图有 union / 内联 dim join 的定制逻辑，
+// 由 runDuckdb 硬编码构建，注册表不得介入（spec 全局约束「不做存量重构」）。
+const HARDCODED_VIEW_NAMES = new Set(["retail_detail", "outbound_detail"]);
 const MAX_ROWS = 1000;
 const SHORT_JWT_TTL = 300; // 网关代签短时 JWT 有效期（秒）
 
@@ -31,6 +35,60 @@ const SHORT_JWT_TTL = 300; // 网关代签短时 JWT 有效期（秒）
 let REG_CACHE = null;
 let REG_CACHE_TS = 0;
 const REG_TTL_MS = 60000;
+// 通用事实视图数据集读取（spec §方案1）。
+// ★ 必须独立请求 + 独立 try/catch：PostgREST 对 select= 里的未知列返 400，
+//   若并入 loadRegistry 的主 datasets 查询，一次 400 会让整个注册表走 fallback
+//   → pgTables 退回硬编码 3 张报表表 → 现有 report_*_gen 查询误路由到 DuckDB 而失败。
+//   独立后：列缺失/请求失败只让「新数据集不可用」（fail-close），不碰存量。
+async function loadFactScopes() {
+  const out = [];
+  let rows = [];
+  try {
+    const headers = { Authorization: "Bearer " + (await serviceJwt()), "Content-Type": "application/json" };
+    const r = await fetch(
+      POSTGREST_URL +
+        "/datasets?select=name,source,scope_key_expr&engine=eq.duckdb_view&kind=eq.fact&exposed=is.true&scope_key_expr=not.is.null",
+      { headers },
+    );
+    if (!r.ok) {
+      console.error("[agent-query] loadFactScopes datasets http " + r.status);
+      return out;
+    }
+    rows = await r.json();
+  } catch (e) {
+    console.error("[agent-query] loadFactScopes datasets failed:", String(e));
+    return out;
+  }
+  const headers = { Authorization: "Bearer " + (await serviceJwt()), "Content-Type": "application/json" };
+  for (const d of rows || []) {
+    if (!d.name || !d.source || HARDCODED_VIEW_NAMES.has(d.name)) continue;
+    // 列清单（含敏感标记）逐数据集读；读失败 → 该数据集 fail-close（不构建）
+    let columns = [];
+    try {
+      const cr = await fetch(
+        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive&dataset_name=eq." +
+          encodeURIComponent(d.name) + "&order=ordinal.asc",
+        { headers },
+      );
+      if (cr.ok) columns = (await cr.json()).map((c) => ({ name: c.name, sensitive: !!c.is_sensitive }));
+    } catch (e) {
+      console.error("[agent-query] loadFactScopes columns failed " + d.name + ":", String(e));
+    }
+    if (columns.length === 0) {
+      console.error("[agent-query] fact dataset " + d.name + " 无注册列，跳过（fail-close）");
+      continue;
+    }
+    try {
+      validateScopeKeyExpr(d.scope_key_expr, columns.map((c) => c.name));
+    } catch (e) {
+      console.error("[agent-query] fact dataset " + d.name + " scope_key_expr 非法（" + e.message + "），跳过");
+      continue;
+    }
+    out.push({ name: d.name, glob: d.source, scopeKeyExpr: d.scope_key_expr, columns });
+  }
+  return out;
+}
+
 async function loadRegistry() {
   const now = Date.now();
   if (REG_CACHE && now - REG_CACHE_TS < REG_TTL_MS) return REG_CACHE;
@@ -39,6 +97,7 @@ async function loadRegistry() {
   let costColumns = COST_COLUMNS_FALLBACK.slice();
   let pgTables = REPORT_TABLES_FALLBACK.slice();
   let dimCarry = [];
+  let factViews = [];
   try {
     const dsRes = await fetch(POSTGREST_URL + "/datasets?select=name,engine,source,kind,carry_enabled,exposed", { headers });
     if (dsRes.ok) {
@@ -66,7 +125,16 @@ async function loadRegistry() {
   } catch (e) {
     console.error("[agent-query] loadRegistry failed, using fallback:", String(e));
   }
-  REG_CACHE = { retailGlob, costColumns, pgTables, dimCarry };
+  // 通用事实视图：独立 try/catch，失败只影响新数据集（见 loadFactScopes 注释）
+  // ★ 位置不变量：本块必须留在上面那个大 try/catch 之外——若并进去，一次请求失败会顺着
+  //   外层 catch 让整个注册表走回退（pgTables → 3 张报表表），现有 report_*_gen 查询会误路由 DuckDB。
+  try {
+    factViews = await loadFactScopes();
+  } catch (e) {
+    console.error("[agent-query] loadFactScopes 未捕获异常:", String(e));
+    factViews = [];
+  }
+  REG_CACHE = { retailGlob, costColumns, pgTables, dimCarry, factViews };
   REG_CACHE_TS = now;
   return REG_CACHE;
 }
@@ -159,9 +227,6 @@ const AGENT_CORS = {
 };
 function json(data, status) {
   return sharedJson(data, status, AGENT_CORS);
-}
-function sqlLit(s) {
-  return "'" + String(s).replace(/'/g, "''") + "'"; // branch_num 等数值字符串
 }
 const isPgQuery = (sql, pgTables) => pgTables.some((t) => new RegExp("\\b" + t + "\\b", "i").test(sql));
 
@@ -291,6 +356,23 @@ async function runDuckdb(userSelect, perms, reg) {
     "LEFT JOIN dim_branch db ON db.system_book_code='64188' AND db.branch_name = d.client_name " +
     ") t LEFT JOIN dim_item di ON di.system_book_code = t.ledger_sbc AND t.item_num = di.item_num " +
     outboundFilter + ";";
+  // 通用事实视图（注册表声明，spec §方案1）：列投影 + 行级权限裁剪
+  // authKeys/allBranches 复用上面的门店授权解析结果（与 retail_detail 同一套归一）
+  for (const f of (reg.factViews || [])) {
+    try {
+      viewSql += buildFactViewSql({
+        name: f.name,
+        glob: f.glob,
+        scopeKeyExpr: f.scopeKeyExpr,
+        columns: f.columns,
+        authKeys,
+        allBranches,
+        canSeeCost: !!perms.fields?.cost,
+      });
+    } catch (e) {
+      console.error("[agent-query] 构建 fact 视图失败 " + f.name + ":", String(e));
+    }
+  }
   // 一次提交：建视图 + 用户 SELECT（同连接，临时视图隔离，已实测）
   const combined = viewSql + "\n" + userSelect;
   const res = await fetch(DUCKDB_URL + "/query", {
@@ -517,7 +599,13 @@ module.exports = async function (req) {
   // ③ SQL 白名单（表引用正向白名单：引擎路由前先给全量合法表集——DuckDB 权限视图
   // + carry 维表视图 + PG 路由表，均为权限强制面；CTE 由 validateSql 自行识别）
   const regPre = await loadRegistry();
-  const allowedTables = ["retail_detail", "outbound_detail", ...regPre.pgTables, ...(regPre.dimCarry || []).map((d) => d.name)];
+  const allowedTables = [
+    "retail_detail",
+    "outbound_detail",
+    ...regPre.pgTables,
+    ...(regPre.dimCarry || []).map((d) => d.name),
+    ...(regPre.factViews || []).map((d) => d.name),
+  ];
   let finalSql;
   try {
     finalSql = validateSql(sql, allowedTables);
