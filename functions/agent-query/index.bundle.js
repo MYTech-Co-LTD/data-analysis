@@ -162,8 +162,9 @@ function buildFactViewSql(spec) {
   const cols = spec.columns || [];
   if (cols.length === 0) throw new Error("empty_columns");
   const canSee = spec.canSeeCost ? "TRUE" : "FALSE";
+  const srcIdent = (c) => sqlIdent(c.sourceName ?? c.name);
   const projection = cols.map(
-    (c) => c.sensitive ? `CASE WHEN ${canSee} THEN ${sqlIdent(c.name)} ELSE NULL END AS ${sqlIdent(c.name)}` : sqlIdent(c.name)
+    (c) => c.sensitive ? `CASE WHEN ${canSee} THEN ${srcIdent(c)} ELSE NULL END AS ${sqlIdent(c.name)}` : `${srcIdent(c)} AS ${sqlIdent(c.name)}`
   ).join(", ");
   const where = spec.allBranches ? "" : spec.authKeys.length === 0 ? " WHERE 1=0" : " WHERE " + spec.scopeKeyExpr + " IN (" + spec.authKeys.map(sqlLit).join(", ") + ")";
   return "\nCREATE OR REPLACE TEMP VIEW " + spec.name + " AS SELECT * FROM (SELECT " + projection + " FROM read_parquet(" + sqlLit(spec.glob) + ", union_by_name=true)) t" + where + ";";

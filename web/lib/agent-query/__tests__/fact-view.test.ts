@@ -189,4 +189,57 @@ describe("buildFactViewSql：列投影 = 注册列", () => {
       buildFactViewSql({ ...base, columns: [], authKeys: ["3120-7"], allBranches: false })
     ).toThrowError(/empty_columns/);
   });
+
+  // ★ source_name 映射（2026-09-11 加）：平台口径名 ≠ 外部管线列名时的正解，避免要求对方改名
+  it("sourceName 非空 → 投影为 \"源列名\" AS \"视图列名\"", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [
+        { name: "system_book_code", sensitive: false, sourceName: "company_id" },
+        { name: "branch_num", sensitive: false },
+      ],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    expect(sql).toContain('"company_id" AS "system_book_code"');
+    expect(sql).toContain('"branch_num" AS "branch_num"');
+  });
+
+  it("sourceName 为空 → 退回同名（行为与加映射前一致）", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "branch_num", sensitive: false }],
+      authKeys: [],
+      allBranches: true,
+    });
+    expect(sql).toContain('"branch_num" AS "branch_num"');
+    expect(sql).not.toContain("company_id");
+  });
+
+  it("敏感列 + sourceName → 脱敏作用在源列上、别名仍为视图列名", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "profit", sensitive: true, sourceName: "profit_money" }],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    expect(sql).toContain(
+      'CASE WHEN FALSE THEN "profit_money" ELSE NULL END AS "profit"'
+    );
+  });
+
+  it("scope_key_expr 用视图列名求值（不是源列名）", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [
+        { name: "system_book_code", sensitive: false, sourceName: "company_id" },
+        { name: "branch_num", sensitive: false },
+      ],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    // WHERE 里出现的必须是视图列名 system_book_code，源列名 company_id 只应出现在投影层
+    expect(sql).toContain('WHERE system_book_code');
+    expect(sql).not.toContain('WHERE company_id');
+  });
 });

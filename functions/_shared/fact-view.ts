@@ -9,8 +9,9 @@
 //   ③ 表达式必须引用本数据集至少一列 → 挡住纯常量（行过滤失效即越权）
 
 export interface FactColumn {
-  name: string;
+  name: string; // 视图里的列名（平台口径名）
   sensitive: boolean;
+  sourceName?: string; // parquet 里的源列名；为空表示与 name 同名。例：name='system_book_code', sourceName='company_id'
 }
 
 export interface FactViewSpec {
@@ -80,12 +81,14 @@ export function buildFactViewSql(spec: FactViewSpec): string {
   const cols = spec.columns || [];
   if (cols.length === 0) throw new Error("empty_columns");
   const canSee = spec.canSeeCost ? "TRUE" : "FALSE";
-  // ① 列投影：敏感列整组按 can_see_cost 脱敏
+  // ① 列投影：敏感列整组按 can_see_cost 脱敏；源列名可与视图列名不同（source_name 映射）
+  // 例：name='system_book_code' + sourceName='company_id' → "company_id" AS "system_book_code"
+  const srcIdent = (c: FactColumn) => sqlIdent(c.sourceName ?? c.name);
   const projection = cols
     .map((c) =>
       c.sensitive
-        ? `CASE WHEN ${canSee} THEN ${sqlIdent(c.name)} ELSE NULL END AS ${sqlIdent(c.name)}`
-        : sqlIdent(c.name)
+        ? `CASE WHEN ${canSee} THEN ${srcIdent(c)} ELSE NULL END AS ${sqlIdent(c.name)}`
+        : `${srcIdent(c)} AS ${sqlIdent(c.name)}`
     )
     .join(", ");
   // ② 行过滤：全量授权不加过滤；否则 IN 授权复合键；空集 → 1=0（fail-close）
