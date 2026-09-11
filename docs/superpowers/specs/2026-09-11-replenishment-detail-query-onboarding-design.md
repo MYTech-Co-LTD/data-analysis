@@ -58,6 +58,15 @@ s3://lemeng-datasource/duckle/lemeng/replenishment_detail/<账套>/<YYYY-MM-DD>/
 - **金额自洽**：`total_money ≡ sum(subtotal)`
 - 命名已是 `all.parquet`，`*/*/all.parquet` glob 不踩「全表+分片重复读」
 - 数据在 `lemeng-datasource` 桶内，**DuckDB 服务现成凭证可用，无凭据改动**
+- **列名/类型的真值**（2026-09-11 在服务器 DuckDB 上对**真实 parquet** 实测）：账套列真名是 **`company_id`**（VARCHAR），
+  **parquet 里没有 `system_book_code` 列**；`branch_num` / `out_branch_num` / `item_num` 是 **BIGINT**；`quantity`/`use_quantity`/`subtotal` 是 DOUBLE；其余为 VARCHAR。
+  20 个注册列名与真实列**逐一对应**，唯一的改名就是账套列（由 `source_name` 映射解决）。
+- **`||` 拼 BIGINT 可用**：`company_id || '-' || branch_num` 实测产出 `3120-1` / `3120-7` 形态（DuckDB 隐式转字符串），无需显式 CAST。
+  该分区产出 86 个不同复合键（≈当日有要货的门店数），符合预期。
+- ⚠️ **踩过的坑（本设计差点废掉的地方）**：把注册的 `scope_key_expr` **原样**对着真实 parquet 跑，
+  第一版直接 `Binder Error: Referenced column "system_book_code" not found` → **视图建不起来、功能零可用**。
+  这个错误在本机**测不出来**（本地 DuckDB 连不上内网 S3）。**故测试节必须包含「对真实 parquet 干跑一次视图 SQL」**，
+  且它必须在**部署前**做（在服务器上用 DuckDB 直接跑，不必部署）。
 
 ## 数据契约（交付其他系统）
 
@@ -65,7 +74,7 @@ s3://lemeng-datasource/duckle/lemeng/replenishment_detail/<账套>/<YYYY-MM-DD>/
 |---|---|---|
 | 1 | **全量回补到 2026-07-01**，且**旧分区不删**（每日全窗口快照覆盖写，同 alipay 管线模式） | 与现有报表体系同期；否则跨期问答静默少算 |
 | 2 | **保留原始 `state_name`，管线侧不过滤** | 管线预过滤会把口径焊死在管线里，改口径要重跑历史 |
-| 3 | **保留 `company_id`** | 行级权限的唯一依据 |
+| 3 | **保留账套列**（现名 `company_id`，值 3120/64188） | 行级权限的唯一依据。**不要求改名**——由消费侧 `source_name` 映射到平台的 `system_book_code`（见方案 2） |
 | 4 | **保留 `order_no` / `item_num` / `business_date` 原值** | 唯一键 + 业务日锚 |
 | 5 | 给出 `quantity` ↔ `use_quantity` ↔ `item_spec` 换算说明 | 两个数量口径需明确哪个是「补货量」 |
 | 6 | 分区命名保持 `<账套>/<YYYY-MM-DD>/all.parquet` | 与 Lemeng 原生同构 |
@@ -110,6 +119,10 @@ WHERE <scope_key_expr> IN (<授权复合键集合>)      -- 未授权 → WHERE 
   隔离后：列缺失只让**新数据集**不可用（fail-close），碰不到 `pgTables`/`retailGlob`/`costColumns`。
 - **fail-close**：`kind='fact'` 且 `scope_key_expr IS NULL` → 不建视图、不进白名单（**不是**「不过滤」）。与 CLAUDE.md「空集 = deny」一贯。
 - **列投影 = `dataset_columns` 的注册列**（显式列出，非 `SELECT *`）：既要拿掉 `total_money`，也让「能看见哪些列」有单一事实源。注册列为空 → 不构建（fail-close）。
+- **`dataset_columns.source_name`：源列名 → 视图列名映射**（2026-09-11 加，见下）。为空时 `source_name = name`（同名前缀），
+  非空时投影为 `"<source_name>" AS "<name>"`。存在的理由：**平台口径名与外部管线的列名不一致是常态**，
+  不该要求每个外部系统改名（那会把我们的字典耦合到别人的命名上）。补货的账套列即此例。
+  注意 `scope_key_expr` 是在**投影后的视图列**上求值，所以它一律用**视图列名**（`system_book_code`），不用源列名。
 - **跳过已硬编码的视图名**：`retail_detail` / `outbound_detail` 即使被注册也**不得**由通用路径重建（它们有 union/内联 join 的定制逻辑）。
 - **allowedTables 由注册表派生**（已硬编码的两个仍显式保留），不再手写维护。
 - **表达式校验三条**（校验失败 → 不建视图 + 记日志，fail-close）：
@@ -154,7 +167,8 @@ date_column     = business_date
 
 **视图暴露列**（28 列收成）：
 
-- `system_book_code`（= 原 `company_id`，**改名为硬要求**：`assertBranchJoin` 字面量匹配 `system_book_code`，不认 `sbc`/`company_id`）
+- `system_book_code`（**平台口径名**；parquet 里的源列叫 `company_id`，由注册表 `source_name` 映射投影而来，见下）
+  —— `assertBranchJoin` 是字面量匹配，只认 `system_book_code`，不认 `sbc`/`company_id`，所以视图**必须**暴露这个名字
 - `branch_num` / `branch_name`、`out_branch_num` / `out_branch_name`
 - `order_no` / `order_type` / `state_name`
 - `business_date` / `create_time` / `audit_time`
@@ -270,6 +284,9 @@ SKILL.md 模板库新增⑫补货模板（要点）：
 - **字典**：`DELETE FROM datasets WHERE name='replenishment_detail'`（级联删列描述）
 - **网关**：`scope_key_expr` 列保留无害（对 `IS NULL` 即不建视图）；如需完全回退，还原 `allowedTables` 写死版本
 - **守护**：`UPDATE monitor_rules SET enabled=false WHERE check_type IN ('data_freshness','data_volume')`
+  —— ⚠️ **此杠杆只在下次部署前有效**：`scripts/migrate.sh` 每次部署全量重跑全部迁移，
+  而迁移 213 的 `ON CONFLICT DO UPDATE` 会刷新该行。**因此 213 的 `DO UPDATE` 有意不带 `enabled=TRUE`**，
+  让这个抑制在重跑后仍保留；若要**永久**停用，则需改迁移（或删除规则行）——见 213 头注释。
 - **数据本身零改动**（视图为查询时实时构建，无物化存储）
 
 ## 依赖与待办

@@ -15,7 +15,18 @@
 - **部署次序是硬约束**（违反会打挂现有报表问答）：
   `① architecture.md → ② agent-query function → ③ 迁移 212 → ④ restart postgrest → ⑤ 迁移 213 → ⑥ monitor evaluator（可在 213 前后）`
 - **`scope_key_expr` 与逐数据集列必须走独立请求 + 独立 try/catch**，**绝不可并入 `loadRegistry` 现有的 `datasets?select=...` 主查询**。PostgREST 对未知列返 400，主查询一挂整个 `loadRegistry` 走 fallback → `pgTables` 退回只剩 3 张报表表 → 现有 `report_*_gen` 查询误路由到 DuckDB 而失败。
-- **账套列名必须是 `system_book_code`**（`assertBranchJoin` 是字面量匹配，不认 `sbc`/`company_id`）。
+- **视图里的账套列名必须是 `system_book_code`**（`assertBranchJoin` 是字面量匹配，不认 `sbc`/`company_id`）。
+  但**源 parquet 的列名不必叫这个**——用 `dataset_columns.source_name` 声明「源列名 → 视图列名」映射，
+  投影写 `"<source_name>" AS "<name>"`（`source_name` 为空则退回 `name`，即同名前缀）。
+  ⚠️ `scope_key_expr` 在**投影后的视图列**上求值，所以它一律用**视图列名**（`system_book_code`），绝不用源列名。
+- **实测列名/类型真值（2026-09-11 用服务器 DuckDB 对真实 parquet 验证，不要凭 spec 的字段调研表猜）**：
+  账套列 `company_id` (VARCHAR，**parquet 里没有 `system_book_code`**)；`branch_num` / `out_branch_num` / `item_num` (BIGINT)；
+  `quantity` / `use_quantity` / `subtotal` (DOUBLE)；其余注册列 VARCHAR。
+  `company_id || '-' || branch_num` **可直接拼接**（DuckDB 隐式转字符串），无需 CAST；实测该分区产出 86 个不同复合键。
+- **⚠️ 部署前必须做一次「真实 parquet 干跑」**：把注册的投影 + `scope_key_expr` 对着**真实 OSS 分区**跑一遍
+  （在服务器上用 DuckDB 直接跑即可，**不必部署**）。本机 DuckDB 连不上内网 S3，**本机测不出这类错误**——
+  第一版注册值就是带着 `Binder Error: Referenced column "system_book_code" not found` 一路通过评审的，
+  若走到生产冒烟才发现，整个功能零可用。
 - **`total_money` 不注册**（单头金额逐行重复，行级 SUM 整单翻倍）。靠「按注册列投影」自动从视图消失。
 - **视图列 = `dataset_columns` 注册列**（显式投影，非 `SELECT *`）。注册列为空 → 不构建视图（fail-close）。
 - **fail-close**：`scope_key_expr` 为空/非法 → 不建视图、不进白名单。授权空集 → `WHERE 1=0`（不是「不过滤」）。
@@ -322,6 +333,59 @@ describe("buildFactViewSql：列投影 = 注册列", () => {
       buildFactViewSql({ ...base, columns: [], authKeys: ["3120-7"], allBranches: false })
     ).toThrowError(/empty_columns/);
   });
+
+  // ★ source_name 映射（2026-09-11 加）：平台口径名 ≠ 外部管线列名时的正解，避免要求对方改名
+  it("sourceName 非空 → 投影为 \"源列名\" AS \"视图列名\"", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [
+        { name: "system_book_code", sensitive: false, sourceName: "company_id" },
+        { name: "branch_num", sensitive: false },
+      ],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    expect(sql).toContain('"company_id" AS "system_book_code"');
+    expect(sql).toContain('"branch_num" AS "branch_num"');
+  });
+
+  it("sourceName 为空 → 退回同名（行为与加映射前一致）", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "branch_num", sensitive: false }],
+      authKeys: [],
+      allBranches: true,
+    });
+    expect(sql).toContain('"branch_num" AS "branch_num"');
+    expect(sql).not.toContain("company_id");
+  });
+
+  it("敏感列 + sourceName → 脱敏作用在源列上、别名仍为视图列名", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [{ name: "profit", sensitive: true, sourceName: "profit_money" }],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    expect(sql).toContain(
+      'CASE WHEN FALSE THEN "profit_money" ELSE NULL END AS "profit"'
+    );
+  });
+
+  it("scope_key_expr 用视图列名求值（不是源列名）", () => {
+    const sql = buildFactViewSql({
+      ...base,
+      columns: [
+        { name: "system_book_code", sensitive: false, sourceName: "company_id" },
+        { name: "branch_num", sensitive: false },
+      ],
+      authKeys: ["3120-7"],
+      allBranches: false,
+    });
+    // WHERE 里出现的必须是视图列名 system_book_code，源列名 company_id 只应出现在投影层
+    expect(sql).toContain('WHERE system_book_code');
+    expect(sql).not.toContain('WHERE company_id');
+  });
 });
 ```
 
@@ -346,8 +410,9 @@ Expected: FAIL —— `Failed to resolve import "../../../../functions/_shared/f
 //   ③ 表达式必须引用本数据集至少一列 → 挡住纯常量（行过滤失效即越权）
 
 export interface FactColumn {
-  name: string;
+  name: string; // 视图里的列名（平台口径名）
   sensitive: boolean;
+  sourceName?: string; // parquet 里的源列名；为空表示与 name 同名。例：name='system_book_code', sourceName='company_id'
 }
 
 export interface FactViewSpec {
@@ -413,12 +478,14 @@ export function buildFactViewSql(spec: FactViewSpec): string {
   const cols = spec.columns || [];
   if (cols.length === 0) throw new Error("empty_columns");
   const canSee = spec.canSeeCost ? "TRUE" : "FALSE";
-  // ① 列投影：敏感列整组按 can_see_cost 脱敏
+  // ① 列投影：敏感列整组按 can_see_cost 脱敏；源列名可与视图列名不同（source_name 映射）
+  // 例：name='system_book_code' + sourceName='company_id' → "company_id" AS "system_book_code"
+  const srcIdent = (c: FactColumn) => sqlIdent(c.sourceName ?? c.name);
   const projection = cols
     .map((c) =>
       c.sensitive
-        ? `CASE WHEN ${canSee} THEN ${sqlIdent(c.name)} ELSE NULL END AS ${sqlIdent(c.name)}`
-        : sqlIdent(c.name)
+        ? `CASE WHEN ${canSee} THEN ${srcIdent(c)} ELSE NULL END AS ${sqlIdent(c.name)}`
+        : `${srcIdent(c)} AS ${sqlIdent(c.name)}`
     )
     .join(", ");
   // ② 行过滤：全量授权不加过滤；否则 IN 授权复合键；空集 → 1=0（fail-close）
@@ -438,7 +505,7 @@ export function buildFactViewSql(spec: FactViewSpec): string {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd web && npx vitest run lib/agent-query/__tests__/fact-view.test.ts`
-Expected: PASS（19 个用例全绿：2 sqlLit + 9 validateScopeKeyExpr + 8 buildFactViewSql）
+Expected: PASS（23 个用例全绿：2 sqlLit + 9 validateScopeKeyExpr + 12 buildFactViewSql）
 
 - [ ] **Step 5: 确认没有破坏既有守卫单测**
 
@@ -550,11 +617,18 @@ async function loadFactScopes() {
     let columns = [];
     try {
       const cr = await fetch(
-        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive&dataset_name=eq." +
+        POSTGREST_URL + "/dataset_columns?select=name,is_sensitive,source_name&dataset_name=eq." +
           encodeURIComponent(d.name) + "&order=ordinal.asc",
         { headers },
       );
-      if (cr.ok) columns = (await cr.json()).map((c) => ({ name: c.name, sensitive: !!c.is_sensitive }));
+      if (cr.ok) {
+        // source_name：源列名 → 视图列名映射（为空表示同名）。例：system_book_code ← company_id
+        columns = (await cr.json()).map((c) => ({
+          name: c.name,
+          sensitive: !!c.is_sensitive,
+          ...(c.source_name ? { sourceName: c.source_name } : {}),
+        }));
+      }
     } catch (e) {
       console.error("[agent-query] loadFactScopes columns failed " + d.name + ":", String(e));
     }
@@ -712,6 +786,14 @@ ALTER TABLE datasets ADD COLUMN IF NOT EXISTS scope_key_expr TEXT;
 COMMENT ON COLUMN datasets.scope_key_expr IS
   '事实数据集的门店复合键 SQL 表达式（对本数据集注册列求值，产出归一形态 sbc-branch_num，用于行级权限裁剪）；为空=不可通用构建→ deny';
 
+-- 源列名 → 视图列名映射（2026-09-11 加）：外部管线的列名不必与平台口径名一致。
+-- 例：本行 name='system_book_code' 而 parquet 里的真实列叫 'company_id'，则 source_name='company_id'，
+-- 视图投影为 "company_id" AS "system_book_code"。为空表示同名。
+ALTER TABLE dataset_columns ADD COLUMN IF NOT EXISTS source_name TEXT;
+
+COMMENT ON COLUMN dataset_columns.source_name IS
+  '源 parquet 列名 → 视图列名（本行 name）的映射；为空=与 name 同名。用于外部管线列名与平台口径名不一致时，避免要求对方改名';
+
 COMMIT;
 ```
 
@@ -795,36 +877,48 @@ VALUES (
   'regexp_replace(system_book_code || ''-'' || branch_num, ''^([0-9]+)-0+([0-9]+)$'', ''\1-\2'')',
   '补货单(要货单)商品行；一行=一单一商品。口径：默认只算已审核生效单(state_name=''制单|审核'')，作废/未审核默认排除。金额用 SUM(subtotal)，单头金额按 order_no 分组 SUM(subtotal)。门店键必须 system_book_code+branch_num 复合（跨账套重号）'
 )
-ON CONFLICT (name) DO NOTHING;
+-- 用 DO UPDATE 而非 DO NOTHING：否则本迁移日后修正（描述/来源/表达式）在已落库的库上会**静默 no-op**
+-- ——「看起来部署了，什么也没改」。列名可枚举，全量覆写是幂等且可预期的。
+ON CONFLICT (name) DO UPDATE SET
+  display_name=EXCLUDED.display_name, engine=EXCLUDED.engine, source=EXCLUDED.source,
+  kind=EXCLUDED.kind, is_realtime=EXCLUDED.is_realtime, columns_typed=EXCLUDED.columns_typed,
+  date_column=EXCLUDED.date_column, date_format=EXCLUDED.date_format,
+  carry_enabled=EXCLUDED.carry_enabled, exposed=EXCLUDED.exposed,
+  scope_key_expr=EXCLUDED.scope_key_expr, description=EXCLUDED.description;
 
 -- ===== 2. 列注册（视图暴露列 = 本清单；total_money intentionally absent）=====
-INSERT INTO dataset_columns (dataset_name, name, data_type, semantic_group, is_sensitive, join_to, description, ordinal)
-SELECT v.dataset_name, v.name, v.data_type, v.semantic_group, v.is_sensitive, v.join_to, v.description, v.ordinal
+-- data_type 取**真实 parquet 实测值**（2026-09-11 服务器 DuckDB 验证），不是沿用 lemeng 原生表的「全 VARCHAR」。
+-- source_name 只给账套列用：parquet 里它叫 company_id，而平台口径名（含网关门店键守卫）必须叫 system_book_code。
+INSERT INTO dataset_columns (dataset_name, name, data_type, semantic_group, is_sensitive, join_to, source_name, description, ordinal)
+SELECT v.dataset_name, v.name, v.data_type, v.semantic_group, v.is_sensitive, v.join_to, v.source_name, v.description, v.ordinal
 FROM (VALUES
-  ('replenishment_detail','system_book_code','TEXT','维度',FALSE,'dim_branch(system_book_code,branch_num)','品牌账套：3120=熊喵鲜生 / 64188=品品甜。门店键必须与 branch_num 复合使用',1),
-  ('replenishment_detail','branch_num','TEXT','门店',FALSE,'dim_branch(system_book_code,branch_num)','要货门店号（跨账套重号，禁止单独作 join 键）',2),
-  ('replenishment_detail','branch_name','TEXT','门店',FALSE,NULL,'要货门店名',3),
-  ('replenishment_detail','out_branch_num','TEXT','门店',FALSE,NULL,'出货方号（=99 管理中心/配送中心）',4),
-  ('replenishment_detail','out_branch_name','TEXT','门店',FALSE,NULL,'出货方名',5),
-  ('replenishment_detail','order_no','TEXT','单据',FALSE,NULL,'要货单号（带账套前缀 YH3120…/YH64188…，两账套不撞）',6),
-  ('replenishment_detail','order_type','TEXT','单据',FALSE,NULL,'单据类型（要货单）',7),
-  ('replenishment_detail','state_name','TEXT','单据',FALSE,NULL,'单据状态：制单 / 制单|审核 / 制单|作废 / 制单|审核|作废。默认口径只看 ''制单|审核''',8),
-  ('replenishment_detail','business_date','TEXT','日期',FALSE,NULL,'业务日（全时间戳）。按日过滤用 substr(business_date,1,10)；与分区目录名恒等（实测 0 例外）',9),
-  ('replenishment_detail','create_time','TEXT','日期',FALSE,NULL,'制单时间',10),
-  ('replenishment_detail','audit_time','TEXT','日期',FALSE,NULL,'审核时间（未审核单为空）',11),
-  ('replenishment_detail','item_num','TEXT','商品',FALSE,'dim_item(system_book_code,item_num)','账套内商品编号（跨账套重号）。与 dim_item 关联必须配 system_book_code 复合成键',12),
-  ('replenishment_detail','item_code','TEXT','商品',FALSE,'dim_item.item_code','货来源编码（跨账套全局唯一），可单独作键',13),
-  ('replenishment_detail','item_name','TEXT','商品',FALSE,NULL,'商品展示名。⚠禁止用 item_name 做 join 键（双账套同名不同货）',14),
-  ('replenishment_detail','item_spec','TEXT','商品',FALSE,NULL,'规格',15),
-  ('replenishment_detail','item_unit','TEXT','商品',FALSE,NULL,'基本单位',16),
-  ('replenishment_detail','quantity','DOUBLE','数量',FALSE,NULL,'要货数量（基本单位口径）',17),
-  ('replenishment_detail','use_quantity','DOUBLE','数量',FALSE,NULL,'要货数量（件数口径，配 use_unit）',18),
-  ('replenishment_detail','use_unit','TEXT','数量',FALSE,NULL,'件单位',19),
-  ('replenishment_detail','subtotal','DOUBLE','金额',FALSE,NULL,'行金额（行级求和的唯一正确列）。单头金额 = 按 order_no 分组 SUM(subtotal)',20)
-) AS v(dataset_name, name, data_type, semantic_group, is_sensitive, join_to, description, ordinal)
-WHERE NOT EXISTS (
-  SELECT 1 FROM dataset_columns WHERE dataset_name='replenishment_detail' AND name=v.name
-);
+  ('replenishment_detail','system_book_code','VARCHAR','维度',FALSE,'dim_branch(system_book_code,branch_num)','company_id','品牌账套：3120=熊喵鲜生 / 64188=品品甜。源列名 company_id → 视图列名 system_book_code。门店键必须与 branch_num 复合使用',1),
+  ('replenishment_detail','branch_num','BIGINT','门店',FALSE,'dim_branch(system_book_code,branch_num)',NULL,'要货门店号（跨账套重号，禁止单独作 join 键）。BIGINT；与字符串拼接 DuckDB 会隐式转换',2),
+  ('replenishment_detail','branch_name','VARCHAR','门店',FALSE,NULL,NULL,'要货门店名',3),
+  ('replenishment_detail','out_branch_num','BIGINT','门店',FALSE,NULL,NULL,'出货方号（=99 管理中心/配送中心）',4),
+  ('replenishment_detail','out_branch_name','VARCHAR','门店',FALSE,NULL,NULL,'出货方名',5),
+  ('replenishment_detail','order_no','VARCHAR','单据',FALSE,NULL,NULL,'要货单号（带账套前缀 YH3120…/YH64188…，两账套不撞；与 item_num 合起来全局唯一）',6),
+  ('replenishment_detail','order_type','VARCHAR','单据',FALSE,NULL,NULL,'单据类型（要货单）',7),
+  ('replenishment_detail','state_name','VARCHAR','单据',FALSE,NULL,NULL,'单据状态：制单 / 制单|审核 / 制单|作废 / 制单|审核|作废。默认口径只看 ''制单|审核''',8),
+  ('replenishment_detail','business_date','VARCHAR','日期',FALSE,NULL,NULL,'业务日（**全时间戳**）。按日过滤用 substr(business_date,1,10)；与分区目录名恒等（实测 0 例外）',9),
+  ('replenishment_detail','create_time','VARCHAR','日期',FALSE,NULL,NULL,'制单时间',10),
+  ('replenishment_detail','audit_time','VARCHAR','日期',FALSE,NULL,NULL,'审核时间（未审核单为空）',11),
+  ('replenishment_detail','item_num','BIGINT','商品',FALSE,'dim_item(system_book_code,item_num)',NULL,'账套内商品编号（跨账套重号）。与 dim_item 关联必须配 system_book_code 复合成键',12),
+  ('replenishment_detail','item_code','VARCHAR','商品',FALSE,'dim_item.item_code',NULL,'货来源编码（跨账套全局唯一），可单独作键',13),
+  ('replenishment_detail','item_name','VARCHAR','商品',FALSE,NULL,NULL,'商品展示名。⚠禁止用 item_name 做 join 键（双账套同名不同货）',14),
+  ('replenishment_detail','item_spec','VARCHAR','商品',FALSE,NULL,NULL,'规格',15),
+  ('replenishment_detail','item_unit','VARCHAR','商品',FALSE,NULL,NULL,'基本单位',16),
+  ('replenishment_detail','quantity','DOUBLE','数量',FALSE,NULL,NULL,'要货数量（基本单位口径）',17),
+  ('replenishment_detail','use_quantity','DOUBLE','数量',FALSE,NULL,NULL,'要货数量（件数口径，配 use_unit）',18),
+  ('replenishment_detail','use_unit','VARCHAR','数量',FALSE,NULL,NULL,'件单位',19),
+  ('replenishment_detail','subtotal','DOUBLE','金额',FALSE,NULL,NULL,'行金额（行级求和的唯一正确列）。单头金额 = 按 order_no 分组 SUM(subtotal)',20)
+) AS v(dataset_name, name, data_type, semantic_group, is_sensitive, join_to, source_name, description, ordinal)
+-- DO UPDATE 而非 WHERE NOT EXISTS：后者在已落库的库上会让本迁移的**后续修正静默 no-op**
+-- （例如拿到换算说明后要改 quantity 的 description，会「部署成功但什么都没改」）。
+ON CONFLICT (dataset_name, name) DO UPDATE SET
+  data_type=EXCLUDED.data_type, semantic_group=EXCLUDED.semantic_group,
+  is_sensitive=EXCLUDED.is_sensitive, join_to=EXCLUDED.join_to,
+  source_name=EXCLUDED.source_name, description=EXCLUDED.description, ordinal=EXCLUDED.ordinal;
 
 -- ===== 3. 到达守护（data_freshness，runHourlyBucket 每小时）=====
 -- 按账套各配一行：合计会被另一账套掩盖，必须分开看（spec §方案3）。
@@ -832,12 +926,15 @@ INSERT INTO monitor_rules (name, check_type, target, threshold, severity, templa
 VALUES
  ('补货到达·3120','data_freshness','replenishment_detail:3120',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1}'::jsonb,
-  'high','补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE),
+  'high','🔴 [{severity}] 补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE),
  ('补货到达·64188','data_freshness','replenishment_detail:64188',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1}'::jsonb,
   'high','补货数据未到达：{dataset} 账套 {account} 缺 {expect_date} 分区（最新 {have_latest}）',1800,TRUE)
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
-  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template, enabled=TRUE;
+  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template;
+-- ↑ 有意**不**写 `enabled=TRUE`：migrate.sh 每次部署全量重跑全部迁移，若这里强制回 TRUE，
+--   则 spec 回滚节那条 `UPDATE monitor_rules SET enabled=false ...` 的应急抑制会在下次部署被**静默撤销**。
+--   新行仍由 VALUES 里的 TRUE 正常启用；要**永久**停用则需改本迁移或删除规则行。
 
 -- ===== 4. 行数异常守护（data_volume，runDailyBucket 每日 03:00）=====
 -- 类型名用 data_volume 而非 data_integrity：后者的文档原义是「明细 count vs PG 汇总 差异率」（且已被 QA 体系承担），
@@ -846,12 +943,15 @@ INSERT INTO monitor_rules (name, check_type, target, threshold, severity, templa
 VALUES
  ('补货行数异常·3120','data_volume','replenishment_detail:3120',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
-  'high','补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE),
+  'high','🔴 [{severity}] 补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE),
  ('补货行数异常·64188','data_volume','replenishment_detail:64188',
   '{"dataset":"replenishment_detail","glob_template":"s3://lemeng-datasource/duckle/lemeng/replenishment_detail/{account}/*/all.parquet","lookback_days":1,"median_window":7,"deviation_pct":50,"min_samples":3}'::jsonb,
   'high','补货行数异常：{dataset} 账套 {account} {date} 行数 {rows}，近 {window} 日中位数 {median}（偏离 {deviation_pct}%）',1800,TRUE)
 ON CONFLICT (check_type, target) WHERE target IS NOT NULL DO UPDATE SET
-  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template, enabled=TRUE;
+  threshold=EXCLUDED.threshold, severity=EXCLUDED.severity, template=EXCLUDED.template;
+-- ↑ 有意**不**写 `enabled=TRUE`：migrate.sh 每次部署全量重跑全部迁移，若这里强制回 TRUE，
+--   则 spec 回滚节那条 `UPDATE monitor_rules SET enabled=false ...` 的应急抑制会在下次部署被**静默撤销**。
+--   新行仍由 VALUES 里的 TRUE 正常启用；要**永久**停用则需改本迁移或删除规则行。
 
 COMMIT;
 ```
@@ -876,7 +976,8 @@ docker exec deploy-postgres-1 psql -U postgres -d insforge -c \
   "SELECT check_type, target, enabled FROM monitor_rules WHERE target LIKE 'replenishment_detail:%' ORDER BY 1,2;"
 ```
 
-Expected: 1 行数据集（`scope_key_expr` 非空）；列数 `20`；规则 4 行（2×data_freshness + 2×data_volume，全 `t`）
+Expected: 1 行数据集（`scope_key_expr` 非空）；列数 `20`（其中 `system_book_code` 的 `source_name='company_id'`，其余为 NULL）；
+规则 4 行（2×data_freshness + 2×data_volume，全 `t`）
 
 - [ ] **Step 4: 确认字典能看见（且 total_money 不在）**
 
@@ -1652,6 +1753,99 @@ git commit -m "feat(skill): 补货/要货单明细查询模板⑫（口径硬编
 
 ---
 
+### Task 9b: 真实 parquet 干跑（**部署前必做**）
+
+**为什么必须做**：本机 DuckDB 连不上内网 S3，所以「视图能否对着**真实数据**建起来」在本机**测不出来**。
+第一版注册值就是带着 `Binder Error: Referenced column "system_book_code" not found` 一路通过评审的
+（parquet 里叫 `company_id`）——若留到生产冒烟才发现，**整个功能零可用**。
+
+**★ 必须调用真实的 `buildFactViewSql`，不许手搓 SQL。**
+手搓的话人会按真实列名写对，反而把这个 bug 掩盖掉——这正是它能溜过三轮评审的原因。
+
+**Files:**
+- 无仓库文件改动（全过程在临时目录 + 服务器只读查询）
+
+**Interfaces:**
+- Consumes: Task 2 的 `buildFactViewSql`、Task 5 已落库的 `datasets`/`dataset_columns` 行
+- Produces: 一份干跑结论（贴进 PR 评论 / 报告）
+
+- [ ] **Step 1: 从本地库读出注册值（Task 5 已落库）**
+
+本地栈在跑（Task 4 起好的）。读真实注册行，不要照抄计划文本：
+
+```bash
+docker exec -i deploy-postgres-1 psql -U postgres -d insforge <<'SQL'
+SELECT name, source, kind, engine, scope_key_expr FROM datasets WHERE name='replenishment_detail';
+SELECT name, is_sensitive, source_name FROM dataset_columns WHERE dataset_name='replenishment_detail' ORDER BY ordinal;
+SQL
+```
+
+- [ ] **Step 2: 用真实函数生成视图 SQL（不是手写）**
+
+```bash
+cd "/Users/duo/orca/workspaces/data-analysis/补货数据采集管线接入"
+npx --yes esbuild functions/_shared/fact-view.ts --bundle --format=cjs --outfile=/tmp/fv.js
+```
+
+然后写一个临时脚本 `/tmp/dryrun.js`，把 **Step 1 查出来的真实注册值**喂给真实函数，并打印 SQL：
+
+```js
+const { buildFactViewSql } = require('/tmp/fv.js');
+// ↓ 这三个数组的内容必须逐字来自 Step 1 的查询结果，不要凭计划文本填写
+const columns = [
+  /* { name, sensitive, sourceName? } ... */
+];
+const sql = buildFactViewSql({
+  name: 'replenishment_detail',
+  glob: 's3://lemeng-datasource/duckle/lemeng/replenishment_detail/*/*/all.parquet',
+  scopeKeyExpr: /* Step 1 查到的 scope_key_expr 原文 */ '',
+  columns,
+  authKeys: ['3120-7', '3120-1'],  // 单账套窄授权：验行过滤真的收窄
+  allBranches: false,
+  canSeeCost: false,
+});
+console.log(sql);
+```
+
+```bash
+node /tmp/dryrun.js > /tmp/dryrun.sql && cat /tmp/dryrun.sql
+```
+
+- [ ] **Step 3: 把生成的 SQL 拿到服务器上对着真实 OSS 跑（只读）**
+
+服务器有 OSS 访问权限、本地没有。**只读查询，不得写入或改动任何东西。**
+
+```bash
+ssh -i ~/.ssh/ShanHai-OPS.pem root@data.shanhaiyiguo.com '
+export D=$(docker exec deploy-duckdb-1 printenv S3_ENDPOINT | sed "s|http://||")
+export AK=$(docker exec deploy-duckdb-1 printenv S3_ACCESS_KEY)
+export SK=$(docker exec deploy-duckdb-1 printenv S3_SECRET_KEY)
+# 把 /tmp/dryrun.sql 内容贴进来，前面加 SET s3_* 四行，末尾追加验证查询
+'
+```
+
+**必须回答的问题（逐条给实测结果，不许"应该可以"）**：
+
+1. **视图建得起来吗？** —— `CREATE OR REPLACE TEMP VIEW ...` 是否报 `Binder Error`？报错就说明列名/类型对不上，**停在这里回去改注册值**。
+2. **能查吗？** —— `SELECT count(*) FROM replenishment_detail;` 是否成功、返回多少行？
+3. **行过滤真的收窄了吗？** —— 同一视图分别用 `authKeys=['3120-7']` 与 `allBranches=true` 各查一次
+   `count(*)` 与 `count(DISTINCT system_book_code || '-' || branch_num)`，**窄授权严格小于全量**且非空。
+4. **键形态对吗？** —— 窄授权下 `SELECT DISTINCT system_book_code || '-' || branch_num ... LIMIT 5` 是否产出 `3120-7` 形态（而非 `company_id` 或空）。
+
+- [ ] **Step 4: 清理临时文件**
+
+```bash
+rm -f /tmp/fv.js /tmp/dryrun.js /tmp/dryrun.sql
+```
+
+- [ ] **Step 5: 记录结论**
+
+把 4 条的**实测输出原文**写进
+`/Users/duo/orca/workspaces/data-analysis/补货数据采集管线接入/.superpowers/sdd/2026-09-11-replenishment-detail-query-onboarding/task-9b-report.md`
+（这是部署的**放行条件**：4 条全部通过才可进 Task 10）。
+
+---
+
 ### Task 10: 部署（严格按 Global Constraints 的次序）
 
 **Files:** 无（部署动作）
@@ -1662,6 +1856,11 @@ git commit -m "feat(skill): 补货/要货单明细查询模板⑫（口径硬编
 
 > ⚠️ 本任务次序不可调换。第 2 步必须早于第 5 步：注册行一落地，字典立刻对模型可见，
 > 此时 function 必须已能建视图，否则模型会「看得见查不了」→ 撞 `forbidden_table` → 转而自由发挥。
+
+- [ ] **Step 0: 放行门禁 —— 确认 Task 9b 的真实 parquet 干跑 4 条全过**
+
+**不通过就不许部署。** 回看 `task-9b-report.md`，四条（视图建得起来 / 能查 / 行过滤真的收窄 / 键形态正确）
+必须有**实测输出原文**。这是本项目唯一能在部署前发现「列名/类型对不上」的关卡——本机没有 OSS 访问，测不出。
 
 - [ ] **Step 1: 合并 PR 并部署架构文档**
 
