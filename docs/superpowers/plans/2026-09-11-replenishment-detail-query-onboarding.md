@@ -23,6 +23,10 @@
 - **沿用「全量构建」模式**：每查询无条件构建全部权限视图（保持现状，不引入懒构建）。
 - **迁移必须幂等**：`ADD COLUMN IF NOT EXISTS` / `ON CONFLICT` / `WHERE NOT EXISTS`；迁移头注释须写 `-- spec: docs/superpowers/specs/2026-09-11-replenishment-detail-query-onboarding-design.md`（pre-commit 迁移↔spec 关联守卫）。
 - **测试命令**：`cd web && npm test`（vitest，**不做类型检查**）；类型检查必须跑 `cd web && npm run build`。
+- **⚠️ `index.bundle.js` 是入仓产物，必须随源码同步重生成并提交**（`scripts/check-functions.sh` 有漂移门禁：
+  现场 esbuild 产物 ≠ 已提交产物 → pre-commit 直接失败）。生产服务器**无 node/npx**，部署的就是这个提交的 bundle，
+  漏提交 = 生产静默跑旧代码。凡动 `functions/agent-query/index.js` 或 `functions/_shared/*`，都要跑：
+  `npx --yes esbuild functions/agent-query/index.js --bundle --format=cjs --outfile=functions/agent-query/index.bundle.js`
 - 回滚：字典 `DELETE FROM datasets WHERE name='replenishment_detail'`；守护 `UPDATE monitor_rules SET enabled=false WHERE check_type IN ('data_freshness','data_integrity')`。
 
 ## File Structure
@@ -582,6 +586,25 @@ async function loadFactScopes() {
 Run: `node --check functions/agent-query/index.js`
 Expected: 无输出（语法通过）
 
+- [ ] **Step 7b: 重新生成并提交 `index.bundle.js`（漏了这步 pre-commit 会挡，且生产跑旧代码）**
+
+本任务同时改了 `index.js` 与新增的 `_shared/fact-view.ts`，入仓的 bundle 必然漂移。重新生成：
+
+```bash
+npx --yes esbuild functions/agent-query/index.js --bundle --format=cjs --outfile=functions/agent-query/index.bundle.js
+```
+
+Expected: 生成成功，`functions/agent-query/index.bundle.js` 内容更新（含内联的 fact-view 代码）。
+
+自证漂移门禁可过：
+
+```bash
+bash scripts/check-functions.sh 2>&1 | grep -A1 "agent-query"
+```
+
+Expected: `✅ agent-query: 现场 bundle 合法单文件 CJS（_shared 已内联）` 且 **不出现**
+`❌ agent-query: index.bundle.js 与源码最新 bundle 不一致`
+
 - [ ] **Step 8: 全量既有单测不回归**
 
 Run: `cd web && npm test`
@@ -590,7 +613,7 @@ Expected: PASS（与改动前同样全绿；本任务不新增 web 测试）
 - [ ] **Step 9: Commit**
 
 ```bash
-git add functions/agent-query/index.js
+git add functions/agent-query/index.js functions/agent-query/index.bundle.js
 git commit -m "feat(agent-query): 通用事实视图接线——注册表隔离读取 + 白名单派生
 
 - loadFactScopes 独立请求 + 独立 try/catch：未知列 400 不得拖垮主查询
