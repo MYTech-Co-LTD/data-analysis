@@ -1471,7 +1471,7 @@ git commit -m "feat(monitor): data_freshness evaluator——外部管线数据�
 创建 `web/lib/monitor/evaluators/__tests__/data-volume.test.ts`：
 
 ```ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { evalDataVolume } from '../data-volume';
 import type { MonitorRule, EvalDeps } from '../../types';
 
@@ -1531,6 +1531,9 @@ describe('evalDataVolume', () => {
     expect(r.firing).toBe(true);
     expect(r.context).toMatchObject({ account: '3120', date: '2026-09-10', rows: 40 });
     expect(Number(r.context.deviation_pct)).toBeGreaterThan(50);
+    // ★ 承重断言（同 Task 7 的教训）：模板是 `🔴 [{severity}] …`，renderTemplate 只在 `key in context` 时替换。
+    //   少了它，删掉 evaluator 的 severity 注入**全部用例仍绿**，而告警正文会显示字面量 `[{severity}]`。
+    expect(r.context.severity).toBe('high');
   });
 
   it('昨日行数暴涨 → firing', async () => {
@@ -1559,9 +1562,18 @@ describe('evalDataVolume', () => {
     expect(r.context).toMatchObject({ reason: 'zero_median' });
   });
 
-  it('探测异常 → 不 firing', async () => {
-    const r = await evalDataVolume(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
-    expect(r.firing).toBe(false);
+  it('探测异常 → 不 firing 且必须留下日志', async () => {
+    // ★ 只断言 firing===false 不够：删掉 evaluator 的 console.error，该用例仍绿，
+    //   而「探测坏了」会变成无痕静默——正是本任务要消灭的失败模式。（同 Task 7 的教训）
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await evalDataVolume(rule('replenishment_detail:3120'), deps([], 'ECONNREFUSED'));
+      expect(r.firing).toBe(false);
+      expect(r.context).toMatchObject({ reason: 'probe_error' });
+      expect(spy).toHaveBeenCalled(); // 删掉 evaluator 的 console.error → 这条变红
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 ```
