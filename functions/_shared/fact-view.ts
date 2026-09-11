@@ -44,10 +44,18 @@ const EXPR_FORBIDDEN_KEYWORDS = [
 //      `WHERE <常量> IN ('3120-7')` 恒真 → 行过滤失效 → 被授权单店者看见整账套（2026-09-11 评审实证）；
 //   ② 关键字检查会误拒 `regexp_replace(branch_name, 'delete', '')` 这类含禁词字面量的合法表达式。
 //   fail-close 方向：剥完若不再含任何列名 → scope_expr_no_column 拒绝。
+//
+// ⚠️ 边界（计划明示，勿继续加固）：这是**尽力而为的剥离，不是 SQL 词法分析器**。SQL 字面量词法有长尾
+//   （嵌套注释、更多方言转义形态），继续加固是无底洞且会引入假阳性。权威控制是
+//   「scope_key_expr 只能由受审查的迁移写入」+「窄授权冒烟断言」；本校验器只负责让写错的注册值尽快失败。
 function stripSqlLiterals(expr: string): string {
   return String(expr)
-    .replace(/'(?:[^']|'')*'/g, "''") // 字符串字面量 → 空串占位
-    .replace(/--[^\n]*/g, " "); // 行注释
+    .replace(/\/\*[\s\S]*?\*\//g, " ") // 块注释（2026-09-11 复审实证：/* branch_num */ '3120-7' 曾绕过）
+    .replace(/--[^\n]*/g, " ") // 行注释
+    // DuckDB 方言字面量：dollar-quoted（$$…$$ / $tag$…$tag$）；组 1 未参与匹配时 \1 匹配空串，故 $$…$$ 亦覆盖
+    .replace(/\$([A-Za-z_][A-Za-z0-9_]*)?\$[\s\S]*?\$\1\$/g, "''")
+    .replace(/E'(?:[^'\\]|\\.|'')*'/gi, "''") // E'…' 反斜杠转义字符串
+    .replace(/'(?:[^']|'')*'/g, "''"); // 普通字符串字面量
 }
 
 // 门店复合键表达式校验。非法抛错（message = 错误码），调用方据此 fail-close（不建视图 + 不进白名单）。

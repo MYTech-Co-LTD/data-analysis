@@ -66,6 +66,24 @@ describe("validateScopeKeyExpr", () => {
     ).toThrowError(/scope_expr_no_column/);
   });
 
+  it("注释 / 方言字面量里的列名 → 仍拒绝（同一绕过类的其余形态）", () => {
+    // 块注释（复审运行时实证）
+    expect(() => validateScopeKeyExpr("/* branch_num */ '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    // DuckDB dollar-quoted（$$…$$ 与 $tag$…$tag$）
+    expect(() => validateScopeKeyExpr("$$branch_num$$ || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    expect(() => validateScopeKeyExpr("$t$branch_num$t$ || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+    // E'…' 反斜杠转义字符串
+    expect(() => validateScopeKeyExpr("E'\\'branch_num' || '3120-7'", COLS)).toThrowError(
+      /scope_expr_no_column/
+    );
+  });
+
   it("字面量里含禁词不误拒（关键字扫描同样先剥字面量）", () => {
     expect(() =>
       validateScopeKeyExpr("regexp_replace(branch_name, 'delete', '')", COLS)
