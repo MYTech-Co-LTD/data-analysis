@@ -1758,14 +1758,15 @@ git commit -m "feat(monitor): data_volume evaluator——外部管线行数骤�
 - [ ] **Step 1: 读现有模板库末尾，确定插入位置**
 
 Run: `grep -n "^\*\*[⑨⑩⑪⑫]" openclaw/data-query-plugin/skills/retail-query/SKILL.md`
-Expected: 看到⑨⑩⑪ 的现有编号（若最高编号不是⑪，用实际的下一个编号，不要跳号）
+Expected: 现有最高编号是 **⑩**（2026-09-11 实测），故新模板编号为 **⑪**。
+若实测最高编号不是⑩，用实际的下一个编号，**不要跳号**。
 
 - [ ] **Step 2: 在模板库末尾追加补货模板**
 
 在 SKILL.md 模板库最后一条模板之后追加（编号按 Step 1 的实际下一个）：
 
 ```markdown
-**⑫ 补货/要货单明细（replenishment_detail）**
+**⑪ 补货/要货单明细（replenishment_detail）**
 口径（**模板硬编码，勿改**）：默认只算**已审核生效**的要货单 → `WHERE state_name='制单|审核'`；
 作废单（`含作废`）与未审核单（仅 `制单`）默认排除。用户明确问「要货需求/未审要货」时才放开过滤。
 写法要点：金额一律 `SUM(subtotal)`；**没有 `total_money` 这一列**（单头金额按 order_no 分组 SUM(subtotal)）；
