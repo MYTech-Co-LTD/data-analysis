@@ -655,15 +655,27 @@ COMMIT;
 
 - [ ] **Step 2: 本地起栈并跑迁移（验证幂等）**
 
-按 `docs/testing-handbook.md` §3.1 起本地栈后：
+按 `docs/testing-handbook.md` §3.1 起本地栈。镜像本地已存在，但**首次可能仍需登录私有仓库**（凭证见 1Password / deploy 备注）：
 
 ```bash
-cd /opt/data-analytics-platform/deploy 2>/dev/null || cd deploy
-bash ../scripts/migrate.sh
-bash ../scripts/migrate.sh   # 第二次：幂等重跑必须同样成功
+docker login caj9ik14016wep.xuanyuan.run
+docker login registry-crs-xinan1.ctyun.cn
+
+cd deploy
+DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 ```
 
-Expected: 两次都成功结束；第二次无 `ERROR`。若本地栈不可用，改用生产前的 staging 或直接跳到 Step 3 并在生产部署时（Task 10）观察 GHA 迁移步骤。
+然后跑迁移两次，验幂等：
+
+```bash
+bash scripts/migrate.sh
+bash scripts/migrate.sh   # 第二次：幂等重跑必须同样成功
+```
+
+Expected: 两次都成功结束；第二次无 `ERROR`。
+
+> 已知本地限制（不影响本任务）：本地 `deploy/.env` 缺 `AGENT_API_KEY` / `OOS_*`，本地 DuckDB 也连不上内网 S3 端点
+> ——迁移与表结构验证不受影响；「读 OSS + 建视图」只能在生产冒烟（Task 11）验。
 
 - [ ] **Step 3: 确认列已存在**
 
@@ -787,7 +799,7 @@ bash scripts/migrate.sh
 bash scripts/migrate.sh   # 第二次必须同样成功
 ```
 
-Expected: 两次成功，无 `ERROR`
+Expected: 两次成功，无 `ERROR`（本地栈已在 Task 4 起好）
 
 - [ ] **Step 3: 确认数据集与规则落库**
 
