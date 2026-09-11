@@ -1237,6 +1237,10 @@ import { evalDataFreshness } from './data-freshness';
 **拓宽**为兼容两种含义（①通用陈旧度 ②外部数据集分区到达），状态仍是 ⏳ 未实现。本任务让它真正实现，
 **把该行的状态列改为已实现**。改前先 `grep -n "data_freshness" docs/architecture.md` 定位；只改状态单元格，不动表格结构。
 
+> ⚠️ **本任务不要动 §8.1 引擎拓扑行与 §十一 的汇总计数行**（「已实现 4/8」「监控待实现 4 项」）。
+> 那些是聚合口径，`data_volume` 落地后才成立，统一由 **Task 8 Step 5b** 收口——避免同一行被改两次、
+> 中途出现一个必然不对的数字。
+
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-freshness.test.ts`
@@ -1483,15 +1487,27 @@ import { evalDataVolume } from './data-volume';
 Run: `cd web && npx vitest run lib/monitor/evaluators/__tests__/data-volume.test.ts`
 Expected: PASS（7 个用例全绿）
 
-- [ ] **Step 5b: 把 §8.1 表格里 `data_volume` 行的状态改为已实现**
+- [ ] **Step 5b: 收口 `docs/architecture.md` 里全部 check_type 引用（三处）**
 
-Task 1 的修复轮已在 §8.1 表格中新增 `data_volume` 一行（初始标 ⏳ 未实现）。本任务让它真正实现，翻转该行状态。
+`data_volume` 是**新增**的 check_type，文档里有三处需要同步（前两处是 Task 1 修复轮未能授权的连带项）：
 
 ```bash
-grep -n "data_volume" docs/architecture.md
+grep -n "data_volume\|data_freshness\|已实现 4/8\|待实现" docs/architecture.md
 ```
 
-只改状态单元格，不动表格结构。**同时确认 `data_integrity` 行仍是 ⏳ 未实现**（它本就没实现，不要顺手改）。
+1. **§8.1 `check_type` 清单表格**：Task 1 修复轮已新增 `data_volume` 行（初始 ⏳ 未实现），
+   本任务让它真正实现 → **把该行状态列改为 ✅ 已实现**。只改状态单元格。
+   同时确认 `data_integrity` 行仍是 ⏳ 未实现（它本就没实现，**不要顺手改**）。
+2. **§8.1 引擎拓扑行**（约 978 行）现为「… / 每日 `data_integrity`。」→ 改为「… / 每日 `data_integrity`·`data_volume`。」。
+3. **§十一 实现状态汇总**（约 1436-1437 行）两行：
+   - 「监控告警体系 v1 | 🔶 部分实现 | 已实现 **4/8**：…；未实现：request_fail/**data_freshness**/**data_integrity**/contact_sync」
+     → 改为「已实现 **6/9**：token_expire/collect_fail/service_down/collect_stall/**data_freshness**/**data_volume**；
+     未实现：request_fail/data_integrity/contact_sync」（分母 8→9 因为新增了 `data_volume`）。
+   - 「监控待实现 **4 项** evaluator」→ 改为「**3 项**」。
+
+> **为什么全放在本任务**：这三处的聚合口径（清单数量/总数）只有在两个 evaluator 都落地后才成立。
+> 若 Task 7 也动汇总行，同一行会被改两次且中途数字必然有一处不对。故 Task 7 **只翻自己那一行表格状态**，
+> 汇总计数统一在此收口。
 
 - [ ] **Step 6: 全量单测 + 类型检查**
 
