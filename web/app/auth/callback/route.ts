@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
 import { exchangeCasdoorCode } from "@/lib/wecom";
+import { describeFunctionError } from "@/lib/login-error";
 
 /**
  * Casdoor OIDC 回调
@@ -54,7 +55,9 @@ export async function GET(req: Request) {
 
   const { data, error } = await exchangeCasdoorCode(code, redirectUri, state);
   if (error || !data?.ok || !data.access_token) {
-    return login(String((data as any)?.error ?? error ?? "exchange_failed"));
+    // issue #83：不能 String(error)——SDK 的 InsForgeError.message 为空时只剩类名，
+    // 真实原因（服务端 { error }）被吞成 "InsForgeError"。走归一函数取回可读原因。
+    return login(describeFunctionError(data, error));
   }
 
   // 判断是否为 HTTPS（根据 x-forwarded-proto）
