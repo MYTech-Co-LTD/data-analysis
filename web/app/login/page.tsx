@@ -6,6 +6,7 @@ import {
   buildWecomAuthUrl,
 } from "@/lib/wecom";
 import { isMobileDevice } from "@/lib/device";
+import { describeLoginError } from "@/lib/login-error";
 
 /**
  * 登录页（Casdoor 接管后的兜底入口）。
@@ -57,7 +58,9 @@ export default async function LoginPage({
         <p className="text-sm text-muted-foreground mb-6">请使用企业微信登录</p>
 
         {error ? (
-          <p className="text-sm text-red-600 mb-4 break-all">登录失败：{error}</p>
+          <p className="text-sm text-red-600 mb-4 break-all">
+            登录失败：{describeLoginError(error)}
+          </p>
         ) : null}
 
         {casdoorConfigured ? (
