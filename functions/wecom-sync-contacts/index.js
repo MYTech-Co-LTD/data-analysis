@@ -51,15 +51,32 @@ module.exports = async function (req) {
     const departments = deptData.department || [];
 
     // 3. 获取用户列表（遍历每个部门）
+    //    2026-10-05（issue #85）：原为 271 个部门**逐个 await**，实测稳超平台 60s 函数超时
+    //    （deno 日志 status=504 duration=60151ms）——函数在写库之前就被杀，什么都不落库，
+    //    导致 org_departments.name / org_users 长期不刷新（218/342 部门名称为空）。
+    //    改并发池（限流 8）：271 次串行压到几秒。
+    //    ⚠️ 抓取失败必须计数：下面「离职对齐」会拿本次结果当全量真相去标 is_active=false，
+    //    漏抓 = 把在职用户误标离职（灾难性数据破坏）——失败 >0 时直接跳过对齐。
+    const CONCURRENCY = 8;
     const users = [];
-    for (const dept of departments) {
-      const userRes = await fetch(
-        `https://qyapi.weixin.qq.com/cgi-bin/user/list?access_token=${accessToken}&department_id=${dept.id}`
-      );
-      const userData = await userRes.json();
-      if (userData.errcode === 0 && userData.userlist) {
-        users.push(...userData.userlist);
-      }
+    let deptFetchFailed = 0;
+    for (let i = 0; i < departments.length; i += CONCURRENCY) {
+      const batch = departments.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(batch.map(async (dept) => {
+        try {
+          const userRes = await fetch(
+            `https://qyapi.weixin.qq.com/cgi-bin/user/list?access_token=${accessToken}&department_id=${dept.id}`
+          );
+          const userData = await userRes.json();
+          if (userData.errcode === 0) return userData.userlist || [];
+          console.error(`[sync-contacts] user/list dept ${dept.id} errcode=${userData.errcode} ${userData.errmsg ?? ""}`);
+        } catch (e) {
+          console.error(`[sync-contacts] user/list dept ${dept.id} failed:`, String(e));
+        }
+        deptFetchFailed++;
+        return [];
+      }));
+      for (const r of results) users.push(...r);
     }
 
     // 4. 使用 ANON_KEY 连接数据库
@@ -119,9 +136,13 @@ module.exports = async function (req) {
     //     为过渡列（§6.2 sunset），由登录/薄同步/drift 写穿的 role_codes 镜像取代。
 
     // 6. 离职对齐：企微没有但库里 is_active=true 的 → 标离职（纠正回调漏的离职）
-    //    守卫：仅当本次同步到数据才对齐——防 API 异常空返回（errcode=0 但 department=[]）
-    //    致 syncedUserIds 空集、把全表 is_active=true 用户误标离职（灾难性数据破坏）
-    if (userRows.length > 0) {
+    //    守卫（双）：① 仅当本次同步到数据才对齐——防 API 异常空返回（errcode=0 但 department=[]）
+    //    致 syncedUserIds 空集、把全表 is_active=true 用户误标离职（灾难性数据破坏）；
+    //    ② 有部门抓取失败（deptFetchFailed>0）也不对齐——本次结果不是全量真相。
+    if (userRows.length > 0 && deptFetchFailed > 0) {
+      console.error(`[sync-contacts] 跳过离职对齐：${deptFetchFailed} 个部门抓取失败，本次结果不是全量真相`);
+    }
+    if (userRows.length > 0 && deptFetchFailed === 0) {
       const syncedUserIds = new Set(userRows.map((r) => r.wecom_id));
       const { data: activeUsers, error: activeErr } = await client.database
         .from("org_users")
@@ -142,8 +163,8 @@ module.exports = async function (req) {
       }
     }
 
-    // 部门同理（用 departments 原始数组，避开 deptRows 的 if 块作用域）
-    if (departments.length > 0) {
+    // 部门同理（用 departments 原始数组，避开 deptRows 的 if 块作用域）；同样受抓取失败守卫
+    if (departments.length > 0 && deptFetchFailed === 0) {
       const syncedDeptIds = new Set(departments.map((d) => String(d.id)));
       const { data: activeDepts, error: activeDeptErr } = await client.database
         .from("org_departments")
@@ -168,6 +189,7 @@ module.exports = async function (req) {
       ok: true,
       departments: departments.length,
       users: userRows.length,
+      deptFetchFailed,
     });
   } catch (e) {
     return json({ error: String(e) }, 500);
