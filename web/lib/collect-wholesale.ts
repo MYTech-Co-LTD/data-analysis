@@ -75,7 +75,8 @@ function flattenRecords(records: any[]): any[] {
     department: r.department,
     spec: r.spec,
     unit: r.unit,
-    lot_number: r.orderDetailLotNumber,
+    lot_number: r.orderDetailLotNumber ?? null, // 同 delivery 2026-08-24（issue #88）：源 API 已停返回 orderDetailLotNumber → 保列置 NULL，
+                                                // 否则 /merge 落盘时整列被丢 → D1 去重守护（自然键含 lot_number）Binder Error → 每 5 分钟刷屏告警
     wholesale_num: r.wholesaleNum,            // 批发数量
     wholesale_money: r.wholesaleMoney,        // 批发金额
     wholesale_unit_price: r.wholesaleUnitPrice,
