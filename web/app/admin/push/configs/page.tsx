@@ -5,6 +5,7 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import { nextRunLabel, type CronSpec } from '@/lib/jobs/scheduled-reports/cron-match';
+import { normalizeNumberInput } from '@/lib/number-input';
 
 interface ConfigRow {
   config_id: string;
@@ -206,7 +207,7 @@ export default function PushConfigsPage() {
               </select>
             )}
             {spec.kind === 'monthly' && (
-              <input type="number" min={1} max={31} className="w-20 border border-slate-300 rounded-md px-2 py-1 text-sm" value={spec.day ?? 1} onChange={(e) => setSpec({ day: Number(e.target.value) })} />
+              <input type="text" inputMode="numeric" className="w-20 border border-slate-300 rounded-md px-2 py-1 text-sm" value={spec.day ?? 1} onChange={(e) => setSpec({ day: Number(normalizeNumberInput(e.target.value)) })} />
             )}
             <div>
               <label className="text-sm text-slate-600">时间</label>
