@@ -3,6 +3,8 @@
 // 交互：sticky工具条(全局校验chips+搜索+统一保存) / 战区默认全折叠逐级下钻 / 表头吸顶 / 搜索定位高亮 / 未填标记
 'use client';
 import { useState, useEffect, useRef, Fragment } from 'react';
+
+import { normalizeNumberInput } from '@/lib/number-input';
 import { ArrowLeft, Download, Upload, ChevronDown, ChevronRight, Search, Save, Loader2, MapPin } from 'lucide-react';
 import { useParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -230,7 +232,7 @@ export default function BreakdownPage() {
             {HQ_CATEGORIES.map(cat => (
               <tr key={cat}>
                 <td className="border border-slate-200 p-2">{cat}</td>
-                {HQ_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={hqGrid[cat]?.[m] ?? ''} onChange={e => setHq(cat, m, e.target.value)} className="border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums" /></td>)}
+                {HQ_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="text" inputMode="numeric" value={hqGrid[cat]?.[m] ?? ''} onChange={e => setHq(cat, m, normalizeNumberInput(e.target.value))} className="border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums" /></td>)}
               </tr>
             ))}
             {/* 总目标行：手动输入 + 子和/下限提示（批发=门店配送+外部客户，总出库≥配送汇总） */}
@@ -241,7 +243,7 @@ export default function BreakdownPage() {
                 const belowMin = m === 'outbound_amt' && total > 0 && total < deliverySum();
                 return (
                   <td key={m} className="border border-slate-200 p-2">
-                    <input type="number" value={hqTotal[m] ?? ''} onChange={e => setHqTotalCell(m, e.target.value)} placeholder="输入总目标" className={`border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums bg-white ${belowMin ? 'border-red-400' : 'border-primary/40'}`} />
+                    <input type="text" inputMode="numeric" value={hqTotal[m] ?? ''} onChange={e => setHqTotalCell(m, normalizeNumberInput(e.target.value))} placeholder="输入总目标" className={`border rounded-md px-2 py-1 w-full text-sm text-right tabular-nums bg-white ${belowMin ? 'border-red-400' : 'border-primary/40'}`} />
                     <div className={`text-xs mt-1 font-normal tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>
                       子和 {sum.toLocaleString()}{total > 0 && diff !== 0 && ` (${diff > 0 ? '+' : ''}${diff.toLocaleString()})`}
                     </div>
@@ -297,7 +299,7 @@ export default function BreakdownPage() {
                     <td className="border border-slate-200 p-2"></td>
                     {STORE_METRICS.map(m => {
                       const sum = wzRegionSumAll(m); const target = Number(wz.metrics?.[m]) || 0; const diff = sum - target;
-                      return <td key={m} className="border border-slate-200 p-2"><div className="flex items-center gap-2"><input type="number" value={wz.metrics?.[m] ?? ''} onChange={e => setWzCell(wz.war_zone, m, e.target.value)} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
+                      return <td key={m} className="border border-slate-200 p-2"><div className="flex items-center gap-2"><input type="text" inputMode="numeric" value={wz.metrics?.[m] ?? ''} onChange={e => setWzCell(wz.war_zone, m, normalizeNumberInput(e.target.value))} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
                     })}
                     <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
                       {formatRatio(targetRatio(wzRegionSum(wz.war_zone, 'delivery'), wzRegionSum(wz.war_zone, 'sale')))}
@@ -323,7 +325,7 @@ export default function BreakdownPage() {
                           <td className="border border-slate-200 p-2"></td>
                           {STORE_METRICS.map(m => {
                             const sum = r2StoreSumL(m); const target = Number(r2.metrics?.[m]) || 0; const diff = sum - target;
-                            return <td key={m} className="border border-slate-200 p-2"><div className="flex items-center gap-2"><input type="number" value={r2.metrics?.[m] ?? ''} onChange={e => setR2Cell(wz.war_zone, r2.region_l2, m, e.target.value)} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
+                            return <td key={m} className="border border-slate-200 p-2"><div className="flex items-center gap-2"><input type="text" inputMode="numeric" value={r2.metrics?.[m] ?? ''} onChange={e => setR2Cell(wz.war_zone, r2.region_l2, m, normalizeNumberInput(e.target.value))} onClick={e => e.stopPropagation()} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /><span className={`text-xs tabular-nums ${diff === 0 ? 'text-green-600' : 'text-red-600'}`}>子和 {sum.toLocaleString()}{diff !== 0 && `(${diff > 0 ? '+' : ''}${diff})`}</span></div></td>;
                           })}
                           <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
                             {formatRatio(targetRatio(r2StoreSum(wz.war_zone, r2.region_l2, 'delivery'), r2StoreSum(wz.war_zone, r2.region_l2, 'sale')))}
@@ -341,7 +343,7 @@ export default function BreakdownPage() {
                                 <span className="text-xs text-slate-400 mr-1 tabular-nums">{store.brand_name ? `[${store.brand_name}]` : (store.system_book_code ? `[${store.system_book_code}]` : '')}</span>
                                 <span className="text-xs text-slate-400 mr-2 tabular-nums">{store.branch_num}</span>{store.branch_name}{unfilled && <span className="ml-2 text-xs text-slate-400">未填</span>}
                               </td>
-                              {STORE_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="number" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(sKey, m, e.target.value)} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
+                              {STORE_METRICS.map(m => <td key={m} className="border border-slate-200 p-2"><input type="text" inputMode="numeric" value={store.metrics?.[m] ?? ''} onChange={e => setStoreCell(sKey, m, normalizeNumberInput(e.target.value))} className="border rounded-md px-2 py-1 w-32 text-sm text-right tabular-nums" /></td>)}
                               <td className="border border-slate-200 p-2 text-right tabular-nums text-slate-500 text-xs">
                                 {formatRatio(targetRatio(Number(store.metrics?.delivery) || 0, Number(store.metrics?.sale) || 0))}
                               </td>
